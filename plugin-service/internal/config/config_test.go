@@ -94,6 +94,15 @@ func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 	}
 }
 
+func TestMustLoadKeepsPluginHostDefaults(t *testing.T) {
+	unsetEnv(t, "PLUGIN_SERVICE_PLUGIN_KEY")
+
+	cfg := MustLoad()
+	if cfg.PluginKey == "" {
+		t.Fatal("expected plugin key default for compatibility routes")
+	}
+}
+
 func unsetEnv(t *testing.T, keys ...string) {
 	t.Helper()
 	for _, key := range keys {

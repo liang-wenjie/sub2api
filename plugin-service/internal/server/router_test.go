@@ -88,6 +88,95 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 	}
 }
 
+func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-secret" {
+			t.Fatalf("authorization = %q, want %q", got, "Bearer provider-secret")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/generated.png","revised_prompt":"make a poster"}]}`))
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		ListenAddr:           ":0",
+		BaseURL:              "http://plugin.test",
+		LaunchSharedSecret:   "secret",
+		MainSiteOrigin:       "http://main.test",
+		SessionTTL:           time.Hour,
+		HistoryEnabled:       true,
+		PluginKey:            "gen",
+		DevLoginEnabled:      true,
+		ImageProviderBaseURL: upstream.URL,
+	}
+	router := NewRouter(cfg)
+	cookie := devLoginCookie(t, router, "/dev/login?user_id=7&role=user&email=user%40example.com&username=user&path=/plugins/image-generation")
+
+	configReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/config", nil)
+	configReq.AddCookie(cookie)
+	configRec := httptest.NewRecorder()
+	router.ServeHTTP(configRec, configReq)
+	if configRec.Code != http.StatusOK {
+		t.Fatalf("namespaced config status = %d, want %d; body=%s", configRec.Code, http.StatusOK, configRec.Body.String())
+	}
+	var configPayload map[string]any
+	if err := json.NewDecoder(configRec.Body).Decode(&configPayload); err != nil {
+		t.Fatal(err)
+	}
+	if got := configPayload["plugin_key"]; got != "image-generation" {
+		t.Fatalf("namespaced config plugin_key = %#v, want %q", got, "image-generation")
+	}
+
+	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
+	generateReq := httptest.NewRequest(http.MethodPost, "/api/plugins/image-generation/generate", body)
+	generateReq.AddCookie(cookie)
+	generateRec := httptest.NewRecorder()
+	router.ServeHTTP(generateRec, generateReq)
+	if generateRec.Code != http.StatusCreated {
+		t.Fatalf("namespaced generate status = %d, want %d; body=%s", generateRec.Code, http.StatusCreated, generateRec.Body.String())
+	}
+
+	historyReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/history", nil)
+	historyReq.AddCookie(cookie)
+	historyRec := httptest.NewRecorder()
+	router.ServeHTTP(historyRec, historyReq)
+	if historyRec.Code != http.StatusOK {
+		t.Fatalf("namespaced history status = %d, want %d; body=%s", historyRec.Code, http.StatusOK, historyRec.Body.String())
+	}
+	var historyPayload struct {
+		Items []model.HistoryRecord `json:"items"`
+	}
+	if err := json.NewDecoder(historyRec.Body).Decode(&historyPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(historyPayload.Items) != 1 {
+		t.Fatalf("namespaced history item count = %d, want 1", len(historyPayload.Items))
+	}
+	if _, ok := historyPayload.Items[0].Request["provider_api_key"]; ok {
+		t.Fatal("namespaced history exposed provider_api_key")
+	}
+
+	creationsReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/creations", nil)
+	creationsReq.AddCookie(cookie)
+	creationsRec := httptest.NewRecorder()
+	router.ServeHTTP(creationsRec, creationsReq)
+	if creationsRec.Code != http.StatusOK {
+		t.Fatalf("namespaced creations status = %d, want %d; body=%s", creationsRec.Code, http.StatusOK, creationsRec.Body.String())
+	}
+	var creationsPayload struct {
+		Items []model.CreationRecord `json:"items"`
+	}
+	if err := json.NewDecoder(creationsRec.Body).Decode(&creationsPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(creationsPayload.Items) != 1 {
+		t.Fatalf("namespaced creation count = %d, want 1", len(creationsPayload.Items))
+	}
+	if creationsPayload.Items[0].PluginKey != "image-generation" {
+		t.Fatalf("namespaced creation plugin_key = %q, want %q", creationsPayload.Items[0].PluginKey, "image-generation")
+	}
+}
+
 func TestRouter_DevLoginAndMe(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:         ":0",
@@ -176,6 +265,27 @@ func TestRouter_DevLoginDisabled(t *testing.T) {
 	}
 }
 
+func TestRouter_DevLoginRejectsUnknownPluginSelection(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/dev/login?plugin=unknown&path=/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("dev login unknown plugin status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
 func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:         ":0",
@@ -205,6 +315,9 @@ func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 	if len(payload.Items) == 0 {
 		t.Fatal("plugin metadata items = 0, want at least 1")
 	}
+	if payload.Items[0].DefaultEntryPath != "/plugins/image-generation" {
+		t.Fatalf("plugin default_entry_path = %q, want %q", payload.Items[0].DefaultEntryPath, "/plugins/image-generation")
+	}
 }
 
 func TestRouter_PluginDetailEndpoint(t *testing.T) {
@@ -233,6 +346,9 @@ func TestRouter_PluginDetailEndpoint(t *testing.T) {
 	}
 	if payload.Key != "image-generation" {
 		t.Fatalf("plugin key = %q, want %q", payload.Key, "image-generation")
+	}
+	if payload.DefaultEntryPath != "/plugins/image-generation" {
+		t.Fatalf("plugin default_entry_path = %q, want %q", payload.DefaultEntryPath, "/plugins/image-generation")
 	}
 }
 
@@ -287,6 +403,9 @@ func TestRouter_LaunchAcceptsCanonicalPluginKey(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("launch canonical plugin status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
 	}
+	if got := rec.Result().Header.Get("Location"); got != "/app" {
+		t.Fatalf("launch canonical plugin redirect = %q, want %q", got, "/app")
+	}
 
 	cookies := rec.Result().Cookies()
 	if len(cookies) == 0 {
@@ -310,6 +429,41 @@ func TestRouter_LaunchAcceptsCanonicalPluginKey(t *testing.T) {
 	}
 }
 
+func TestRouter_LaunchRedirectsToPluginEntryByDefault(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+	tickets := service.NewTicketService(cfg.LaunchSharedSecret)
+	ticket, err := tickets.CreateTicket(model.LaunchClaims{
+		UserID:   42,
+		Role:     model.RoleUser,
+		Email:    "user@example.com",
+		Username: "user",
+		Plugin:   "image-generation",
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/launch?ticket="+ticket, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("launch status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	if got := rec.Result().Header.Get("Location"); got != "/plugins/image-generation" {
+		t.Fatalf("launch redirect location = %q, want %q", got, "/plugins/image-generation")
+	}
+}
+
 func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:         ":0",
@@ -329,12 +483,12 @@ func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("dev login redirect status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
 	}
-	if got := rec.Result().Header.Get("Location"); got != "/app" {
-		t.Fatalf("redirect location = %q, want %q", got, "/app")
+	if got := rec.Result().Header.Get("Location"); got != "/plugins/image-generation" {
+		t.Fatalf("redirect location = %q, want %q", got, "/plugins/image-generation")
 	}
 }
 
-func TestRouter_AppPageRendersAfterDevLoginRedirect(t *testing.T) {
+func TestRouter_AppPageRedirectsToHostedPluginPage(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:         ":0",
 		BaseURL:            "http://plugin.test",
@@ -350,15 +504,15 @@ func TestRouter_AppPageRendersAfterDevLoginRedirect(t *testing.T) {
 	appReq := httptest.NewRequest(http.MethodGet, "/app", nil)
 	appRec := httptest.NewRecorder()
 	router.ServeHTTP(appRec, appReq)
-	if appRec.Code != http.StatusOK {
-		t.Fatalf("app status = %d, want %d; body=%s", appRec.Code, http.StatusOK, appRec.Body.String())
+	if appRec.Code != http.StatusFound {
+		t.Fatalf("app status = %d, want %d; body=%s", appRec.Code, http.StatusFound, appRec.Body.String())
 	}
-	if got := appRec.Body.String(); got == "" {
-		t.Fatal("expected non-empty app page body")
+	if got := appRec.Result().Header.Get("Location"); got != "/plugins/image-generation" {
+		t.Fatalf("app redirect location = %q, want %q", got, "/plugins/image-generation")
 	}
 }
 
-func TestRouter_AppPageIncludesImageWorkspace(t *testing.T) {
+func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:           ":0",
 		BaseURL:              "http://plugin.test",
@@ -372,11 +526,11 @@ func TestRouter_AppPageIncludesImageWorkspace(t *testing.T) {
 	}
 	router := NewRouter(cfg)
 
-	appReq := httptest.NewRequest(http.MethodGet, "/app", nil)
+	appReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
 	appRec := httptest.NewRecorder()
 	router.ServeHTTP(appRec, appReq)
 	if appRec.Code != http.StatusOK {
-		t.Fatalf("app status = %d, want %d; body=%s", appRec.Code, http.StatusOK, appRec.Body.String())
+		t.Fatalf("hosted page status = %d, want %d; body=%s", appRec.Code, http.StatusOK, appRec.Body.String())
 	}
 
 	body := appRec.Body.String()
@@ -386,12 +540,36 @@ func TestRouter_AppPageIncludesImageWorkspace(t *testing.T) {
 		`data-testid="image-creation-grid"`,
 		`data-testid="image-composer"`,
 		`data-testid="reference-file-input"`,
-		`/api/creations`,
-		`/api/generate`,
+		`data-plugin-api-base="/api/plugins/image-generation"`,
+		`/plugins/image-generation/assets/app.js`,
 	} {
 		if !strings.Contains(body, needle) {
-			t.Fatalf("app page missing %q", needle)
+			t.Fatalf("hosted page missing %q", needle)
 		}
+	}
+}
+
+func TestRouter_ImageGenerationHostedAssets(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/assets/app.js", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("hosted asset status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"/api/plugins/image-generation"`) {
+		t.Fatalf("hosted asset body missing namespaced api base; body=%s", rec.Body.String())
 	}
 }
 

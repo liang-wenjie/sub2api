@@ -17,7 +17,7 @@ import (
 const (
 	CanonicalPluginKey   = "image-generation"
 	CanonicalPluginName  = "Image Generation"
-	CanonicalPluginEntry = "/app"
+	CanonicalPluginEntry = "/plugins/image-generation"
 )
 
 type HandlerDeps struct {
@@ -72,13 +72,25 @@ func (h *Handler) Launch(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, normalizeRedirectPath(r.URL.Query().Get("path")), http.StatusFound)
+	http.Redirect(w, r, normalizeRedirectPath(r.URL.Query().Get("path"), h.defaultPluginEntry(claims.Plugin)), http.StatusFound)
 }
 
 func (h *Handler) DevLogin(w http.ResponseWriter, r *http.Request) {
 	if !h.cfg.DevLoginEnabled {
 		httpx.WriteError(w, http.StatusNotFound, "dev login is disabled")
 		return
+	}
+
+	pluginKey := strings.TrimSpace(r.URL.Query().Get("plugin"))
+	if pluginKey == "" {
+		pluginKey = h.defaultPluginKey()
+	} else {
+		resolvedPluginKey, ok := h.resolvePluginKey(pluginKey)
+		if !ok {
+			httpx.WriteError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
+		pluginKey = resolvedPluginKey
 	}
 
 	userID := int64(parsePositiveInt(r.URL.Query().Get("user_id"), 1))
@@ -101,7 +113,7 @@ func (h *Handler) DevLogin(w http.ResponseWriter, r *http.Request) {
 		Role:     role,
 		Email:    email,
 		Username: username,
-		Plugin:   h.defaultPluginKey(),
+		Plugin:   pluginKey,
 	})
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "failed to create plugin session")
@@ -116,7 +128,7 @@ func (h *Handler) DevLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, normalizeRedirectPath(r.URL.Query().Get("path")), http.StatusFound)
+	http.Redirect(w, r, normalizeRedirectPath(r.URL.Query().Get("path"), h.defaultPluginEntry(pluginKey)), http.StatusFound)
 }
 
 func (h *Handler) Me(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
@@ -145,18 +157,21 @@ func (h *Handler) GetPlugin(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, toPluginMetadata(plugin.Metadata()))
 }
 
-func normalizeRedirectPath(raw string) string {
+func normalizeRedirectPath(raw string, fallback string) string {
+	if strings.TrimSpace(fallback) == "" {
+		fallback = CanonicalPluginEntry
+	}
 	if raw == "" {
-		return "/app"
+		return fallback
 	}
 	if strings.HasPrefix(raw, "//") {
-		return "/app"
+		return fallback
 	}
 	if parsed, err := url.Parse(raw); err == nil && parsed.IsAbs() {
-		return "/app"
+		return fallback
 	}
 	if !strings.HasPrefix(raw, "/") {
-		return "/app"
+		return fallback
 	}
 	return raw
 }
@@ -181,17 +196,6 @@ func toPluginMetadata(metadata pluginregistry.Metadata) model.PluginMetadata {
 	}
 }
 
-func DefaultPluginMetadata() pluginregistry.Metadata {
-	return pluginregistry.Metadata{
-		Key:              CanonicalPluginKey,
-		Name:             CanonicalPluginName,
-		Description:      "Generate images from the host plugin service",
-		Enabled:          true,
-		FrontendMode:     pluginregistry.FrontendModeHosted,
-		DefaultEntryPath: CanonicalPluginEntry,
-	}
-}
-
 func (h *Handler) defaultPluginKey() string {
 	if _, ok := h.registry.Get(CanonicalPluginKey); ok {
 		return CanonicalPluginKey
@@ -202,6 +206,26 @@ func (h *Handler) defaultPluginKey() string {
 		}
 	}
 	return h.cfg.PluginKey
+}
+
+func (h *Handler) defaultPluginEntry(pluginKey string) string {
+	if plugin, ok := h.registry.Get(pluginKey); ok {
+		entry := strings.TrimSpace(plugin.Metadata().DefaultEntryPath)
+		if entry != "" {
+			return entry
+		}
+	}
+
+	if pluginKey != CanonicalPluginKey {
+		if plugin, ok := h.registry.Get(CanonicalPluginKey); ok {
+			entry := strings.TrimSpace(plugin.Metadata().DefaultEntryPath)
+			if entry != "" {
+				return entry
+			}
+		}
+	}
+
+	return CanonicalPluginEntry
 }
 
 func (h *Handler) resolvePluginKey(raw string) (string, bool) {
