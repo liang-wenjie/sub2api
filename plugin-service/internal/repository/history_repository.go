@@ -29,6 +29,7 @@ func NewHistoryRepository() *HistoryRepository {
 
 func (r *HistoryRepository) Create(_ context.Context, principal model.CurrentPrincipal, req model.GenerateRequest) (*model.HistoryRecord, error) {
 	now := r.now().UTC()
+	requestPayload := copyRequestPayload(req)
 	record := model.HistoryRecord{
 		ID:        randomID(),
 		UserID:    principal.UserID,
@@ -36,7 +37,7 @@ func (r *HistoryRepository) Create(_ context.Context, principal model.CurrentPri
 		PluginKey: principal.Plugin,
 		Prompt:    req.Prompt,
 		Status:    model.HistoryStatusPending,
-		Request:   req.Inputs,
+		Request:   requestPayload,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -123,4 +124,28 @@ func randomID() string {
 		return time.Now().UTC().Format("20060102150405.000000000")
 	}
 	return hex.EncodeToString(buf)
+}
+
+func copyRequestPayload(req model.GenerateRequest) map[string]any {
+	payload := make(map[string]any)
+	for key, value := range req.Inputs {
+		payload[key] = value
+	}
+	payload["provider_api_key"] = req.ProviderAPIKey
+	payload["model"] = req.Model
+	payload["size"] = req.Size
+	payload["response_format"] = req.ResponseFormat
+	if len(req.ReferenceImages) > 0 {
+		references := make([]map[string]any, 0, len(req.ReferenceImages))
+		for _, reference := range req.ReferenceImages {
+			references = append(references, map[string]any{
+				"name":       reference.Name,
+				"mime_type":  reference.MimeType,
+				"data_url":   reference.DataURL,
+				"remote_url": reference.RemoteURL,
+			})
+		}
+		payload["reference_images"] = references
+	}
+	return payload
 }

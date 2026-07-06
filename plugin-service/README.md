@@ -53,9 +53,10 @@ This creates the `plugin_session` cookie directly so `/api/me`, `/api/generate`,
 - `GET /api/me`
 - `GET /api/config`
 - `POST /api/generate`
+- `GET /api/creations`
 - `GET /api/history`
 - `GET /api/history/{id}`
 - `POST /api/history/{id}/retry`
 - `POST /api/history/{id}/cancel`
 
-`POST /api/generate` currently returns a placeholder result and writes history. Replace `GenerationService.Generate` with the real provider call when the generation backend is ready.
+`POST /api/generate` now proxies image generation requests to an OpenAI-compatible upstream configured by `PLUGIN_SERVICE_IMAGE_PROVIDER_BASE_URL`. The request must include `provider_api_key`, and the plugin service will persist structured history plus a flattened creations list for gallery-style views.

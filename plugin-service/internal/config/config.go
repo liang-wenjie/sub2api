@@ -10,28 +10,30 @@ import (
 )
 
 type Config struct {
-	ListenAddr         string
-	BaseURL            string
-	LaunchSharedSecret string
-	MainSiteOrigin     string
-	SessionTTL         time.Duration
-	HistoryEnabled     bool
-	PluginKey          string
-	DevLoginEnabled    bool
+	ListenAddr           string
+	BaseURL              string
+	LaunchSharedSecret   string
+	MainSiteOrigin       string
+	SessionTTL           time.Duration
+	HistoryEnabled       bool
+	PluginKey            string
+	DevLoginEnabled      bool
+	ImageProviderBaseURL string
 }
 
 func MustLoad() Config {
 	loadDotEnvIfPresent()
 	ttlSeconds := envInt("PLUGIN_SERVICE_SESSION_TTL_SECONDS", 3600)
 	return Config{
-		ListenAddr:         envString("PLUGIN_SERVICE_LISTEN_ADDR", ":8091"),
-		BaseURL:            strings.TrimRight(envString("PLUGIN_SERVICE_BASE_URL", "http://localhost:8091"), "/"),
-		LaunchSharedSecret: envString("PLUGIN_SERVICE_LAUNCH_SHARED_SECRET", "dev-only-change-me"),
-		MainSiteOrigin:     strings.TrimRight(envString("PLUGIN_SERVICE_MAIN_SITE_ORIGIN", "http://localhost:8088"), "/"),
-		SessionTTL:         time.Duration(ttlSeconds) * time.Second,
-		HistoryEnabled:     envBool("PLUGIN_SERVICE_HISTORY_ENABLED", true),
-		PluginKey:          envString("PLUGIN_SERVICE_PLUGIN_KEY", "gen"),
-		DevLoginEnabled:    envBool("PLUGIN_SERVICE_DEV_LOGIN_ENABLED", false),
+		ListenAddr:           envString("PLUGIN_SERVICE_LISTEN_ADDR", ":8091"),
+		BaseURL:              strings.TrimRight(envString("PLUGIN_SERVICE_BASE_URL", "http://localhost:8091"), "/"),
+		LaunchSharedSecret:   envString("PLUGIN_SERVICE_LAUNCH_SHARED_SECRET", "dev-only-change-me"),
+		MainSiteOrigin:       strings.TrimRight(envString("PLUGIN_SERVICE_MAIN_SITE_ORIGIN", "http://localhost:8088"), "/"),
+		SessionTTL:           time.Duration(ttlSeconds) * time.Second,
+		HistoryEnabled:       envBool("PLUGIN_SERVICE_HISTORY_ENABLED", true),
+		PluginKey:            envString("PLUGIN_SERVICE_PLUGIN_KEY", "gen"),
+		DevLoginEnabled:      envBool("PLUGIN_SERVICE_DEV_LOGIN_ENABLED", false),
+		ImageProviderBaseURL: strings.TrimRight(envString("PLUGIN_SERVICE_IMAGE_PROVIDER_BASE_URL", "http://localhost:8088"), "/"),
 	}
 }
 

@@ -10,10 +10,11 @@ func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
 	unsetEnv(t,
 		"PLUGIN_SERVICE_PLUGIN_KEY",
 		"PLUGIN_SERVICE_DEV_LOGIN_ENABLED",
+		"PLUGIN_SERVICE_IMAGE_PROVIDER_BASE_URL",
 	)
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVICE_PLUGIN_KEY=from-dotenv\nPLUGIN_SERVICE_DEV_LOGIN_ENABLED=true\n")
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVICE_PLUGIN_KEY=from-dotenv\nPLUGIN_SERVICE_DEV_LOGIN_ENABLED=true\nPLUGIN_SERVICE_IMAGE_PROVIDER_BASE_URL=https://provider.example.com\n")
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -30,6 +31,9 @@ func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
 	}
 	if !cfg.DevLoginEnabled {
 		t.Fatal("expected dev login enabled from .env")
+	}
+	if cfg.ImageProviderBaseURL != "https://provider.example.com" {
+		t.Fatalf("image provider base url = %q, want %q", cfg.ImageProviderBaseURL, "https://provider.example.com")
 	}
 }
 

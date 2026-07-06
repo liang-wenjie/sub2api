@@ -16,7 +16,9 @@ func NewRouter(cfg config.Config) http.Handler {
 	tickets := service.NewTicketService(cfg.LaunchSharedSecret)
 	sessions := service.NewSessionService(sessionRepo, cfg.SessionTTL)
 	history := service.NewHistoryService(historyRepo)
-	generation := service.NewGenerationService(history)
+	generation := service.NewGenerationService(history, service.GenerationServiceOptions{
+		ProviderBaseURL: cfg.ImageProviderBaseURL,
+	})
 
 	app := handler.NewApp(handler.AppDeps{
 		Config:     cfg,
@@ -34,6 +36,7 @@ func NewRouter(cfg config.Config) http.Handler {
 	mux.HandleFunc("GET /api/me", app.RequireSession(app.Me))
 	mux.HandleFunc("GET /api/config", app.RequireSession(app.Config))
 	mux.HandleFunc("POST /api/generate", app.RequireSession(app.Generate))
+	mux.HandleFunc("GET /api/creations", app.RequireSession(app.ListCreations))
 	mux.HandleFunc("GET /api/history", app.RequireSession(app.ListHistory))
 	mux.HandleFunc("GET /api/history/{id}", app.RequireSession(app.GetHistory))
 	mux.HandleFunc("POST /api/history/{id}/retry", app.RequireSession(app.RetryHistory))
