@@ -132,6 +132,208 @@ func TestRouter_DevLoginAndMe(t *testing.T) {
 	}
 }
 
+func TestRouter_MeRequiresSession(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("me without session status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "plugin session is required") {
+		t.Fatalf("me without session body = %q, want error containing %q", rec.Body.String(), "plugin session is required")
+	}
+}
+
+func TestRouter_DevLoginDisabled(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    false,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/dev/login?path=/app", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("dev login disabled status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestRouter_PluginMetadataEndpoint(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/plugins", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugins status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload struct {
+		Items []model.PluginMetadata `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Items) == 0 {
+		t.Fatal("plugin metadata items = 0, want at least 1")
+	}
+}
+
+func TestRouter_PluginDetailEndpoint(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin detail status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload model.PluginMetadata
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Key != "image-generation" {
+		t.Fatalf("plugin key = %q, want %q", payload.Key, "image-generation")
+	}
+}
+
+func TestRouter_PluginDetailEndpointNotFound(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/plugins/unknown", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown plugin detail status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestRouter_LaunchAcceptsCanonicalPluginKey(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+	tickets := service.NewTicketService(cfg.LaunchSharedSecret)
+	ticket, err := tickets.CreateTicket(model.LaunchClaims{
+		UserID:   42,
+		Role:     model.RoleUser,
+		Email:    "user@example.com",
+		Username: "user",
+		Plugin:   "image-generation",
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/launch?ticket="+ticket+"&path=/app", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("launch canonical plugin status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
+	}
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("launch canonical plugin did not set a session cookie")
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	meReq.AddCookie(cookies[0])
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusOK {
+		t.Fatalf("me after canonical launch status = %d, want %d; body=%s", meRec.Code, http.StatusOK, meRec.Body.String())
+	}
+
+	var principal model.CurrentPrincipal
+	if err := json.NewDecoder(meRec.Body).Decode(&principal); err != nil {
+		t.Fatal(err)
+	}
+	if principal.Plugin != "image-generation" {
+		t.Fatalf("principal plugin = %q, want %q", principal.Plugin, "image-generation")
+	}
+}
+
+func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         ":0",
+		BaseURL:            "http://plugin.test",
+		LaunchSharedSecret: "secret",
+		MainSiteOrigin:     "http://main.test",
+		SessionTTL:         time.Hour,
+		HistoryEnabled:     true,
+		PluginKey:          "gen",
+		DevLoginEnabled:    true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/dev/login?path=%2F%2Fevil.example%2Fpath", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("dev login redirect status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	if got := rec.Result().Header.Get("Location"); got != "/app" {
+		t.Fatalf("redirect location = %q, want %q", got, "/app")
+	}
+}
+
 func TestRouter_AppPageRendersAfterDevLoginRedirect(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:         ":0",

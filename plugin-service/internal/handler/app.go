@@ -1,38 +1,28 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"html"
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/repository"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
 
-const sessionCookieName = "plugin_session"
-
-type principalContextKey struct{}
-
 type AppDeps struct {
 	Config     config.Config
-	Tickets    *service.TicketService
-	Sessions   *service.SessionService
 	History    *service.HistoryService
 	Generation *service.GenerationService
 }
 
 type App struct {
 	cfg        config.Config
-	tickets    *service.TicketService
-	sessions   *service.SessionService
 	history    *service.HistoryService
 	generation *service.GenerationService
 }
@@ -40,8 +30,6 @@ type App struct {
 func NewApp(deps AppDeps) *App {
 	return &App{
 		cfg:        deps.Config,
-		tickets:    deps.Tickets,
-		sessions:   deps.Sessions,
 		history:    deps.History,
 		generation: deps.Generation,
 	}
@@ -59,7 +47,7 @@ func (a *App) WithCommonHeaders(next http.Handler) http.Handler {
 }
 
 func (a *App) Health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
 		"plugin": a.cfg.PluginKey,
 	})
@@ -845,98 +833,8 @@ func (a *App) AppPage(w http.ResponseWriter, _ *http.Request) {
 </html>`))
 }
 
-func (a *App) Launch(w http.ResponseWriter, r *http.Request) {
-	ticket := r.URL.Query().Get("ticket")
-	claims, err := a.tickets.VerifyTicket(ticket)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid or expired launch ticket")
-		return
-	}
-	if claims.Plugin != a.cfg.PluginKey {
-		writeError(w, http.StatusForbidden, "ticket is not valid for this plugin")
-		return
-	}
-	session, err := a.sessions.CreateFromLaunchClaims(r.Context(), *claims)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create plugin session")
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    session.ID,
-		Path:     "/",
-		Expires:  session.ExpiresAt,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-	target := normalizeRedirectPath(r.URL.Query().Get("path"))
-	http.Redirect(w, r, target, http.StatusFound)
-}
-
-func (a *App) DevLogin(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.DevLoginEnabled {
-		writeError(w, http.StatusNotFound, "dev login is disabled")
-		return
-	}
-	userID := int64(parsePositiveInt(r.URL.Query().Get("user_id"), 1))
-	role := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("role")))
-	if role != model.RoleAdmin {
-		role = model.RoleUser
-	}
-	email := strings.TrimSpace(r.URL.Query().Get("email"))
-	if email == "" {
-		email = "dev@example.com"
-	}
-	username := strings.TrimSpace(r.URL.Query().Get("username"))
-	if username == "" {
-		username = "dev-user"
-	}
-	session, err := a.sessions.CreateFromLaunchClaims(r.Context(), model.LaunchClaims{
-		UserID:   userID,
-		Role:     role,
-		Email:    email,
-		Username: username,
-		Plugin:   a.cfg.PluginKey,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create plugin session")
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    session.ID,
-		Path:     "/",
-		Expires:  session.ExpiresAt,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-	target := normalizeRedirectPath(r.URL.Query().Get("path"))
-	http.Redirect(w, r, target, http.StatusFound)
-}
-
-func (a *App) RequireSession(next func(http.ResponseWriter, *http.Request, model.CurrentPrincipal)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(sessionCookieName)
-		if err != nil || strings.TrimSpace(cookie.Value) == "" {
-			writeError(w, http.StatusUnauthorized, "plugin session is required")
-			return
-		}
-		session, ok := a.sessions.Get(r.Context(), cookie.Value)
-		if !ok {
-			writeError(w, http.StatusUnauthorized, "plugin session expired")
-			return
-		}
-		ctx := context.WithValue(r.Context(), principalContextKey{}, session.Principal)
-		next(w, r.WithContext(ctx), session.Principal)
-	}
-}
-
-func (a *App) Me(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
-	writeJSON(w, http.StatusOK, principal)
-}
-
 func (a *App) Config(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"plugin_key":              a.cfg.PluginKey,
 		"history_enabled":         a.cfg.HistoryEnabled,
 		"image_provider_base_url": a.cfg.ImageProviderBaseURL,
@@ -948,28 +846,28 @@ func (a *App) Config(w http.ResponseWriter, _ *http.Request, principal model.Cur
 func (a *App) Generate(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
 	var req model.GenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	resp, err := a.generation.Generate(r.Context(), principal, req)
 	if err != nil {
 		if errors.Is(err, service.ErrPromptRequired) || errors.Is(err, service.ErrProviderKeyRequired) {
-			writeError(w, http.StatusBadRequest, err.Error())
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "generation failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "generation failed")
 		return
 	}
-	writeJSON(w, http.StatusCreated, resp)
+	httpx.WriteJSON(w, http.StatusCreated, resp)
 }
 
 func (a *App) ListCreations(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
 	records, err := a.generation.ListCreations(r.Context(), principal, parseHistoryQuery(r.URL.Query()))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list creations")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to list creations")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"items": records,
 	})
 }
@@ -977,10 +875,10 @@ func (a *App) ListCreations(w http.ResponseWriter, r *http.Request, principal mo
 func (a *App) ListHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
 	records, err := a.history.List(r.Context(), principal, parseHistoryQuery(r.URL.Query()))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list history")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to list history")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"items": sanitizeHistoryRecords(records),
 	})
 }
@@ -991,7 +889,7 @@ func (a *App) GetHistory(w http.ResponseWriter, r *http.Request, principal model
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
+	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
 }
 
 func (a *App) RetryHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
@@ -1000,7 +898,7 @@ func (a *App) RetryHistory(w http.ResponseWriter, r *http.Request, principal mod
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, resp)
+	httpx.WriteJSON(w, http.StatusCreated, resp)
 }
 
 func (a *App) CancelHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
@@ -1009,20 +907,7 @@ func (a *App) CancelHistory(w http.ResponseWriter, r *http.Request, principal mo
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
-}
-
-func normalizeRedirectPath(raw string) string {
-	if raw == "" {
-		return "/app"
-	}
-	if parsed, err := url.Parse(raw); err == nil && parsed.IsAbs() {
-		return "/app"
-	}
-	if !strings.HasPrefix(raw, "/") {
-		return "/app"
-	}
-	return raw
+	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
 }
 
 func parseHistoryQuery(values url.Values) model.HistoryQuery {
@@ -1043,26 +928,12 @@ func parsePositiveInt(raw string, fallback int) int {
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, repository.ErrNotFound):
-		writeError(w, http.StatusNotFound, "history record not found")
+		httpx.WriteError(w, http.StatusNotFound, "history record not found")
 	case errors.Is(err, service.ErrHistoryForbidden):
-		writeError(w, http.StatusForbidden, "history record is not accessible")
+		httpx.WriteError(w, http.StatusForbidden, "history record is not accessible")
 	default:
-		writeError(w, http.StatusConflict, err.Error())
+		httpx.WriteError(w, http.StatusConflict, err.Error())
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{
-		"error":     message,
-		"status":    status,
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-	})
 }
 
 func sanitizeHistoryRecords(records []model.HistoryRecord) []model.HistoryRecord {
