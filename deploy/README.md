@@ -16,6 +16,8 @@ This directory contains files for deploying Sub2API on Linux servers.
 | `docker-compose.yml` | Docker Compose configuration (named volumes) |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
+| `remote_deploy.py` | SSH one-click remote deployment script |
+| `.remote.example` | Remote server SSH configuration template |
 | `.env.example` | Docker environment variables template |
 | `DOCKER.md` | Docker Hub documentation |
 | `install.sh` | One-click binary installation script |
@@ -95,6 +97,59 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 # Access Web UI
 # http://localhost:8080
+```
+
+### Method 3: One-Click Remote Deployment
+
+If you already have a Linux server with Docker and Docker Compose installed, you can deploy directly over SSH:
+
+```bash
+# In the repository root
+cp deploy/.remote.example deploy/.remote
+cp deploy/.env.example deploy/.env
+
+# Edit both files:
+# - deploy/.remote: fill in SSH_HOST / SSH_USER / SSH_PASSWORD or SSH_KEY_PATH
+# - deploy/.env: configure runtime environment variables
+
+python deploy/remote_deploy.py
+```
+
+To deploy the exact source code from your local working tree, build and save a
+local image first, then enable `local_image` mode in `deploy/.remote`:
+
+```bash
+docker build -t weishaw/sub2api:latest -f Dockerfile .
+docker save -o deploy/weishaw-sub2api-latest.tar weishaw/sub2api:latest
+
+# deploy/.remote
+IMAGE_SOURCE=local_image
+LOCAL_IMAGE=weishaw/sub2api:latest
+LOCAL_IMAGE_TAR=deploy/weishaw-sub2api-latest.tar
+
+python deploy/remote_deploy.py
+```
+
+What the remote deployment script does:
+- Reads server credentials from `deploy/.remote`
+- Uploads the `deploy/` directory contents to the remote server
+- Uploads `deploy/.env` to the remote deployment directory
+- Creates `data/`, `postgres_data/`, and `redis_data/`
+- Runs `docker compose --env-file .env -f docker-compose.local.yml up -d`
+- When `IMAGE_SOURCE=local_image`, uploads `LOCAL_IMAGE_TAR`, runs `docker load`
+  on the remote server, and recreates only the `sub2api` service with the loaded image
+- Prints container status and recent logs after deployment
+
+Remote deployment requirements:
+- Remote host can be accessed over SSH
+- Docker and Docker Compose are already installed on the remote server
+- Local Docker is installed when using `IMAGE_SOURCE=local_image`
+- Local Python environment has `paramiko` installed
+
+Install `paramiko` locally if needed:
+
+```bash
+pip install paramiko
 ```
 
 ### Deployment Version Comparison
