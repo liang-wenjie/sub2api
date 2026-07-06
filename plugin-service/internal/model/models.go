@@ -95,6 +95,16 @@ type CreationRecord struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 }
 
+type PluginMetadata struct {
+	Key              string `json:"key"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Enabled          bool   `json:"enabled"`
+	FrontendMode     string `json:"frontend_mode"`
+	DefaultEntryPath string `json:"default_entry_path"`
+	RemoteEntryURL   string `json:"remote_entry_url,omitempty"`
+}
+
 type HistoryQuery struct {
 	Page     int
 	PageSize int
