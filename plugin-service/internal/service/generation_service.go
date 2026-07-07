@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -36,6 +37,24 @@ type GenerationServiceOptions struct {
 type GenerationService struct {
 	history    *HistoryService
 	httpClient *http.Client
+}
+
+type UpstreamHTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *UpstreamHTTPError) Error() string {
+	if e == nil {
+		return "upstream request failed"
+	}
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	if e.StatusCode > 0 {
+		return "upstream request failed with status " + strconv.Itoa(e.StatusCode)
+	}
+	return "upstream request failed"
 }
 
 type openAIImagesResponse struct {
@@ -82,8 +101,20 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 		req.ResponseFormat = defaultImageResponseFormat
 	}
 
+	log.Printf(
+		"[plugin-service] image generation start user_id=%d role=%s plugin=%s model=%s size=%s has_reference_images=%t provider_base_url=%s",
+		principal.UserID,
+		principal.Role,
+		principal.Plugin,
+		req.Model,
+		req.Size,
+		len(req.ReferenceImages) > 0,
+		strings.TrimSpace(providerBaseURL),
+	)
+
 	record, err := s.history.Create(ctx, principal, req)
 	if err != nil {
+		log.Printf("[plugin-service] image generation create history failed user_id=%d err=%v", principal.UserID, err)
 		return nil, err
 	}
 
@@ -92,6 +123,7 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 		record.Status = model.HistoryStatusFailed
 		record.ErrorMessage = err.Error()
 		_ = s.history.Update(ctx, record)
+		log.Printf("[plugin-service] image generation failed user_id=%d history_id=%s err=%v", principal.UserID, record.ID, err)
 		return nil, err
 	}
 
@@ -99,8 +131,11 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 	record.Result = result
 	record.ErrorMessage = ""
 	if err := s.history.Update(ctx, record); err != nil {
+		log.Printf("[plugin-service] image generation update history failed user_id=%d history_id=%s err=%v", principal.UserID, record.ID, err)
 		return nil, err
 	}
+
+	log.Printf("[plugin-service] image generation succeeded user_id=%d history_id=%s", principal.UserID, record.ID)
 
 	return &model.GenerateResponse{
 		JobID:  record.ID,
@@ -214,7 +249,18 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 		return nil, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, errors.New(strings.TrimSpace(string(body)))
+		message := extractUpstreamErrorMessage(body)
+		if message == "" {
+			message = strings.TrimSpace(string(body))
+		}
+		if message == "" {
+			message = "upstream request failed"
+		}
+		log.Printf("[plugin-service] upstream image request failed status=%d message=%s", resp.StatusCode, message)
+		return nil, &UpstreamHTTPError{
+			StatusCode: resp.StatusCode,
+			Message:    message,
+		}
 	}
 
 	var payload openAIImagesResponse
@@ -464,4 +510,35 @@ func imageMapsValue(value any) []map[string]any {
 		}
 	}
 	return images
+}
+
+func extractUpstreamErrorMessage(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return ""
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return trimmed
+	}
+
+	if msg := nestedStringValue(payload["error"], "message"); msg != "" {
+		return msg
+	}
+	if msg := stringValue(payload["error"]); msg != "" {
+		return msg
+	}
+	if msg := stringValue(payload["message"]); msg != "" {
+		return msg
+	}
+	return trimmed
+}
+
+func nestedStringValue(value any, key string) string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return stringValue(object[key])
 }

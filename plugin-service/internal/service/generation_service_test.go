@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"io"
 	"mime"
 	"mime/multipart"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -284,5 +284,63 @@ func TestGenerationServiceGenerateRequiresProviderBaseURL(t *testing.T) {
 	})
 	if !errors.Is(err, ErrProviderBaseURL) {
 		t.Fatalf("Generate() err = %v, want ErrProviderBaseURL", err)
+	}
+}
+
+func TestGenerationService_GenerateReturnsUpstreamStatusAndMessage(t *testing.T) {
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid API key","type":"invalid_request_error"}}`))
+	}))
+	defer upstream.Close()
+
+	historyRepo := repository.NewHistoryRepository()
+	history := NewHistoryService(historyRepo)
+	svc := NewGenerationService(history, GenerationServiceOptions{})
+	principal := model.CurrentPrincipal{
+		UserID:   7,
+		Role:     model.RoleUser,
+		Email:    "user@example.com",
+		Username: "user",
+		Plugin:   "image-generation",
+	}
+
+	resp, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
+		Prompt:         "draw a city",
+		ProviderAPIKey: "provider-key",
+		Model:          "gpt-image-1",
+	})
+	if err == nil {
+		t.Fatal("Generate() error = nil, want upstream error")
+	}
+	if resp != nil {
+		t.Fatalf("Generate() response = %#v, want nil", resp)
+	}
+
+	var upstreamErr *UpstreamHTTPError
+	if !errors.As(err, &upstreamErr) {
+		t.Fatalf("Generate() err = %T, want *UpstreamHTTPError", err)
+	}
+	if upstreamErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("upstream status = %d, want %d", upstreamErr.StatusCode, http.StatusUnauthorized)
+	}
+	if upstreamErr.Message != "Invalid API key" {
+		t.Fatalf("upstream message = %q, want %q", upstreamErr.Message, "Invalid API key")
+	}
+
+	records, listErr := history.List(ctx, principal, model.HistoryQuery{})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(records) != 1 {
+		t.Fatalf("history records = %d, want 1", len(records))
+	}
+	if records[0].Status != model.HistoryStatusFailed {
+		t.Fatalf("history status = %q, want %q", records[0].Status, model.HistoryStatusFailed)
+	}
+	if records[0].ErrorMessage != "Invalid API key" {
+		t.Fatalf("history error message = %q, want %q", records[0].ErrorMessage, "Invalid API key")
 	}
 }

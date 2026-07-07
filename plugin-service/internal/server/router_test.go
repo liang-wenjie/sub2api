@@ -656,6 +656,31 @@ func TestRouter_ImageGenerationHostedAssetKeepsEmptyLiveConversation(t *testing.
 	}
 }
 
+func TestRouter_ImageGenerationHostedAssetDoesNotRestoreComposerAfterSend(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		DevLoginEnabled: true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/assets/app.js", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("hosted asset status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `W(I,w=>({...w,title:w.messages.length===0?p.slice(0,24):w.title,preview:t("imageGeneration.generationWaiting"),messages:[...w.messages,v,$]})),y.value="",g.value=!0;try{`) {
+		t.Fatal("hosted image app no longer clears the composer before sending")
+	}
+	if strings.Contains(body, `catch(w){y.value=p,`) {
+		t.Fatal("hosted image app still restores the composer text after send")
+	}
+}
+
 func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -735,6 +760,42 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 	}
 	if len(adminPayload.Items) != 2 {
 		t.Fatalf("admin creation count = %d, want 2", len(adminPayload.Items))
+	}
+}
+
+func TestRouter_ImageGenerationGeneratePreservesUpstreamHTTPError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid API key","type":"invalid_request_error"}}`))
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		DevLoginEnabled: true,
+	}
+	router := NewRouter(cfg)
+	cookie := devLoginCookie(t, router, "/dev/login?user_id=7&role=user&email=user%40example.com&username=user&path=/plugins/image-generation")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/plugins/image-generation/generate", bytes.NewBufferString(`{"prompt":"draw a city","provider_api_key":"provider-secret","model":"gpt-image-1"}`))
+	req.AddCookie(cookie)
+	addForwardedProviderOrigin(req, upstream.URL)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("generate status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["error"]; got != "Invalid API key" {
+		t.Fatalf("error body = %#v, want %q", got, "Invalid API key")
 	}
 }
 

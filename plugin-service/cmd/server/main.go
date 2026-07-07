@@ -13,6 +13,12 @@ func main() {
 	handler := server.NewRouter(cfg)
 
 	log.Printf("plugin service listening on %s", cfg.ListenAddr)
+	log.Printf(
+		"plugin service config session_ttl=%s history_enabled=%t dev_login_enabled=%t",
+		cfg.SessionTTL,
+		cfg.HistoryEnabled,
+		cfg.DevLoginEnabled,
+	)
 	if err := http.ListenAndServe(cfg.ListenAddr, handler); err != nil {
 		log.Fatal(err)
 	}

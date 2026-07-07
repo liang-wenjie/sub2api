@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
@@ -74,12 +75,29 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 		return
 	}
 
+	log.Printf(
+		"[plugin-service] generate handler request user_id=%d plugin=%s model=%s size=%s prompt_len=%d reference_images=%d",
+		principal.UserID,
+		principal.Plugin,
+		req.Model,
+		req.Size,
+		len(req.Prompt),
+		len(req.ReferenceImages),
+	)
+
 	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r, h.cfg), req)
 	if err != nil {
 		if errors.Is(err, service.ErrPromptRequired) || errors.Is(err, service.ErrProviderKeyRequired) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		var upstreamErr *service.UpstreamHTTPError
+		if errors.As(err, &upstreamErr) {
+			log.Printf("[plugin-service] generate handler upstream error user_id=%d status=%d err=%s", principal.UserID, upstreamErr.StatusCode, upstreamErr.Message)
+			httpx.WriteError(w, upstreamErr.StatusCode, upstreamErr.Message)
+			return
+		}
+		log.Printf("[plugin-service] generate handler internal error user_id=%d err=%v", principal.UserID, err)
 		httpx.WriteError(w, http.StatusInternalServerError, "generation failed")
 		return
 	}
