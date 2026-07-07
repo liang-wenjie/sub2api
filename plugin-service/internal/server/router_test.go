@@ -37,8 +37,8 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
+		ListenAddr:     ":0",
+		SessionTTL:     time.Hour,
 		HistoryEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -100,8 +100,8 @@ func TestRouter_LaunchCreatesSessionFromMainSiteAuthToken(t *testing.T) {
 	defer mainSite.Close()
 
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
+		ListenAddr:     ":0",
+		SessionTTL:     time.Hour,
 		HistoryEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -155,9 +155,9 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -231,9 +231,9 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 
 func TestRouter_DevLoginAndMe(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -271,8 +271,8 @@ func TestRouter_DevLoginAndMe(t *testing.T) {
 
 func TestRouter_MeRequiresSession(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
+		ListenAddr:     ":0",
+		SessionTTL:     time.Hour,
 		HistoryEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -290,9 +290,9 @@ func TestRouter_MeRequiresSession(t *testing.T) {
 
 func TestRouter_DevLoginDisabled(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: false,
 	}
 	router := NewRouter(cfg)
@@ -307,9 +307,9 @@ func TestRouter_DevLoginDisabled(t *testing.T) {
 
 func TestRouter_DevLoginRejectsUnknownPluginSelection(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -324,9 +324,9 @@ func TestRouter_DevLoginRejectsUnknownPluginSelection(t *testing.T) {
 
 func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -354,9 +354,9 @@ func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 
 func TestRouter_PluginDetailEndpoint(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -382,9 +382,9 @@ func TestRouter_PluginDetailEndpoint(t *testing.T) {
 
 func TestRouter_PluginDetailEndpointNotFound(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -408,9 +408,9 @@ func TestRouter_LaunchAcceptsCanonicalPluginKey(t *testing.T) {
 	defer mainSite.Close()
 
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -463,9 +463,9 @@ func TestRouter_LaunchRedirectsToPluginEntryByDefault(t *testing.T) {
 	defer mainSite.Close()
 
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -484,9 +484,9 @@ func TestRouter_LaunchRedirectsToPluginEntryByDefault(t *testing.T) {
 
 func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -504,9 +504,9 @@ func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 
 func TestRouter_LegacyCompatibilityRoutesRemoved(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -532,9 +532,9 @@ func TestRouter_LegacyCompatibilityRoutesRemoved(t *testing.T) {
 
 func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -559,11 +559,63 @@ func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 	}
 }
 
+func TestRouter_ImageGenerationHostedPageVersionBumpsAssets(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		DevLoginEnabled: true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("hosted page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`/plugins/image-generation/assets/app.js?v=`,
+		`/plugins/image-generation/assets/app.css?v=`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("hosted page missing cache-busted asset %q", needle)
+		}
+	}
+}
+
+func TestRouter_ImageGenerationFrontendResponsesDisableBrowserCache(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		DevLoginEnabled: true,
+	}
+	router := NewRouter(cfg)
+
+	for _, path := range []string{
+		"/plugins/image-generation",
+		"/plugins/image-generation/assets/app.js",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d; body=%s", path, rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("%s Cache-Control = %q, want %q", path, got, "no-store")
+		}
+	}
+}
+
 func TestRouter_ImageGenerationHostedAssets(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -576,6 +628,31 @@ func TestRouter_ImageGenerationHostedAssets(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `data-plugin-api-base`) && !strings.Contains(rec.Body.String(), `/api/plugins/image-generation`) {
 		t.Fatalf("hosted asset body missing namespaced api base; body=%s", rec.Body.String())
+	}
+}
+
+func TestRouter_ImageGenerationHostedAssetKeepsEmptyLiveConversation(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		DevLoginEnabled: true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/assets/app.js", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("hosted asset status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `D.id===L.value`) {
+		t.Fatal("hosted image app does not preserve the selected empty live conversation")
+	}
+	if strings.Contains(body, `D.id.startsWith("conversation-live")&&D.messages.length>0)`) {
+		t.Fatal("hosted image app still drops the empty live conversation when history is empty")
 	}
 }
 
@@ -594,9 +671,9 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := config.Config{
-		ListenAddr: ":0",
-		SessionTTL: time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)

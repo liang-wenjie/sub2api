@@ -107,7 +107,7 @@
           <iframe
             :src="embeddedUrl"
             class="custom-embed-frame"
-            allow="clipboard-read; clipboard-write; fullscreen"
+            allow="clipboard-read; clipboard-write; file-system; fullscreen"
             allowfullscreen
           ></iframe>
         </div>

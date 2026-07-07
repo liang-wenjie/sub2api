@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/handler"
@@ -63,10 +65,38 @@ func registerImageGenerationFrontend(mux *http.ServeMux) {
 	indexPath := imageGenerationIndexPath(webRoot)
 
 	mux.HandleFunc("GET /plugins/image-generation", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, indexPath)
+		disablePluginFrontendCache(w)
+		body, err := os.ReadFile(indexPath)
+		if err != nil {
+			http.Error(w, "plugin frontend not found", http.StatusNotFound)
+			return
+		}
+		html := string(body)
+		html = strings.ReplaceAll(html, "/plugins/image-generation/assets/app.js", "/plugins/image-generation/assets/app.js?v="+imageGenerationAssetVersion(assetRoot, "app.js"))
+		html = strings.ReplaceAll(html, "/plugins/image-generation/assets/app.css", "/plugins/image-generation/assets/app.css?v="+imageGenerationAssetVersion(assetRoot, "app.css"))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(html))
 	})
 
-	mux.Handle("GET /plugins/image-generation/assets/", http.StripPrefix("/plugins/image-generation/assets/", http.FileServer(http.Dir(assetRoot))))
+	assets := http.StripPrefix("/plugins/image-generation/assets/", http.FileServer(http.Dir(assetRoot)))
+	mux.Handle("GET /plugins/image-generation/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		disablePluginFrontendCache(w)
+		assets.ServeHTTP(w, r)
+	}))
+}
+
+func disablePluginFrontendCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
+func imageGenerationAssetVersion(assetRoot string, name string) string {
+	info, err := os.Stat(filepath.Join(assetRoot, name))
+	if err != nil {
+		return "0"
+	}
+	return strconv.FormatInt(info.ModTime().UnixNano(), 10)
 }
 
 func imageGenerationIndexPath(webRoot string) string {
