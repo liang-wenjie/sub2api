@@ -6,6 +6,238 @@
   <title>Image Generation Plugin</title>
   <script type="module" crossorigin src="/plugins/image-generation/assets/app.js"></script>
   <link rel="stylesheet" crossorigin href="/plugins/image-generation/assets/app.css">
+  <script>
+    (function () {
+      var emptyLabel = "\u6682\u65e0\u53ef\u7528 key";
+
+      function ensureEmptyKeyOption() {
+        var select = document.querySelector('[data-testid="image-key-select"]');
+        if (!(select instanceof HTMLSelectElement)) {
+          return;
+        }
+
+        var hasRealOption = Array.from(select.options).some(function (option) {
+          return option.value && !option.disabled;
+        });
+        var existingPlaceholder = select.querySelector('option[data-empty-key-placeholder="true"]');
+
+        if (hasRealOption) {
+          if (existingPlaceholder) {
+            existingPlaceholder.remove();
+          }
+          return;
+        }
+
+        if (!existingPlaceholder) {
+          existingPlaceholder = document.createElement("option");
+          existingPlaceholder.value = "";
+          existingPlaceholder.disabled = true;
+          existingPlaceholder.selected = true;
+          existingPlaceholder.textContent = emptyLabel;
+          existingPlaceholder.setAttribute("data-empty-key-placeholder", "true");
+          select.appendChild(existingPlaceholder);
+        } else {
+          existingPlaceholder.textContent = emptyLabel;
+          existingPlaceholder.selected = true;
+        }
+      }
+
+      function getChatScrollArea() {
+        var thread = document.querySelector('[data-testid="image-chat-thread"]');
+        if (!(thread instanceof HTMLElement)) {
+          return null;
+        }
+
+        var area = thread.firstElementChild;
+        return area instanceof HTMLElement ? area : null;
+      }
+
+      function scrollChatToBottom() {
+        var area = getChatScrollArea();
+        if (!area) {
+          return;
+        }
+
+        area.scrollTop = area.scrollHeight;
+      }
+
+      function observeChatScroll() {
+        var attempts = 0;
+        var timer = window.setInterval(function () {
+          var thread = document.querySelector('[data-testid="image-chat-thread"]');
+          attempts += 1;
+          if (!(thread instanceof HTMLElement)) {
+            if (attempts >= 20) {
+              window.clearInterval(timer);
+            }
+            return;
+          }
+
+          window.clearInterval(timer);
+          scrollChatToBottom();
+
+          var observer = new MutationObserver(function () {
+            window.requestAnimationFrame(scrollChatToBottom);
+          });
+          observer.observe(thread, { childList: true, subtree: true });
+        }, 100);
+      }
+
+      document.addEventListener("DOMContentLoaded", function () {
+        ensureEmptyKeyOption();
+        observeChatScroll();
+
+        var attempts = 0;
+        var timer = window.setInterval(function () {
+          ensureEmptyKeyOption();
+          attempts += 1;
+          if (attempts >= 20) {
+            window.clearInterval(timer);
+          }
+        }, 300);
+      });
+    })();
+  </script>
+  <style>
+    html,
+    body,
+    #app {
+      width: 100%;
+      height: 100%;
+      min-height: 100dvh;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background: #f8f6f1;
+    }
+
+    #app > div {
+      height: 100dvh;
+      min-height: 0 !important;
+      overflow: hidden;
+    }
+
+    #app > div > main {
+      height: 100%;
+      min-height: 0 !important;
+      padding: 0 !important;
+      overflow: hidden;
+    }
+
+    #app > div > main > div {
+      height: 100%;
+      min-height: 0 !important;
+      overflow: hidden;
+    }
+
+    #app [data-testid="image-workspace"] {
+      display: flex;
+      height: 100%;
+      min-height: 0 !important;
+      border-radius: 0;
+      border-left: 0;
+      border-right: 0;
+      border-top: 0;
+      box-shadow: none;
+      overflow: hidden;
+    }
+
+    #app [data-testid="image-history"] {
+      height: 100%;
+      max-height: none;
+      overflow: hidden;
+    }
+
+    #app [data-testid="history-list"] {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #app [data-testid="image-chat-panel"] {
+      height: 100%;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0 !important;
+      overflow: hidden;
+    }
+
+    #app [data-testid="image-chat-thread"] {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    #app [data-testid="image-chat-thread"] > div:first-child {
+      flex: 1 1 auto;
+      max-height: none;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #app [data-testid="image-chat-thread"] > div:last-child {
+      margin-top: 0;
+      flex: 0 0 auto;
+    }
+
+    #app [data-testid="image-chat-composer"] {
+      flex-shrink: 0;
+    }
+
+    #app [data-testid="image-chat-composer"] textarea {
+      max-height: 32dvh;
+      overflow-y: auto;
+    }
+
+    @media (max-width: 1023px) {
+      #app [data-testid="image-workspace"] {
+        flex-direction: column;
+      }
+
+      #app [data-testid="image-history"] {
+        width: 100%;
+        max-width: none;
+        max-height: 38dvh;
+        border-right: 0;
+        border-bottom: 1px solid #e2e8f0;
+      }
+
+      #app [data-testid="image-chat-panel"] {
+        flex: 1 1 auto;
+      }
+
+      #app [data-testid="image-chat-thread"] {
+        min-height: 0;
+        height: 100%;
+      }
+    }
+
+    @media (max-width: 767px) {
+      #app [data-testid="image-history"] {
+        max-height: 34dvh;
+        padding: 0.75rem;
+      }
+
+      #app [data-testid="image-chat-thread"] > div:first-child {
+        padding-left: 1rem;
+        padding-right: 1rem;
+        padding-top: 1rem;
+      }
+
+      #app [data-testid="image-chat-composer"] {
+        border-radius: 20px;
+      }
+    }
+  </style>
 </head>
 <body>
   <div id="app" data-plugin-api-base="/api/plugins/image-generation"></div>

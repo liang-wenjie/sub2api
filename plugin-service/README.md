@@ -29,13 +29,14 @@ The main frontend turns this entry into the shared launch URL:
 - `/launch?plugin=image-generation&path=/plugins/image-generation`
 
 For deployment, keep the browser-facing entry on the main site domain. Configure
-the main service deployment env with the internal plugin upstream, for example:
+the plugin service port in the shared deployment env, for example:
 
 ```env
-PLUGIN_SERVICE_BASE_URL=192.168.0.10:8091
+PLUGIN_SERVER_PORT=8091
 ```
 
-Then reverse-proxy these paths from the main site domain to the plugin service:
+Then reverse-proxy these paths from the main site domain to the fixed internal
+plugin service host in the same Docker network or environment:
 
 - `/launch`
 - `/plugins/*`
@@ -85,28 +86,17 @@ The standalone host enforces role-aware history access:
   - `POST /api/plugins/image-generation/history/{id}/retry`
   - `POST /api/plugins/image-generation/history/{id}/cancel`
 
-Compatibility aliases remain available during migration:
-
-- `GET /app`
-- `GET /api/config`
-- `POST /api/generate`
-- `GET /api/creations`
-- `GET /api/history`
-- `GET /api/history/{id}`
-- `POST /api/history/{id}/retry`
-- `POST /api/history/{id}/cancel`
-
-`POST /api/generate` and `POST /api/plugins/image-generation/generate` both proxy image generation requests to the main Sub2API gateway resolved from the same-origin request headers. The request must include `provider_api_key`, and the plugin service persists structured history plus a flattened creations list for gallery-style views.
+`POST /api/plugins/image-generation/generate` proxies image generation requests to the main Sub2API gateway resolved from the same-origin request headers. The request must include `provider_api_key`, and the plugin service persists structured history plus a flattened creations list for gallery-style views.
 
 ## Local Development Login
 
 For local development without Sub2API credentials, enable:
 
 ```env
-PLUGIN_SERVICE_DEV_LOGIN_ENABLED=true
+PLUGIN_SERVER_DEV_LOGIN_ENABLED=true
 ```
 
-Create a real `.env` file from `.env.example`. Editing `.env.example` itself does not affect the running service.
+Configure plugin settings in the project root `.env`. The plugin service shares that same environment file with the main service.
 
 Then open a URL like:
 

@@ -48,7 +48,8 @@ export default defineConfig(({ mode }) => {
     ...loadEnv(mode, process.cwd(), ''),
   }
   const backendUrl = env.VITE_DEV_PROXY_TARGET || 'http://localhost:8080'
-  const pluginServiceUrl = normalizeProxyTarget(env.PLUGIN_SERVICE_BASE_URL || 'localhost:8091')
+  const pluginServerPort = env.PLUGIN_SERVER_PORT || '8091'
+  const pluginServiceUrl = normalizeProxyTarget(`localhost:${pluginServerPort}`)
   const devPort = Number(env.VITE_DEV_PORT || 3000)
 
   return {
@@ -123,7 +124,8 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api/plugins': {
           target: pluginServiceUrl,
-          changeOrigin: true
+          changeOrigin: true,
+          xfwd: true
         },
         '/api': {
           target: backendUrl,
@@ -135,11 +137,13 @@ export default defineConfig(({ mode }) => {
         },
         '/launch': {
           target: pluginServiceUrl,
-          changeOrigin: true
+          changeOrigin: true,
+          xfwd: true
         },
         '/plugins': {
           target: pluginServiceUrl,
-          changeOrigin: true
+          changeOrigin: true,
+          xfwd: true
         },
         '/setup': {
           target: backendUrl,

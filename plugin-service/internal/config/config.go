@@ -11,30 +11,27 @@ import (
 
 type Config struct {
 	ListenAddr      string
-	MainSiteOrigin  string
 	SessionTTL      time.Duration
 	HistoryEnabled  bool
-	PluginKey       string
 	DevLoginEnabled bool
 }
 
 func MustLoad() Config {
 	loadDotEnvIfPresent()
-	ttlSeconds := envInt("PLUGIN_SERVICE_SESSION_TTL_SECONDS", 3600)
+	ttlSeconds := envInt("PLUGIN_SERVER_SESSION_TTL_SECONDS", 3600)
+	port := envInt("PLUGIN_SERVER_PORT", 8091)
 	return Config{
-		ListenAddr:      envString("PLUGIN_SERVICE_LISTEN_ADDR", ":8091"),
-		MainSiteOrigin:  strings.TrimRight(envString("PLUGIN_SERVICE_MAIN_SITE_ORIGIN", "http://localhost:8080"), "/"),
+		ListenAddr:      ":" + strconv.Itoa(port),
 		SessionTTL:      time.Duration(ttlSeconds) * time.Second,
-		HistoryEnabled:  envBool("PLUGIN_SERVICE_HISTORY_ENABLED", true),
-		PluginKey:       envString("PLUGIN_SERVICE_PLUGIN_KEY", "gen"),
-		DevLoginEnabled: envBool("PLUGIN_SERVICE_DEV_LOGIN_ENABLED", false),
+		HistoryEnabled:  envBool("PLUGIN_SERVER_HISTORY_ENABLED", true),
+		DevLoginEnabled: envBool("PLUGIN_SERVER_DEV_LOGIN_ENABLED", false),
 	}
 }
 
 func loadDotEnvIfPresent() {
 	for _, candidate := range []string{
 		".env",
-		filepath.Join("plugin-service", ".env"),
+		filepath.Join("..", ".env"),
 	} {
 		if _, err := os.Stat(candidate); err != nil {
 			continue

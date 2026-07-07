@@ -4,21 +4,21 @@ api.sub2api.com {
 		path /launch
 	}
 	handle @pluginLaunch {
-		reverse_proxy {$PLUGIN_SERVICE_BASE_URL:127.0.0.1:8091}
+		reverse_proxy plugin-service:{$PLUGIN_SERVER_PORT:8091}
 	}
 
 	@pluginAssets {
 		path /plugins/*
 	}
 	handle @pluginAssets {
-		reverse_proxy {$PLUGIN_SERVICE_BASE_URL:127.0.0.1:8091}
+		reverse_proxy plugin-service:{$PLUGIN_SERVER_PORT:8091}
 	}
 
 	@pluginAPI {
 		path /api/plugins/*
 	}
 	handle @pluginAPI {
-		reverse_proxy {$PLUGIN_SERVICE_BASE_URL:127.0.0.1:8091}
+		reverse_proxy plugin-service:{$PLUGIN_SERVER_PORT:8091}
 	}
 
     # =========================================================================

@@ -8,12 +8,12 @@ import (
 
 func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
 	unsetEnv(t,
-		"PLUGIN_SERVICE_PLUGIN_KEY",
-		"PLUGIN_SERVICE_DEV_LOGIN_ENABLED",
+		"PLUGIN_SERVER_HISTORY_ENABLED",
+		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
 	)
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVICE_PLUGIN_KEY=from-dotenv\nPLUGIN_SERVICE_DEV_LOGIN_ENABLED=true\n")
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_HISTORY_ENABLED=false\nPLUGIN_SERVER_DEV_LOGIN_ENABLED=true\n")
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -25,50 +25,57 @@ func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
 	}
 
 	cfg := MustLoad()
-	if cfg.PluginKey != "from-dotenv" {
-		t.Fatalf("plugin key = %q, want %q", cfg.PluginKey, "from-dotenv")
+	if cfg.HistoryEnabled {
+		t.Fatal("expected history disabled from .env")
 	}
 	if !cfg.DevLoginEnabled {
 		t.Fatal("expected dev login enabled from .env")
 	}
 }
 
-func TestMustLoadLoadsDotEnvFromRepoRootPluginServiceDir(t *testing.T) {
+func TestMustLoadLoadsSharedDotEnvFromParentDir(t *testing.T) {
 	unsetEnv(t,
-		"PLUGIN_SERVICE_PLUGIN_KEY",
+		"PLUGIN_SERVER_HISTORY_ENABLED",
+		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
 	)
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, "plugin-service", ".env"), "PLUGIN_SERVICE_PLUGIN_KEY=root-dotenv\n")
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_HISTORY_ENABLED=false\nPLUGIN_SERVER_DEV_LOGIN_ENABLED=true\n")
+	if err := os.MkdirAll(filepath.Join(tempDir, "plugin-service"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(cwd) }()
-	if err := os.Chdir(tempDir); err != nil {
+	if err := os.Chdir(filepath.Join(tempDir, "plugin-service")); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := MustLoad()
-	if cfg.PluginKey != "root-dotenv" {
-		t.Fatalf("plugin key = %q, want %q", cfg.PluginKey, "root-dotenv")
+	if cfg.HistoryEnabled {
+		t.Fatal("expected history disabled from shared parent .env")
+	}
+	if !cfg.DevLoginEnabled {
+		t.Fatal("expected dev login enabled from shared parent .env")
 	}
 }
 
 func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 	unsetEnv(t,
-		"PLUGIN_SERVICE_PLUGIN_KEY",
-		"PLUGIN_SERVICE_DEV_LOGIN_ENABLED",
+		"PLUGIN_SERVER_HISTORY_ENABLED",
+		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
 	)
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVICE_PLUGIN_KEY=from-dotenv\nPLUGIN_SERVICE_DEV_LOGIN_ENABLED=true\n")
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_HISTORY_ENABLED=false\nPLUGIN_SERVER_DEV_LOGIN_ENABLED=true\n")
 
-	if err := os.Setenv("PLUGIN_SERVICE_PLUGIN_KEY", "from-env"); err != nil {
+	if err := os.Setenv("PLUGIN_SERVER_HISTORY_ENABLED", "true"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Setenv("PLUGIN_SERVICE_DEV_LOGIN_ENABLED", "false"); err != nil {
+	if err := os.Setenv("PLUGIN_SERVER_DEV_LOGIN_ENABLED", "false"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,32 +89,47 @@ func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 	}
 
 	cfg := MustLoad()
-	if cfg.PluginKey != "from-env" {
-		t.Fatalf("plugin key = %q, want %q", cfg.PluginKey, "from-env")
+	if !cfg.HistoryEnabled {
+		t.Fatal("expected process env to override .env and keep history enabled")
 	}
 	if cfg.DevLoginEnabled {
 		t.Fatal("expected process env to override .env and keep dev login disabled")
 	}
 }
 
-func TestMustLoadKeepsPluginHostDefaults(t *testing.T) {
-	unsetEnv(t, "PLUGIN_SERVICE_PLUGIN_KEY")
+func TestMustLoadUsesPluginServerPort(t *testing.T) {
+	unsetEnv(t, "PLUGIN_SERVER_PORT")
 
+	if err := os.Setenv("PLUGIN_SERVER_PORT", "19091"); err != nil {
+		t.Fatal(err)
+	}
 	cfg := MustLoad()
-	if cfg.PluginKey == "" {
-		t.Fatal("expected plugin key default for compatibility routes")
+	if cfg.ListenAddr != ":19091" {
+		t.Fatalf("listen addr = %q, want %q", cfg.ListenAddr, ":19091")
 	}
 }
 
-func TestMustLoadDefaultsToSameOriginFriendlyConfig(t *testing.T) {
+func TestMustLoadIgnoresLegacyPluginServiceEnvNames(t *testing.T) {
 	unsetEnv(t,
-		"PLUGIN_SERVICE_MAIN_SITE_ORIGIN",
-		"PLUGIN_SERVICE_PLUGIN_KEY",
+		"PLUGIN_SERVER_PORT",
+		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
+		"PLUGIN_SERVICE_LISTEN_ADDR",
+		"PLUGIN_SERVICE_DEV_LOGIN_ENABLED",
 	)
 
+	if err := os.Setenv("PLUGIN_SERVICE_LISTEN_ADDR", ":19091"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("PLUGIN_SERVICE_DEV_LOGIN_ENABLED", "true"); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := MustLoad()
-	if cfg.MainSiteOrigin != "http://localhost:8080" {
-		t.Fatalf("main site origin = %q, want http://localhost:8080", cfg.MainSiteOrigin)
+	if cfg.ListenAddr != ":8091" {
+		t.Fatalf("listen addr = %q, want default %q", cfg.ListenAddr, ":8091")
+	}
+	if cfg.DevLoginEnabled {
+		t.Fatal("expected legacy PLUGIN_SERVICE_* env to be ignored")
 	}
 }
 

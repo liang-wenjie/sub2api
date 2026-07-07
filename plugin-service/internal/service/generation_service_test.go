@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,6 +64,76 @@ func TestGenerationService_GenerateRecordsRealImageResult(t *testing.T) {
 	}
 	if images[0]["url"] != "https://cdn.example.com/generated.png" {
 		t.Fatalf("image url = %#v, want %q", images[0]["url"], "https://cdn.example.com/generated.png")
+	}
+}
+
+func TestGenerationService_GenerateUploadsReferenceImageAsMultipartFile(t *testing.T) {
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/images/edits" {
+			t.Fatalf("path = %s, want /v1/images/edits", r.URL.Path)
+		}
+		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatalf("parse content type: %v", err)
+		}
+		if mediaType != "multipart/form-data" {
+			t.Fatalf("content type = %q, want multipart/form-data", mediaType)
+		}
+		reader := multipart.NewReader(r.Body, params["boundary"])
+		var foundImage bool
+		for {
+			part, err := reader.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("read multipart part: %v", err)
+			}
+			if part.FormName() != "image" {
+				continue
+			}
+			foundImage = true
+			if part.FileName() != "reference.png" {
+				t.Fatalf("filename = %q, want reference.png", part.FileName())
+			}
+			if got := part.Header.Get("Content-Type"); got != "image/png" {
+				t.Fatalf("image content type = %q, want image/png", got)
+			}
+			data, err := io.ReadAll(part)
+			if err != nil {
+				t.Fatalf("read image part: %v", err)
+			}
+			if string(data) != "png-bytes" {
+				t.Fatalf("image bytes = %q, want png-bytes", string(data))
+			}
+		}
+		if !foundImage {
+			t.Fatal("multipart image part was not uploaded")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"b64_json":"abc123"}]}`))
+	}))
+	defer upstream.Close()
+
+	historyRepo := repository.NewHistoryRepository()
+	history := NewHistoryService(historyRepo)
+	svc := NewGenerationService(history, GenerationServiceOptions{})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Email: "user@example.com", Username: "user", Plugin: "gen"}
+
+	_, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
+		Prompt:         "use this reference",
+		ProviderAPIKey: "provider-secret",
+		Model:          "gpt-image-1",
+		Size:           "1024x1024",
+		ReferenceImages: []model.ReferenceImage{{
+			Name:     "reference.png",
+			MimeType: "image/png",
+			DataURL:  "data:image/png;base64,cG5nLWJ5dGVz",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

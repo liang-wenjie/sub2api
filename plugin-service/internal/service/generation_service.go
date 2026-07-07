@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -307,7 +308,7 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 		if dataURL == "" {
 			continue
 		}
-		fileName, _, fileBytes, err := decodeDataURLImage(dataURL, image.Name, image.MimeType)
+		fileName, mimeType, fileBytes, err := decodeDataURLImage(dataURL, image.Name, image.MimeType)
 		if err != nil {
 			return nil, err
 		}
@@ -315,7 +316,7 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 		if index > 0 {
 			fieldName = "image[" + strconv.Itoa(index) + "]"
 		}
-		part, err := writer.CreateFormFile(fieldName, fileName)
+		part, err := createImageFormFile(writer, fieldName, fileName, mimeType)
 		if err != nil {
 			return nil, err
 		}
@@ -332,6 +333,20 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 	}
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
 	return httpReq, nil
+}
+
+func createImageFormFile(writer *multipart.Writer, fieldName string, fileName string, mimeType string) (io.Writer, error) {
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "image/png"
+	}
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", `form-data; name="`+escapeQuotes(fieldName)+`"; filename="`+escapeQuotes(fileName)+`"`)
+	header.Set("Content-Type", mimeType)
+	return writer.CreatePart(header)
+}
+
+func escapeQuotes(value string) string {
+	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
 }
 
 func normalizeImagesResult(req model.GenerateRequest, payload openAIImagesResponse) map[string]any {

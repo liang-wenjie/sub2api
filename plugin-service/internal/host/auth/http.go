@@ -110,9 +110,9 @@ type mainSiteProfileData struct {
 }
 
 func (h *Handler) fetchMainSiteProfile(r *http.Request) (*mainSiteProfileData, error) {
-	mainSiteBase := strings.TrimRight(strings.TrimSpace(h.cfg.MainSiteOrigin), "/")
+	mainSiteBase := httpx.ResolveRequestBaseURL(r)
 	if mainSiteBase == "" {
-		return nil, errUnauthorized("main site origin is not configured")
+		return nil, errUnauthorized("failed to resolve main site base url")
 	}
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, mainSiteBase+"/api/v1/auth/me", nil)
@@ -312,7 +312,7 @@ func (h *Handler) defaultPluginKey() string {
 			return metadata.Key
 		}
 	}
-	return h.cfg.PluginKey
+	return CanonicalPluginKey
 }
 
 func (h *Handler) defaultPluginEntry(pluginKey string) string {
@@ -342,9 +342,6 @@ func (h *Handler) resolvePluginKey(raw string) (string, bool) {
 	}
 	if _, ok := h.registry.Get(key); ok {
 		return key, true
-	}
-	if key == h.cfg.PluginKey {
-		return h.defaultPluginKey(), true
 	}
 	return "", false
 }

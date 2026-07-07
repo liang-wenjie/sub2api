@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
@@ -53,14 +52,6 @@ func RegisterRoutes(mux *http.ServeMux, sessionMiddleware *hostsession.Middlewar
 	mux.HandleFunc("GET "+apiBasePath+"/history/{id}", sessionMiddleware.Require(handler.GetHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/retry", sessionMiddleware.Require(handler.RetryHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/cancel", sessionMiddleware.Require(handler.CancelHistory))
-
-	mux.HandleFunc("GET /api/config", sessionMiddleware.Require(handler.Config))
-	mux.HandleFunc("POST /api/generate", sessionMiddleware.Require(handler.Generate))
-	mux.HandleFunc("GET /api/creations", sessionMiddleware.Require(handler.ListCreations))
-	mux.HandleFunc("GET /api/history", sessionMiddleware.Require(handler.ListHistory))
-	mux.HandleFunc("GET /api/history/{id}", sessionMiddleware.Require(handler.GetHistory))
-	mux.HandleFunc("POST /api/history/{id}/retry", sessionMiddleware.Require(handler.RetryHistory))
-	mux.HandleFunc("POST /api/history/{id}/cancel", sessionMiddleware.Require(handler.CancelHistory))
 }
 
 func (h *Handler) Config(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
@@ -151,16 +142,5 @@ func (h *Handler) CancelHistory(w http.ResponseWriter, r *http.Request, principa
 }
 
 func resolveMainServiceBaseURL(r *http.Request, cfg config.Config) string {
-	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
-	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
-	if proto == "" {
-		proto = "http"
-	}
-	if host == "" {
-		host = strings.TrimSpace(r.Host)
-	}
-	if host != "" {
-		return strings.TrimRight(proto+"://"+host, "/")
-	}
-	return strings.TrimRight(strings.TrimSpace(cfg.MainSiteOrigin), "/")
+	return httpx.ResolveRequestBaseURL(r)
 }

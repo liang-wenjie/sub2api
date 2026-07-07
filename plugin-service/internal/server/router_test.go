@@ -38,15 +38,13 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin: mainSite.URL,
-		SessionTTL:     time.Hour,
+		SessionTTL: time.Hour,
 		HistoryEnabled: true,
-		PluginKey:      "gen",
 	}
 	router := NewRouter(cfg)
 
-	launchReq := httptest.NewRequest(http.MethodGet, "/launch?token=launch-token&plugin=image-generation&path=/app", nil)
+	launchReq := httptest.NewRequest(http.MethodGet, "/launch?token=launch-token&plugin=image-generation&path=/plugins/image-generation", nil)
+	addPublicBaseHeaders(launchReq, mainSite.URL)
 	launchRec := httptest.NewRecorder()
 	router.ServeHTTP(launchRec, launchReq)
 	if launchRec.Code != http.StatusFound {
@@ -58,7 +56,7 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 	}
 
 	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
-	generateReq := httptest.NewRequest(http.MethodPost, "/api/generate", body)
+	generateReq := httptest.NewRequest(http.MethodPost, "/api/plugins/image-generation/generate", body)
 	generateReq.AddCookie(cookies[0])
 	addForwardedProviderOrigin(generateReq, upstream.URL)
 	generateRec := httptest.NewRecorder()
@@ -67,7 +65,7 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 		t.Fatalf("generate status = %d, want %d; body=%s", generateRec.Code, http.StatusCreated, generateRec.Body.String())
 	}
 
-	historyReq := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+	historyReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/history", nil)
 	historyReq.AddCookie(cookies[0])
 	historyRec := httptest.NewRecorder()
 	router.ServeHTTP(historyRec, historyReq)
@@ -103,15 +101,13 @@ func TestRouter_LaunchCreatesSessionFromMainSiteAuthToken(t *testing.T) {
 
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin: mainSite.URL,
-		SessionTTL:     time.Hour,
+		SessionTTL: time.Hour,
 		HistoryEnabled: true,
-		PluginKey:      "gen",
 	}
 	router := NewRouter(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/launch?session=launch-token&plugin=image-generation&path=/plugins/image-generation", nil)
+	addPublicBaseHeaders(req, mainSite.URL)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
@@ -160,11 +156,8 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -239,16 +232,13 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 func TestRouter_DevLoginAndMe(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
-	loginReq := httptest.NewRequest(http.MethodGet, "/dev/login?user_id=7&role=admin&email=admin%40example.com&username=dev-admin&path=/app", nil)
+	loginReq := httptest.NewRequest(http.MethodGet, "/dev/login?user_id=7&role=admin&email=admin%40example.com&username=dev-admin&path=/plugins/image-generation", nil)
 	loginRec := httptest.NewRecorder()
 	router.ServeHTTP(loginRec, loginReq)
 	if loginRec.Code != http.StatusFound {
@@ -282,11 +272,8 @@ func TestRouter_DevLoginAndMe(t *testing.T) {
 func TestRouter_MeRequiresSession(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin: "http://main.test",
-		SessionTTL:     time.Hour,
+		SessionTTL: time.Hour,
 		HistoryEnabled: true,
-		PluginKey:      "gen",
 	}
 	router := NewRouter(cfg)
 
@@ -304,16 +291,13 @@ func TestRouter_MeRequiresSession(t *testing.T) {
 func TestRouter_DevLoginDisabled(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: false,
 	}
 	router := NewRouter(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/dev/login?path=/app", nil)
+	req := httptest.NewRequest(http.MethodGet, "/dev/login?path=/plugins/image-generation", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -324,11 +308,8 @@ func TestRouter_DevLoginDisabled(t *testing.T) {
 func TestRouter_DevLoginRejectsUnknownPluginSelection(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -344,11 +325,8 @@ func TestRouter_DevLoginRejectsUnknownPluginSelection(t *testing.T) {
 func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -377,11 +355,8 @@ func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 func TestRouter_PluginDetailEndpoint(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -408,11 +383,8 @@ func TestRouter_PluginDetailEndpoint(t *testing.T) {
 func TestRouter_PluginDetailEndpointNotFound(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -437,24 +409,22 @@ func TestRouter_LaunchAcceptsCanonicalPluginKey(t *testing.T) {
 
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  mainSite.URL,
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/launch?plugin=image-generation&path=/app", nil)
+	req := httptest.NewRequest(http.MethodGet, "/launch?plugin=image-generation&path=/plugins/image-generation", nil)
 	req.Header.Set("Cookie", "sub2api_session=session-abc")
+	addPublicBaseHeaders(req, mainSite.URL)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("launch canonical plugin status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
 	}
-	if got := rec.Result().Header.Get("Location"); got != "/app" {
-		t.Fatalf("launch canonical plugin redirect = %q, want %q", got, "/app")
+	if got := rec.Result().Header.Get("Location"); got != "/plugins/image-generation" {
+		t.Fatalf("launch canonical plugin redirect = %q, want %q", got, "/plugins/image-generation")
 	}
 
 	cookies := rec.Result().Cookies()
@@ -494,16 +464,14 @@ func TestRouter_LaunchRedirectsToPluginEntryByDefault(t *testing.T) {
 
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  mainSite.URL,
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/launch?token=launch-token&plugin=image-generation", nil)
+	addPublicBaseHeaders(req, mainSite.URL)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
@@ -517,11 +485,8 @@ func TestRouter_LaunchRedirectsToPluginEntryByDefault(t *testing.T) {
 func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -537,37 +502,39 @@ func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 	}
 }
 
-func TestRouter_AppPageRedirectsToHostedPluginPage(t *testing.T) {
+func TestRouter_LegacyCompatibilityRoutesRemoved(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
-	appReq := httptest.NewRequest(http.MethodGet, "/app", nil)
-	appRec := httptest.NewRecorder()
-	router.ServeHTTP(appRec, appReq)
-	if appRec.Code != http.StatusFound {
-		t.Fatalf("app status = %d, want %d; body=%s", appRec.Code, http.StatusFound, appRec.Body.String())
-	}
-	if got := appRec.Result().Header.Get("Location"); got != "/plugins/image-generation" {
-		t.Fatalf("app redirect location = %q, want %q", got, "/plugins/image-generation")
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/app"},
+		{method: http.MethodGet, path: "/api/config"},
+		{method: http.MethodPost, path: "/api/generate"},
+		{method: http.MethodGet, path: "/api/creations"},
+		{method: http.MethodGet, path: "/api/history"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status = %d, want %d", tc.method, tc.path, rec.Code, http.StatusNotFound)
+		}
 	}
 }
 
 func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -595,11 +562,8 @@ func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 func TestRouter_ImageGenerationHostedAssets(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
@@ -631,18 +595,15 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 
 	cfg := config.Config{
 		ListenAddr: ":0",
-
-		MainSiteOrigin:  "http://main.test",
-		SessionTTL:      time.Hour,
-		HistoryEnabled:  true,
-		PluginKey:       "gen",
+		SessionTTL: time.Hour,
+		HistoryEnabled: true,
 		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
-	adminCookie := devLoginCookie(t, router, "/dev/login?user_id=99&role=admin&email=admin%40example.com&username=admin&path=/app")
-	userCookie := devLoginCookie(t, router, "/dev/login?user_id=7&role=user&email=user%40example.com&username=user&path=/app")
-	otherCookie := devLoginCookie(t, router, "/dev/login?user_id=8&role=user&email=other%40example.com&username=other&path=/app")
+	adminCookie := devLoginCookie(t, router, "/dev/login?user_id=99&role=admin&email=admin%40example.com&username=admin&path=/plugins/image-generation")
+	userCookie := devLoginCookie(t, router, "/dev/login?user_id=7&role=user&email=user%40example.com&username=user&path=/plugins/image-generation")
+	otherCookie := devLoginCookie(t, router, "/dev/login?user_id=8&role=user&email=other%40example.com&username=other&path=/plugins/image-generation")
 
 	for _, tc := range []struct {
 		cookie      *http.Cookie
@@ -652,7 +613,7 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 		{cookie: userCookie, prompt: "user image", providerKey: "user-a-key"},
 		{cookie: otherCookie, prompt: "other image", providerKey: "user-b-key"},
 	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/generate", bytes.NewBufferString(`{"prompt":"`+tc.prompt+`","provider_api_key":"`+tc.providerKey+`","model":"gpt-image-1"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/plugins/image-generation/generate", bytes.NewBufferString(`{"prompt":"`+tc.prompt+`","provider_api_key":"`+tc.providerKey+`","model":"gpt-image-1"}`))
 		req.AddCookie(tc.cookie)
 		addForwardedProviderOrigin(req, upstream.URL)
 		rec := httptest.NewRecorder()
@@ -662,7 +623,7 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 		}
 	}
 
-	userCreationsReq := httptest.NewRequest(http.MethodGet, "/api/creations", nil)
+	userCreationsReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/creations", nil)
 	userCreationsReq.AddCookie(userCookie)
 	userCreationsRec := httptest.NewRecorder()
 	router.ServeHTTP(userCreationsRec, userCreationsReq)
@@ -682,7 +643,7 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 		t.Fatalf("user creation user_id = %d, want 7", userPayload.Items[0].UserID)
 	}
 
-	adminCreationsReq := httptest.NewRequest(http.MethodGet, "/api/creations", nil)
+	adminCreationsReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/creations", nil)
 	adminCreationsReq.AddCookie(adminCookie)
 	adminCreationsRec := httptest.NewRecorder()
 	router.ServeHTTP(adminCreationsRec, adminCreationsReq)
@@ -722,4 +683,14 @@ func addForwardedProviderOrigin(req *http.Request, upstreamURL string) {
 	}
 	req.Header.Set("X-Forwarded-Proto", parsed.Scheme)
 	req.Header.Set("X-Forwarded-Host", parsed.Host)
+}
+
+func addPublicBaseHeaders(req *http.Request, baseURL string) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		panic(err)
+	}
+	req.Header.Set("X-Forwarded-Proto", parsed.Scheme)
+	req.Header.Set("X-Forwarded-Host", parsed.Host)
+	req.Header.Set("Origin", parsed.Scheme+"://"+parsed.Host)
 }

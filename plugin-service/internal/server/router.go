@@ -47,8 +47,8 @@ func NewRouter(cfg config.Config) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", app.Health)
-	registerImageGenerationFrontend(mux)
 	mux.HandleFunc("GET /launch", authHandler.Launch)
+	registerImageGenerationFrontend(mux)
 	mux.HandleFunc("GET /dev/login", authHandler.DevLogin)
 	mux.HandleFunc("GET /api/plugins", authHandler.ListPlugins)
 	mux.HandleFunc("GET /api/plugins/{key}", authHandler.GetPlugin)
@@ -67,10 +67,6 @@ func registerImageGenerationFrontend(mux *http.ServeMux) {
 	})
 
 	mux.Handle("GET /plugins/image-generation/assets/", http.StripPrefix("/plugins/image-generation/assets/", http.FileServer(http.Dir(assetRoot))))
-
-	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/plugins/image-generation", http.StatusFound)
-	})
 }
 
 func imageGenerationIndexPath(webRoot string) string {
