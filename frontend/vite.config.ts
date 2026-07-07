@@ -34,10 +34,21 @@ function injectPublicSettings(backendUrl: string): Plugin {
   }
 }
 
+function normalizeProxyTarget(address: string): string {
+  const trimmed = address.trim()
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  return `http://${trimmed}`
+}
+
 export default defineConfig(({ mode }) => {
   // 加载环境变量
-  const env = loadEnv(mode, process.cwd(), '')
+  const rootEnv = loadEnv(mode, resolve(__dirname, '..'), '')
+  const env = {
+    ...rootEnv,
+    ...loadEnv(mode, process.cwd(), ''),
+  }
   const backendUrl = env.VITE_DEV_PROXY_TARGET || 'http://localhost:8080'
+  const pluginServiceUrl = normalizeProxyTarget(env.PLUGIN_SERVICE_BASE_URL || 'localhost:8091')
   const devPort = Number(env.VITE_DEV_PORT || 3000)
 
   return {
@@ -110,12 +121,24 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       port: devPort,
       proxy: {
+        '/api/plugins': {
+          target: pluginServiceUrl,
+          changeOrigin: true
+        },
         '/api': {
           target: backendUrl,
           changeOrigin: true
         },
         '/v1': {
           target: backendUrl,
+          changeOrigin: true
+        },
+        '/launch': {
+          target: pluginServiceUrl,
+          changeOrigin: true
+        },
+        '/plugins': {
+          target: pluginServiceUrl,
           changeOrigin: true
         },
         '/setup': {

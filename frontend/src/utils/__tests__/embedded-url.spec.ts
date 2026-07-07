@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildEmbeddedUrl, detectTheme } from '../embedded-url'
+import { buildCustomMenuEmbeddedUrl, buildEmbeddedUrl, detectTheme } from '../embedded-url'
 
 describe('embedded-url', () => {
   const originalLocation = window.location
@@ -58,6 +58,53 @@ describe('embedded-url', () => {
 
   it('returns original string for invalid url input', () => {
     expect(buildEmbeddedUrl('not a url', 1, 'token')).toBe('not a url')
+  })
+
+  it('supports relative urls for host-side launch endpoints', () => {
+    const result = buildEmbeddedUrl(
+      '/launch?plugin=image-generation&path=/plugins/image-generation',
+      7,
+      'token-abc',
+      'dark',
+      'zh-CN',
+    )
+
+    expect(result).toContain('/launch?')
+    const url = new URL(result, 'https://app.example.com')
+    expect(url.pathname).toBe('/launch')
+    expect(url.searchParams.get('plugin')).toBe('image-generation')
+    expect(url.searchParams.get('path')).toBe('/plugins/image-generation')
+    expect(url.searchParams.get('user_id')).toBe('7')
+    expect(url.searchParams.get('token')).toBe('token-abc')
+    expect(url.searchParams.get('theme')).toBe('dark')
+    expect(url.searchParams.get('lang')).toBe('zh-CN')
+  })
+
+  it('builds a plugin launch url for plugin-server entry urls', () => {
+    const result = buildCustomMenuEmbeddedUrl(
+      'http://plugin-server/plugins/image-generation',
+      7,
+      'token-abc',
+      'dark',
+      'zh-CN',
+    )
+
+    const url = new URL(result, 'https://app.example.com')
+    expect(url.pathname).toBe('/launch')
+    expect(url.searchParams.get('plugin')).toBe('image-generation')
+    expect(url.searchParams.get('path')).toBe('/plugins/image-generation')
+    expect(url.searchParams.get('token')).toBe('token-abc')
+    expect(url.searchParams.get('theme')).toBe('dark')
+    expect(url.searchParams.get('lang')).toBe('zh-CN')
+  })
+
+  it('does not convert non-plugin absolute embeds to plugin launch urls', () => {
+    const result = buildCustomMenuEmbeddedUrl('https://example.com/docs/internal', 7, 'token-abc', 'light', 'en')
+
+    const url = new URL(result)
+    expect(url.origin).toBe('https://example.com')
+    expect(url.pathname).toBe('/docs/internal')
+    expect(url.searchParams.get('token')).toBe('token-abc')
   })
 
   it('detects dark mode from document root class', () => {

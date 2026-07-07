@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
@@ -44,6 +45,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 }
 
 func RegisterRoutes(mux *http.ServeMux, sessionMiddleware *hostsession.Middleware, handler *Handler) {
+	mux.HandleFunc("GET "+apiBasePath+"/me", sessionMiddleware.Require(handler.Me))
 	mux.HandleFunc("GET "+apiBasePath+"/config", sessionMiddleware.Require(handler.Config))
 	mux.HandleFunc("POST "+apiBasePath+"/generate", sessionMiddleware.Require(handler.Generate))
 	mux.HandleFunc("GET "+apiBasePath+"/creations", sessionMiddleware.Require(handler.ListCreations))
@@ -63,12 +65,15 @@ func RegisterRoutes(mux *http.ServeMux, sessionMiddleware *hostsession.Middlewar
 
 func (h *Handler) Config(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"plugin_key":              h.pluginKey,
-		"history_enabled":         h.cfg.HistoryEnabled,
-		"image_provider_base_url": h.cfg.ImageProviderBaseURL,
-		"user_id":                 principal.UserID,
-		"role":                    principal.Role,
+		"plugin_key":      h.pluginKey,
+		"history_enabled": h.cfg.HistoryEnabled,
+		"user_id":         principal.UserID,
+		"role":            principal.Role,
 	})
+}
+
+func (h *Handler) Me(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
+	httpx.WriteJSON(w, http.StatusOK, principal)
 }
 
 func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
@@ -78,7 +83,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 		return
 	}
 
-	resp, err := h.generation.Generate(r.Context(), principal, req)
+	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r, h.cfg), req)
 	if err != nil {
 		if errors.Is(err, service.ErrPromptRequired) || errors.Is(err, service.ErrProviderKeyRequired) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
@@ -126,7 +131,7 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request, principal m
 }
 
 func (h *Handler) RetryHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	resp, err := h.generation.Retry(r.Context(), principal, r.PathValue("id"))
+	resp, err := h.generation.Retry(r.Context(), principal, resolveMainServiceBaseURL(r, h.cfg), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -143,4 +148,19 @@ func (h *Handler) CancelHistory(w http.ResponseWriter, r *http.Request, principa
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
+}
+
+func resolveMainServiceBaseURL(r *http.Request, cfg config.Config) string {
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if proto == "" {
+		proto = "http"
+	}
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if host != "" {
+		return strings.TrimRight(proto+"://"+host, "/")
+	}
+	return strings.TrimRight(strings.TrimSpace(cfg.MainSiteOrigin), "/")
 }

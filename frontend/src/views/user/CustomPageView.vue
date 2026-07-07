@@ -125,7 +125,7 @@ import { useAdminSettingsStore } from '@/stores/adminSettings'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { buildApiUrl } from '@/api/client'
-import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
+import { buildCustomMenuEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -175,7 +175,7 @@ const isMarkdownMode = computed(() => !!markdownSlug.value)
 
 const embeddedUrl = computed(() => {
   if (!menuItem.value || isMarkdownMode.value) return ''
-  return buildEmbeddedUrl(
+  return buildCustomMenuEmbeddedUrl(
     menuItem.value.url,
     authStore.user?.id,
     authStore.token,
@@ -187,7 +187,7 @@ const embeddedUrl = computed(() => {
 const isValidUrl = computed(() => {
   if (isMarkdownMode.value) return false
   const url = embeddedUrl.value
-  return url.startsWith('http://') || url.startsWith('https://')
+  return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/launch?')
 })
 
 function generateHeadingId(text: string, index: number): string {

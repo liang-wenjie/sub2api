@@ -21,12 +21,9 @@ func NewRouter(cfg config.Config) http.Handler {
 	sessionRepo := repository.NewSessionRepository()
 	historyRepo := repository.NewHistoryRepository()
 
-	tickets := service.NewTicketService(cfg.LaunchSharedSecret)
 	sessions := service.NewSessionService(sessionRepo, cfg.SessionTTL)
 	history := service.NewHistoryService(historyRepo)
-	generation := service.NewGenerationService(history, service.GenerationServiceOptions{
-		ProviderBaseURL: cfg.ImageProviderBaseURL,
-	})
+	generation := service.NewGenerationService(history, service.GenerationServiceOptions{})
 	registry := pluginregistry.New()
 	if err := registry.Register(imagemanifest.Plugin()); err != nil {
 		panic(err)
@@ -43,7 +40,6 @@ func NewRouter(cfg config.Config) http.Handler {
 	})
 	authHandler := auth.NewHandler(auth.HandlerDeps{
 		Config:   cfg,
-		Tickets:  tickets,
 		Sessions: sessions,
 		Registry: registry,
 	})
@@ -64,7 +60,7 @@ func NewRouter(cfg config.Config) http.Handler {
 func registerImageGenerationFrontend(mux *http.ServeMux) {
 	webRoot := imageGenerationWebRoot()
 	assetRoot := filepath.Join(webRoot, "assets")
-	indexPath := filepath.Join(webRoot, "index.html")
+	indexPath := imageGenerationIndexPath(webRoot)
 
 	mux.HandleFunc("GET /plugins/image-generation", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, indexPath)
@@ -75,6 +71,20 @@ func registerImageGenerationFrontend(mux *http.ServeMux) {
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/plugins/image-generation", http.StatusFound)
 	})
+}
+
+func imageGenerationIndexPath(webRoot string) string {
+	for _, name := range []string{
+		"index.html",
+		"plugin-image-generation.html",
+		filepath.Join("plugin-image-generation", "index.html"),
+	} {
+		candidate := filepath.Join(webRoot, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return filepath.Join(webRoot, "index.html")
 }
 
 func imageGenerationWebRoot() string {

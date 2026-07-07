@@ -10,11 +10,10 @@ func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
 	unsetEnv(t,
 		"PLUGIN_SERVICE_PLUGIN_KEY",
 		"PLUGIN_SERVICE_DEV_LOGIN_ENABLED",
-		"PLUGIN_SERVICE_IMAGE_PROVIDER_BASE_URL",
 	)
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVICE_PLUGIN_KEY=from-dotenv\nPLUGIN_SERVICE_DEV_LOGIN_ENABLED=true\nPLUGIN_SERVICE_IMAGE_PROVIDER_BASE_URL=https://provider.example.com\n")
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVICE_PLUGIN_KEY=from-dotenv\nPLUGIN_SERVICE_DEV_LOGIN_ENABLED=true\n")
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -31,9 +30,6 @@ func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
 	}
 	if !cfg.DevLoginEnabled {
 		t.Fatal("expected dev login enabled from .env")
-	}
-	if cfg.ImageProviderBaseURL != "https://provider.example.com" {
-		t.Fatalf("image provider base url = %q, want %q", cfg.ImageProviderBaseURL, "https://provider.example.com")
 	}
 }
 
@@ -100,6 +96,18 @@ func TestMustLoadKeepsPluginHostDefaults(t *testing.T) {
 	cfg := MustLoad()
 	if cfg.PluginKey == "" {
 		t.Fatal("expected plugin key default for compatibility routes")
+	}
+}
+
+func TestMustLoadDefaultsToSameOriginFriendlyConfig(t *testing.T) {
+	unsetEnv(t,
+		"PLUGIN_SERVICE_MAIN_SITE_ORIGIN",
+		"PLUGIN_SERVICE_PLUGIN_KEY",
+	)
+
+	cfg := MustLoad()
+	if cfg.MainSiteOrigin != "http://localhost:8080" {
+		t.Fatalf("main site origin = %q, want http://localhost:8080", cfg.MainSiteOrigin)
 	}
 }
 

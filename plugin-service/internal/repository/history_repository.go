@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,12 +31,16 @@ func NewHistoryRepository() *HistoryRepository {
 func (r *HistoryRepository) Create(_ context.Context, principal model.CurrentPrincipal, req model.GenerateRequest) (*model.HistoryRecord, error) {
 	now := r.now().UTC()
 	requestPayload := copyRequestPayload(req)
+	displayPrompt := strings.TrimSpace(requestStringValue(req.Inputs["display_prompt"]))
+	if displayPrompt == "" {
+		displayPrompt = req.Prompt
+	}
 	record := model.HistoryRecord{
 		ID:        randomID(),
 		UserID:    principal.UserID,
 		UserEmail: principal.Email,
 		PluginKey: principal.Plugin,
-		Prompt:    req.Prompt,
+		Prompt:    displayPrompt,
 		Status:    model.HistoryStatusPending,
 		Request:   requestPayload,
 		CreatedAt: now,
@@ -131,6 +136,7 @@ func copyRequestPayload(req model.GenerateRequest) map[string]any {
 	for key, value := range req.Inputs {
 		payload[key] = value
 	}
+	payload["prompt"] = req.Prompt
 	payload["provider_api_key"] = req.ProviderAPIKey
 	payload["model"] = req.Model
 	payload["size"] = req.Size
@@ -148,4 +154,9 @@ func copyRequestPayload(req model.GenerateRequest) map[string]any {
 		payload["reference_images"] = references
 	}
 	return payload
+}
+
+func requestStringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }

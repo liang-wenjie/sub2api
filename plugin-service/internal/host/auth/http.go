@@ -1,10 +1,13 @@
 package auth
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
@@ -22,14 +25,12 @@ const (
 
 type HandlerDeps struct {
 	Config   config.Config
-	Tickets  *service.TicketService
 	Sessions *service.SessionService
 	Registry *pluginregistry.Registry
 }
 
 type Handler struct {
 	cfg      config.Config
-	tickets  *service.TicketService
 	sessions *service.SessionService
 	registry *pluginregistry.Registry
 }
@@ -37,26 +38,17 @@ type Handler struct {
 func NewHandler(deps HandlerDeps) *Handler {
 	return &Handler{
 		cfg:      deps.Config,
-		tickets:  deps.Tickets,
 		sessions: deps.Sessions,
 		registry: deps.Registry,
 	}
 }
 
 func (h *Handler) Launch(w http.ResponseWriter, r *http.Request) {
-	ticket := r.URL.Query().Get("ticket")
-	claims, err := h.tickets.VerifyTicket(ticket)
+	claims, err := h.resolveLaunchClaimsFromMainSite(r)
 	if err != nil {
-		httpx.WriteError(w, http.StatusUnauthorized, "invalid or expired launch ticket")
+		httpx.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-
-	resolvedPluginKey, ok := h.resolvePluginKey(claims.Plugin)
-	if !ok {
-		httpx.WriteError(w, http.StatusForbidden, "ticket is not valid for this plugin")
-		return
-	}
-	claims.Plugin = resolvedPluginKey
 
 	currentSession, err := h.sessions.CreateFromLaunchClaims(r.Context(), *claims)
 	if err != nil {
@@ -73,6 +65,121 @@ func (h *Handler) Launch(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, normalizeRedirectPath(r.URL.Query().Get("path"), h.defaultPluginEntry(claims.Plugin)), http.StatusFound)
+}
+
+func (h *Handler) resolveLaunchClaimsFromMainSite(r *http.Request) (*model.LaunchClaims, error) {
+	pluginKey := strings.TrimSpace(r.URL.Query().Get("plugin"))
+	if pluginKey == "" {
+		pluginKey = h.defaultPluginKey()
+	}
+	resolvedPluginKey, ok := h.resolvePluginKey(pluginKey)
+	if !ok {
+		return nil, errUnauthorized("plugin not found")
+	}
+
+	profile, err := h.fetchMainSiteProfile(r)
+	if err != nil {
+		return nil, err
+	}
+
+	role := model.RoleUser
+	if strings.EqualFold(strings.TrimSpace(profile.Role), model.RoleAdmin) {
+		role = model.RoleAdmin
+	}
+
+	return &model.LaunchClaims{
+		UserID:   profile.ID,
+		Role:     role,
+		Email:    strings.TrimSpace(profile.Email),
+		Username: strings.TrimSpace(profile.Username),
+		Plugin:   resolvedPluginKey,
+		IssuedAt: time.Now().UTC().Unix(),
+	}, nil
+}
+
+type mainSiteProfileEnvelope struct {
+	Code int                 `json:"code"`
+	Data mainSiteProfileData `json:"data"`
+}
+
+type mainSiteProfileData struct {
+	ID       int64  `json:"id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
+func (h *Handler) fetchMainSiteProfile(r *http.Request) (*mainSiteProfileData, error) {
+	mainSiteBase := strings.TrimRight(strings.TrimSpace(h.cfg.MainSiteOrigin), "/")
+	if mainSiteBase == "" {
+		return nil, errUnauthorized("main site origin is not configured")
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, mainSiteBase+"/api/v1/auth/me", nil)
+	if err != nil {
+		return nil, errUnauthorized("failed to build main site request")
+	}
+
+	if token := firstNonEmptyQuery(r, "token", "session"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if authHeader := strings.TrimSpace(r.Header.Get("Authorization")); authHeader != "" && req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	if rawCookie := strings.TrimSpace(r.Header.Get("Cookie")); rawCookie != "" {
+		req.Header.Set("Cookie", rawCookie)
+	}
+	if forwardedCookie := strings.TrimSpace(r.URL.Query().Get("cookie")); forwardedCookie != "" && req.Header.Get("Cookie") == "" {
+		req.Header.Set("Cookie", forwardedCookie)
+	}
+	if acceptLanguage := strings.TrimSpace(r.Header.Get("Accept-Language")); acceptLanguage != "" {
+		req.Header.Set("Accept-Language", acceptLanguage)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, errUnauthorized("failed to load current user from main site")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errUnauthorized("failed to load current user from main site")
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errUnauthorized("failed to read current user from main site")
+	}
+
+	var envelope mainSiteProfileEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, errUnauthorized("failed to parse current user from main site")
+	}
+	if envelope.Code != 0 || envelope.Data.ID <= 0 {
+		return nil, errUnauthorized("main site authentication required")
+	}
+	return &envelope.Data, nil
+}
+
+func firstNonEmptyQuery(r *http.Request, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(r.URL.Query().Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+type unauthorizedError struct {
+	message string
+}
+
+func (e unauthorizedError) Error() string {
+	return e.message
+}
+
+func errUnauthorized(message string) error {
+	return unauthorizedError{message: message}
 }
 
 func (h *Handler) DevLogin(w http.ResponseWriter, r *http.Request) {

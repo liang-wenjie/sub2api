@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
@@ -12,6 +14,14 @@ type SessionService struct {
 	repo *repository.SessionRepository
 	ttl  time.Duration
 	now  func() time.Time
+}
+
+func randomHex(byteLen int) string {
+	buf := make([]byte, byteLen)
+	if _, err := rand.Read(buf); err != nil {
+		return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
+	}
+	return hex.EncodeToString(buf)
 }
 
 func NewSessionService(repo *repository.SessionRepository, ttl time.Duration) *SessionService {

@@ -29,14 +29,12 @@ const (
 )
 
 type GenerationServiceOptions struct {
-	ProviderBaseURL string
-	HTTPClient      *http.Client
+	HTTPClient *http.Client
 }
 
 type GenerationService struct {
-	history         *HistoryService
-	providerBaseURL string
-	httpClient      *http.Client
+	history    *HistoryService
+	httpClient *http.Client
 }
 
 type openAIImagesResponse struct {
@@ -56,13 +54,12 @@ func NewGenerationService(history *HistoryService, opts GenerationServiceOptions
 		client = http.DefaultClient
 	}
 	return &GenerationService{
-		history:         history,
-		providerBaseURL: strings.TrimRight(strings.TrimSpace(opts.ProviderBaseURL), "/"),
-		httpClient:      client,
+		history:    history,
+		httpClient: client,
 	}
 }
 
-func (s *GenerationService) Generate(ctx context.Context, principal model.CurrentPrincipal, req model.GenerateRequest) (*model.GenerateResponse, error) {
+func (s *GenerationService) Generate(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, req model.GenerateRequest) (*model.GenerateResponse, error) {
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
 		return nil, ErrPromptRequired
@@ -89,7 +86,7 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 		return nil, err
 	}
 
-	result, err := s.generateWithProvider(ctx, req)
+	result, err := s.generateWithProvider(ctx, providerBaseURL, req)
 	if err != nil {
 		record.Status = model.HistoryStatusFailed
 		record.ErrorMessage = err.Error()
@@ -111,20 +108,24 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 	}, nil
 }
 
-func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPrincipal, id string) (*model.GenerateResponse, error) {
+func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.GenerateResponse, error) {
 	record, err := s.history.Get(ctx, principal, id)
 	if err != nil {
 		return nil, err
 	}
 	retryReq := model.GenerateRequest{
-		Prompt:          record.Prompt,
+		Prompt:          stringValue(record.Request["prompt"]),
 		ProviderAPIKey:  stringValue(record.Request["provider_api_key"]),
 		Model:           stringValue(record.Request["model"]),
 		Size:            stringValue(record.Request["size"]),
 		ResponseFormat:  stringValue(record.Request["response_format"]),
 		ReferenceImages: referenceImagesValue(record.Request["reference_images"]),
+		Inputs:          copyMap(record.Request),
 	}
-	return s.Generate(ctx, principal, retryReq)
+	if strings.TrimSpace(retryReq.Prompt) == "" {
+		retryReq.Prompt = record.Prompt
+	}
+	return s.Generate(ctx, principal, providerBaseURL, retryReq)
 }
 
 func (s *GenerationService) Cancel(ctx context.Context, principal model.CurrentPrincipal, id string) (*model.HistoryRecord, error) {
@@ -181,8 +182,8 @@ func (s *GenerationService) ListCreations(ctx context.Context, principal model.C
 	return creations, nil
 }
 
-func (s *GenerationService) generateWithProvider(ctx context.Context, req model.GenerateRequest) (map[string]any, error) {
-	baseURL := s.providerBaseURL
+func (s *GenerationService) generateWithProvider(ctx context.Context, providerBaseURL string, req model.GenerateRequest) (map[string]any, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(providerBaseURL), "/")
 	if baseURL == "" {
 		return nil, ErrProviderBaseURL
 	}

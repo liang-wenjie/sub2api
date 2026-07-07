@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,9 +28,7 @@ func TestGenerationService_GenerateRecordsRealImageResult(t *testing.T) {
 
 	historyRepo := repository.NewHistoryRepository()
 	history := NewHistoryService(historyRepo)
-	svc := NewGenerationService(history, GenerationServiceOptions{
-		ProviderBaseURL: upstream.URL,
-	})
+	svc := NewGenerationService(history, GenerationServiceOptions{})
 
 	principal := model.CurrentPrincipal{
 		UserID:   7,
@@ -37,7 +37,7 @@ func TestGenerationService_GenerateRecordsRealImageResult(t *testing.T) {
 		Username: "user",
 		Plugin:   "gen",
 	}
-	resp, err := svc.Generate(ctx, principal, model.GenerateRequest{
+	resp, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
 		Prompt:         "make a poster",
 		ProviderAPIKey: "provider-secret",
 		Model:          "gpt-image-1",
@@ -81,15 +81,13 @@ func TestGenerationService_ListCreationsForAdminAndUser(t *testing.T) {
 
 	historyRepo := repository.NewHistoryRepository()
 	history := NewHistoryService(historyRepo)
-	svc := NewGenerationService(history, GenerationServiceOptions{
-		ProviderBaseURL: upstream.URL,
-	})
+	svc := NewGenerationService(history, GenerationServiceOptions{})
 
 	userA := model.CurrentPrincipal{UserID: 1, Role: model.RoleUser, Email: "a@example.com", Username: "a", Plugin: "gen"}
 	userB := model.CurrentPrincipal{UserID: 2, Role: model.RoleUser, Email: "b@example.com", Username: "b", Plugin: "gen"}
 	admin := model.CurrentPrincipal{UserID: 99, Role: model.RoleAdmin, Email: "admin@example.com", Username: "admin", Plugin: "gen"}
 
-	_, err := svc.Generate(ctx, userA, model.GenerateRequest{
+	_, err := svc.Generate(ctx, userA, upstream.URL, model.GenerateRequest{
 		Prompt:         "first image",
 		ProviderAPIKey: "user-a-key",
 		Model:          "gpt-image-1",
@@ -97,7 +95,7 @@ func TestGenerationService_ListCreationsForAdminAndUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = svc.Generate(ctx, userB, model.GenerateRequest{
+	_, err = svc.Generate(ctx, userB, upstream.URL, model.GenerateRequest{
 		Prompt:         "second image",
 		ProviderAPIKey: "user-b-key",
 		Model:          "gpt-image-1",
@@ -123,5 +121,95 @@ func TestGenerationService_ListCreationsForAdminAndUser(t *testing.T) {
 	}
 	if len(adminCreations) != 2 {
 		t.Fatalf("admin creation count = %d, want 2", len(adminCreations))
+	}
+}
+
+func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t *testing.T) {
+	ctx := context.Background()
+	var prompts []string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		prompts = append(prompts, payload.Prompt)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/generated.png","revised_prompt":"refined"}]}`))
+	}))
+	defer upstream.Close()
+
+	historyRepo := repository.NewHistoryRepository()
+	history := NewHistoryService(historyRepo)
+	svc := NewGenerationService(history, GenerationServiceOptions{})
+
+	principal := model.CurrentPrincipal{
+		UserID:   7,
+		Role:     model.RoleUser,
+		Email:    "user@example.com",
+		Username: "user",
+		Plugin:   "image-generation",
+	}
+
+	resp, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
+		Prompt:         "Follow the user request.\nUser request: draw a camera",
+		ProviderAPIKey: "provider-secret",
+		Model:          "gpt-image-1",
+		Inputs: map[string]any{
+			"display_prompt": "draw a camera",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := history.Get(ctx, principal, resp.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if record.Prompt != "draw a camera" {
+		t.Fatalf("history prompt = %q, want %q", record.Prompt, "draw a camera")
+	}
+	if got := record.Request["prompt"]; got != "Follow the user request.\nUser request: draw a camera" {
+		t.Fatalf("stored request prompt = %#v", got)
+	}
+
+	if _, err := svc.Retry(ctx, principal, upstream.URL, record.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(prompts) != 2 {
+		t.Fatalf("provider prompt count = %d, want 2", len(prompts))
+	}
+	if prompts[0] != "Follow the user request.\nUser request: draw a camera" {
+		t.Fatalf("first provider prompt = %q", prompts[0])
+	}
+	if prompts[1] != "Follow the user request.\nUser request: draw a camera" {
+		t.Fatalf("retry provider prompt = %q", prompts[1])
+	}
+}
+
+func TestGenerationServiceGenerateRequiresProviderBaseURL(t *testing.T) {
+	ctx := context.Background()
+	historyRepo := repository.NewHistoryRepository()
+	history := NewHistoryService(historyRepo)
+	svc := NewGenerationService(history, GenerationServiceOptions{})
+	principal := model.CurrentPrincipal{
+		UserID:   7,
+		Role:     model.RoleUser,
+		Email:    "user@example.com",
+		Username: "user",
+		Plugin:   "image-generation",
+	}
+
+	_, err := svc.Generate(ctx, principal, "", model.GenerateRequest{
+		Prompt:         "draw a city",
+		ProviderAPIKey: "provider-key",
+	})
+	if !errors.Is(err, ErrProviderBaseURL) {
+		t.Fatalf("Generate() err = %v, want ErrProviderBaseURL", err)
 	}
 }

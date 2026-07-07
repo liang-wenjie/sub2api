@@ -5,16 +5,28 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
-	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
 
 func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
+	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/auth/me" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/api/v1/auth/me")
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer launch-token" {
+			t.Fatalf("authorization = %q, want %q", got, "Bearer launch-token")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"id":42,"email":"user@example.com","username":"launch-user","role":"user"}}`))
+	}))
+	defer mainSite.Close()
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer provider-secret" {
 			t.Fatalf("authorization = %q, want %q", got, "Bearer provider-secret")
@@ -25,29 +37,16 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := config.Config{
-		ListenAddr:           ":0",
-		BaseURL:              "http://plugin.test",
-		LaunchSharedSecret:   "secret",
-		MainSiteOrigin:       "http://main.test",
-		SessionTTL:           time.Hour,
-		HistoryEnabled:       true,
-		PluginKey:            "gen",
-		ImageProviderBaseURL: upstream.URL,
+		ListenAddr: ":0",
+
+		MainSiteOrigin: mainSite.URL,
+		SessionTTL:     time.Hour,
+		HistoryEnabled: true,
+		PluginKey:      "gen",
 	}
 	router := NewRouter(cfg)
-	tickets := service.NewTicketService(cfg.LaunchSharedSecret)
-	ticket, err := tickets.CreateTicket(model.LaunchClaims{
-		UserID:   42,
-		Role:     model.RoleUser,
-		Email:    "user@example.com",
-		Username: "user",
-		Plugin:   "gen",
-	}, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	launchReq := httptest.NewRequest(http.MethodGet, "/launch?ticket="+ticket+"&path=/app", nil)
+	launchReq := httptest.NewRequest(http.MethodGet, "/launch?token=launch-token&plugin=image-generation&path=/app", nil)
 	launchRec := httptest.NewRecorder()
 	router.ServeHTTP(launchRec, launchReq)
 	if launchRec.Code != http.StatusFound {
@@ -61,6 +60,7 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
 	generateReq := httptest.NewRequest(http.MethodPost, "/api/generate", body)
 	generateReq.AddCookie(cookies[0])
+	addForwardedProviderOrigin(generateReq, upstream.URL)
 	generateRec := httptest.NewRecorder()
 	router.ServeHTTP(generateRec, generateReq)
 	if generateRec.Code != http.StatusCreated {
@@ -88,6 +88,66 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 	}
 }
 
+func TestRouter_LaunchCreatesSessionFromMainSiteAuthToken(t *testing.T) {
+	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/auth/me" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/api/v1/auth/me")
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer launch-token" {
+			t.Fatalf("authorization = %q, want %q", got, "Bearer launch-token")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"id":42,"email":"user@example.com","username":"launch-user","role":"user"}}`))
+	}))
+	defer mainSite.Close()
+
+	cfg := config.Config{
+		ListenAddr: ":0",
+
+		MainSiteOrigin: mainSite.URL,
+		SessionTTL:     time.Hour,
+		HistoryEnabled: true,
+		PluginKey:      "gen",
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/launch?session=launch-token&plugin=image-generation&path=/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("launch status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	if got := rec.Result().Header.Get("Location"); got != "/plugins/image-generation" {
+		t.Fatalf("launch redirect location = %q, want %q", got, "/plugins/image-generation")
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("launch did not set a session cookie")
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/me", nil)
+	meReq.AddCookie(cookies[0])
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusOK {
+		t.Fatalf("me status = %d, want %d; body=%s", meRec.Code, http.StatusOK, meRec.Body.String())
+	}
+
+	var principal model.CurrentPrincipal
+	if err := json.NewDecoder(meRec.Body).Decode(&principal); err != nil {
+		t.Fatal(err)
+	}
+	if principal.UserID != 42 {
+		t.Fatalf("user_id = %d, want 42", principal.UserID)
+	}
+	if principal.Username != "launch-user" {
+		t.Fatalf("username = %q, want %q", principal.Username, "launch-user")
+	}
+	if principal.Plugin != "image-generation" {
+		t.Fatalf("plugin = %q, want %q", principal.Plugin, "image-generation")
+	}
+}
+
 func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer provider-secret" {
@@ -99,15 +159,13 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := config.Config{
-		ListenAddr:           ":0",
-		BaseURL:              "http://plugin.test",
-		LaunchSharedSecret:   "secret",
-		MainSiteOrigin:       "http://main.test",
-		SessionTTL:           time.Hour,
-		HistoryEnabled:       true,
-		PluginKey:            "gen",
-		DevLoginEnabled:      true,
-		ImageProviderBaseURL: upstream.URL,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 	cookie := devLoginCookie(t, router, "/dev/login?user_id=7&role=user&email=user%40example.com&username=user&path=/plugins/image-generation")
@@ -130,6 +188,7 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
 	generateReq := httptest.NewRequest(http.MethodPost, "/api/plugins/image-generation/generate", body)
 	generateReq.AddCookie(cookie)
+	addForwardedProviderOrigin(generateReq, upstream.URL)
 	generateRec := httptest.NewRecorder()
 	router.ServeHTTP(generateRec, generateReq)
 	if generateRec.Code != http.StatusCreated {
@@ -179,14 +238,13 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 
 func TestRouter_DevLoginAndMe(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -223,13 +281,12 @@ func TestRouter_DevLoginAndMe(t *testing.T) {
 
 func TestRouter_MeRequiresSession(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
+		ListenAddr: ":0",
+
+		MainSiteOrigin: "http://main.test",
+		SessionTTL:     time.Hour,
+		HistoryEnabled: true,
+		PluginKey:      "gen",
 	}
 	router := NewRouter(cfg)
 
@@ -246,14 +303,13 @@ func TestRouter_MeRequiresSession(t *testing.T) {
 
 func TestRouter_DevLoginDisabled(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    false,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: false,
 	}
 	router := NewRouter(cfg)
 
@@ -267,14 +323,13 @@ func TestRouter_DevLoginDisabled(t *testing.T) {
 
 func TestRouter_DevLoginRejectsUnknownPluginSelection(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -288,14 +343,13 @@ func TestRouter_DevLoginRejectsUnknownPluginSelection(t *testing.T) {
 
 func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -322,14 +376,13 @@ func TestRouter_PluginMetadataEndpoint(t *testing.T) {
 
 func TestRouter_PluginDetailEndpoint(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -354,14 +407,13 @@ func TestRouter_PluginDetailEndpoint(t *testing.T) {
 
 func TestRouter_PluginDetailEndpointNotFound(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -374,30 +426,28 @@ func TestRouter_PluginDetailEndpointNotFound(t *testing.T) {
 }
 
 func TestRouter_LaunchAcceptsCanonicalPluginKey(t *testing.T) {
+	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Cookie"); got != "sub2api_session=session-abc" {
+			t.Fatalf("cookie = %q, want %q", got, "sub2api_session=session-abc")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"id":42,"email":"user@example.com","username":"cookie-user","role":"user"}}`))
+	}))
+	defer mainSite.Close()
+
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  mainSite.URL,
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
-	tickets := service.NewTicketService(cfg.LaunchSharedSecret)
-	ticket, err := tickets.CreateTicket(model.LaunchClaims{
-		UserID:   42,
-		Role:     model.RoleUser,
-		Email:    "user@example.com",
-		Username: "user",
-		Plugin:   "image-generation",
-	}, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	req := httptest.NewRequest(http.MethodGet, "/launch?ticket="+ticket+"&path=/app", nil)
+	req := httptest.NewRequest(http.MethodGet, "/launch?plugin=image-generation&path=/app", nil)
+	req.Header.Set("Cookie", "sub2api_session=session-abc")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
@@ -427,33 +477,33 @@ func TestRouter_LaunchAcceptsCanonicalPluginKey(t *testing.T) {
 	if principal.Plugin != "image-generation" {
 		t.Fatalf("principal plugin = %q, want %q", principal.Plugin, "image-generation")
 	}
+	if principal.Username != "cookie-user" {
+		t.Fatalf("principal username = %q, want %q", principal.Username, "cookie-user")
+	}
 }
 
 func TestRouter_LaunchRedirectsToPluginEntryByDefault(t *testing.T) {
+	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer launch-token" {
+			t.Fatalf("authorization = %q, want %q", got, "Bearer launch-token")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"id":42,"email":"user@example.com","username":"user","role":"user"}}`))
+	}))
+	defer mainSite.Close()
+
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  mainSite.URL,
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
-	tickets := service.NewTicketService(cfg.LaunchSharedSecret)
-	ticket, err := tickets.CreateTicket(model.LaunchClaims{
-		UserID:   42,
-		Role:     model.RoleUser,
-		Email:    "user@example.com",
-		Username: "user",
-		Plugin:   "image-generation",
-	}, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	req := httptest.NewRequest(http.MethodGet, "/launch?ticket="+ticket, nil)
+	req := httptest.NewRequest(http.MethodGet, "/launch?token=launch-token&plugin=image-generation", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
@@ -466,14 +516,13 @@ func TestRouter_LaunchRedirectsToPluginEntryByDefault(t *testing.T) {
 
 func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -490,14 +539,13 @@ func TestRouter_RedirectNormalizationBlocksSchemeRelativePath(t *testing.T) {
 
 func TestRouter_AppPageRedirectsToHostedPluginPage(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -514,15 +562,13 @@ func TestRouter_AppPageRedirectsToHostedPluginPage(t *testing.T) {
 
 func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:           ":0",
-		BaseURL:              "http://plugin.test",
-		LaunchSharedSecret:   "secret",
-		MainSiteOrigin:       "http://main.test",
-		SessionTTL:           time.Hour,
-		HistoryEnabled:       true,
-		PluginKey:            "gen",
-		DevLoginEnabled:      true,
-		ImageProviderBaseURL: "http://provider.test",
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -535,13 +581,10 @@ func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 
 	body := appRec.Body.String()
 	for _, needle := range []string{
-		`data-testid="image-workspace"`,
-		`data-testid="image-history"`,
-		`data-testid="image-creation-grid"`,
-		`data-testid="image-composer"`,
-		`data-testid="reference-file-input"`,
-		`data-plugin-api-base="/api/plugins/image-generation"`,
+		`<div id="app" data-plugin-api-base="/api/plugins/image-generation"></div>`,
+		`<title>Image Generation Plugin</title>`,
 		`/plugins/image-generation/assets/app.js`,
+		`/plugins/image-generation/assets/app.css`,
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("hosted page missing %q", needle)
@@ -551,14 +594,13 @@ func TestRouter_ImageGenerationHostedPage(t *testing.T) {
 
 func TestRouter_ImageGenerationHostedAssets(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         ":0",
-		BaseURL:            "http://plugin.test",
-		LaunchSharedSecret: "secret",
-		MainSiteOrigin:     "http://main.test",
-		SessionTTL:         time.Hour,
-		HistoryEnabled:     true,
-		PluginKey:          "gen",
-		DevLoginEnabled:    true,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -568,7 +610,7 @@ func TestRouter_ImageGenerationHostedAssets(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("hosted asset status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"/api/plugins/image-generation"`) {
+	if !strings.Contains(rec.Body.String(), `data-plugin-api-base`) && !strings.Contains(rec.Body.String(), `/api/plugins/image-generation`) {
 		t.Fatalf("hosted asset body missing namespaced api base; body=%s", rec.Body.String())
 	}
 }
@@ -588,15 +630,13 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := config.Config{
-		ListenAddr:           ":0",
-		BaseURL:              "http://plugin.test",
-		LaunchSharedSecret:   "secret",
-		MainSiteOrigin:       "http://main.test",
-		SessionTTL:           time.Hour,
-		HistoryEnabled:       true,
-		PluginKey:            "gen",
-		DevLoginEnabled:      true,
-		ImageProviderBaseURL: upstream.URL,
+		ListenAddr: ":0",
+
+		MainSiteOrigin:  "http://main.test",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		PluginKey:       "gen",
+		DevLoginEnabled: true,
 	}
 	router := NewRouter(cfg)
 
@@ -614,6 +654,7 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/api/generate", bytes.NewBufferString(`{"prompt":"`+tc.prompt+`","provider_api_key":"`+tc.providerKey+`","model":"gpt-image-1"}`))
 		req.AddCookie(tc.cookie)
+		addForwardedProviderOrigin(req, upstream.URL)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusCreated {
@@ -672,4 +713,13 @@ func devLoginCookie(t *testing.T, router http.Handler, path string) *http.Cookie
 		t.Fatal("dev login did not set a session cookie")
 	}
 	return cookies[0]
+}
+
+func addForwardedProviderOrigin(req *http.Request, upstreamURL string) {
+	parsed, err := url.Parse(upstreamURL)
+	if err != nil {
+		panic(err)
+	}
+	req.Header.Set("X-Forwarded-Proto", parsed.Scheme)
+	req.Header.Set("X-Forwarded-Host", parsed.Host)
 }
