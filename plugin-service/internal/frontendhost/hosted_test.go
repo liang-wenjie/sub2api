@@ -65,3 +65,23 @@ func TestRegisterHostedPluginInjectsAuthBridgeAndPatchedAssets(t *testing.T) {
 		t.Fatalf("patched asset body = %q", assetRec.Body.String())
 	}
 }
+
+func TestRegisterHostedPluginRequiresIndexHTML(t *testing.T) {
+	webRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webRoot, "plugin-image-generation.html"), []byte(`legacy`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterHostedPlugin(mux, HostedPluginOptions{
+		PluginKey: "demo",
+		WebRoot:   webRoot,
+	})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/plugins/demo", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("page status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}

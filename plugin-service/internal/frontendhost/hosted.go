@@ -90,7 +90,7 @@ func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
 	}
 
 	assetRoot := filepath.Join(webRoot, "assets")
-	indexPath := indexPath(webRoot)
+	indexPath := filepath.Join(webRoot, "index.html")
 	pagePath := "/plugins/" + pluginKey
 	assetPrefix := pagePath + "/assets/"
 
@@ -161,18 +161,4 @@ func assetVersion(assetRoot string, name string) string {
 		return "0"
 	}
 	return strconv.FormatInt(info.ModTime().UnixNano(), 10)
-}
-
-func indexPath(webRoot string) string {
-	for _, name := range []string{
-		"index.html",
-		"plugin-image-generation.html",
-		filepath.Join("plugin-image-generation", "index.html"),
-	} {
-		candidate := filepath.Join(webRoot, name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return filepath.Join(webRoot, "index.html")
 }
