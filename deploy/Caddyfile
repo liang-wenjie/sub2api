@@ -1,26 +1,5 @@
 # 修改为你的域名
 api.sub2api.com {
-	@pluginLaunch {
-		path /launch
-	}
-	handle @pluginLaunch {
-		reverse_proxy plugin-service:{$PLUGIN_SERVER_PORT:8091}
-	}
-
-	@pluginAssets {
-		path /plugins/*
-	}
-	handle @pluginAssets {
-		reverse_proxy plugin-service:{$PLUGIN_SERVER_PORT:8091}
-	}
-
-	@pluginAPI {
-		path /api/plugins/*
-	}
-	handle @pluginAPI {
-		reverse_proxy plugin-service:{$PLUGIN_SERVER_PORT:8091}
-	}
-
     # =========================================================================
 	# 静态资源长期缓存（高优先级，放在最前面）
 	# 带 hash 的文件可以永久缓存，浏览器和 CDN 都会缓存

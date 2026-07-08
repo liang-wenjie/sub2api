@@ -122,11 +122,6 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       port: devPort,
       proxy: {
-        '/api/plugins': {
-          target: pluginServiceUrl,
-          changeOrigin: true,
-          xfwd: true
-        },
         '/api': {
           target: backendUrl,
           changeOrigin: true
@@ -134,11 +129,6 @@ export default defineConfig(({ mode }) => {
         '/v1': {
           target: backendUrl,
           changeOrigin: true
-        },
-        '/launch': {
-          target: pluginServiceUrl,
-          changeOrigin: true,
-          xfwd: true
         },
         '/plugins': {
           target: pluginServiceUrl,

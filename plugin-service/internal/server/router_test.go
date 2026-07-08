@@ -6,139 +6,58 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	hostprincipal "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
-	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 )
 
-func TestRouterLaunchRedirectsAfterAuthenticatingWithMainSite(t *testing.T) {
-	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/auth/me" {
-			t.Fatalf("path = %q, want %q", r.URL.Path, "/api/v1/auth/me")
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer launch-token" {
-			t.Fatalf("authorization = %q, want %q", got, "Bearer launch-token")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":0,"data":{"id":42,"email":"user@example.com","username":"launch-user","role":"user"}}`))
-	}))
-	defer mainSite.Close()
-
-	restoreMainSiteResolver(t, mainSite.URL)
+func TestRouterPluginPageAllowsEmbeddingFromForwardedHost(t *testing.T) {
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
-	req := httptest.NewRequest(http.MethodGet, "/launch?token=launch-token&plugin=image-generation", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusFound {
-		t.Fatalf("launch status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
-	}
-	location := rec.Result().Header.Get("Location")
-	parsed, err := url.Parse(location)
-	if err != nil {
-		t.Fatalf("parse redirect location: %v", err)
-	}
-	if got := parsed.Path; got != "/plugins/image-generation" {
-		t.Fatalf("launch redirect path = %q, want %q", got, "/plugins/image-generation")
-	}
-	if len(rec.Result().Cookies()) != 0 {
-		t.Fatalf("launch should not set plugin cookies, got %d", len(rec.Result().Cookies()))
-	}
-}
-
-func TestRouterLaunchPreservesTokenForPluginPageRequests(t *testing.T) {
-	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer launch-token" {
-			t.Fatalf("authorization = %q, want %q", got, "Bearer launch-token")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":0,"data":{"id":42,"email":"user@example.com","username":"launch-user","role":"user"}}`))
-	}))
-	defer mainSite.Close()
-
-	restoreMainSiteResolver(t, mainSite.URL)
-	router := NewRouter(config.Config{ListenAddr: ":0"})
-
-	req := httptest.NewRequest(http.MethodGet, "/launch?token=launch-token&plugin=image-generation&path=/plugins/image-generation", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusFound {
-		t.Fatalf("launch status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
-	}
-
-	location := rec.Result().Header.Get("Location")
-	parsed, err := url.Parse(location)
-	if err != nil {
-		t.Fatalf("parse redirect location: %v", err)
-	}
-	if got := parsed.Path; got != "/plugins/image-generation" {
-		t.Fatalf("launch redirect path = %q, want %q", got, "/plugins/image-generation")
-	}
-	if got := parsed.Query().Get("token"); got != "launch-token" {
-		t.Fatalf("launch redirect token = %q, want %q", got, "launch-token")
-	}
-}
-
-func TestRouterLaunchIgnoresRequestControlledMainSiteSignals(t *testing.T) {
-	mainSiteHit := false
-	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mainSiteHit = true
-		if got := r.Header.Get("Authorization"); got != "Bearer attack-token" {
-			t.Fatalf("authorization = %q, want %q", got, "Bearer attack-token")
-		}
-		if got := r.Header.Get("Cookie"); got != "sub2api_session=session-abc" {
-			t.Fatalf("cookie = %q, want %q", got, "sub2api_session=session-abc")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":0,"data":{"id":51,"email":"user51@example.com","username":"legit-user","role":"user"}}`))
-	}))
-	defer mainSite.Close()
-
-	restoreMainSiteResolver(t, mainSite.URL)
-	router := NewRouter(config.Config{ListenAddr: ":0"})
-
-	req := httptest.NewRequest(http.MethodGet, "/launch?plugin=image-generation&path=/plugins/image-generation&src_host=https%3A%2F%2Fevil.example", nil)
-	req.Header.Set("Authorization", "Bearer attack-token")
-	req.Header.Set("Cookie", "sub2api_session=session-abc")
-	req.Header.Set("Origin", "https://evil.example")
-	req.Header.Set("Referer", "https://evil.example/path")
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	req.Header.Set("X-Forwarded-Host", "evil.example")
+	req.Header.Set("X-Forwarded-Host", "app.example.com")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("launch status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if !mainSiteHit {
-		t.Fatal("main site was not contacted")
+	if got := rec.Header().Get("Content-Security-Policy"); got != "frame-ancestors 'self' https://app.example.com" {
+		t.Fatalf("plugin page CSP = %q, want %q", got, "frame-ancestors 'self' https://app.example.com")
 	}
 }
 
-func TestRouterMeRequiresMainSiteAuth(t *testing.T) {
-	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"code":401,"message":"unauthorized"}`))
-	}))
-	defer mainSite.Close()
-
-	restoreMainSiteResolver(t, mainSite.URL)
+func TestRouterPluginPageAllowsEmbeddingFromRefererFallback(t *testing.T) {
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	req.Header.Set("Referer", "https://app.example.com/user/custom-page/plugin")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("me status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "main site authentication required") {
-		t.Fatalf("me body = %q", rec.Body.String())
+	if got := rec.Header().Get("Content-Security-Policy"); got != "frame-ancestors 'self' https://app.example.com" {
+		t.Fatalf("plugin page CSP = %q, want %q", got, "frame-ancestors 'self' https://app.example.com")
+	}
+}
+
+func TestRouterPluginPageAlwaysAllowsSameOriginEmbedding(t *testing.T) {
+	router := NewRouter(config.Config{ListenAddr: ":0"})
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != "frame-ancestors 'self'" {
+		t.Fatalf("plugin page CSP = %q, want %q", got, "frame-ancestors 'self'")
 	}
 }
 
@@ -165,7 +84,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
 	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
-	generateReq := httptest.NewRequest(http.MethodPost, "/api/plugins/image-generation/generate", body)
+	generateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
 	generateReq.Header.Set("Authorization", "Bearer launch-token")
 	addForwardedProviderOrigin(generateReq, upstream.URL)
 	generateRec := httptest.NewRecorder()
@@ -174,7 +93,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 		t.Fatalf("generate status = %d, want %d; body=%s", generateRec.Code, http.StatusCreated, generateRec.Body.String())
 	}
 
-	historyReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/history", nil)
+	historyReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/history", nil)
 	historyReq.Header.Set("Authorization", "Bearer launch-token")
 	historyRec := httptest.NewRecorder()
 	router.ServeHTTP(historyRec, historyReq)
@@ -196,30 +115,6 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	}
 	if _, ok := payload.Items[0].Request["provider_api_key"]; ok {
 		t.Fatal("history exposed provider_api_key")
-	}
-}
-
-func TestRouterPluginMetadataEndpoint(t *testing.T) {
-	router := NewRouter(config.Config{ListenAddr: ":0"})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/plugins", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("plugins status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	var payload struct {
-		Items []model.PluginMetadata `json:"items"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Items) == 0 {
-		t.Fatal("plugin metadata items = 0, want at least 1")
-	}
-	if payload.Items[0].DefaultEntryPath != "/plugins/image-generation" {
-		t.Fatalf("plugin default_entry_path = %q, want %q", payload.Items[0].DefaultEntryPath, "/plugins/image-generation")
 	}
 }
 

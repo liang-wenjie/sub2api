@@ -23,9 +23,11 @@ func (a *App) WithCommonHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
-		if origin := httpx.ResolveRequestBaseURL(r); origin != "" {
-			w.Header().Set("Content-Security-Policy", "frame-ancestors "+origin)
+		csp := "frame-ancestors 'self'"
+		if origin := httpx.ResolveFrameAncestorOrigin(r); origin != "" && origin != "null" {
+			csp += " " + origin
 		}
+		w.Header().Set("Content-Security-Policy", csp)
 		next.ServeHTTP(w, r)
 	})
 }

@@ -46,7 +46,7 @@ func TestRegisterHostedPluginInjectsAuthBridgeAndPatchedAssets(t *testing.T) {
 		`localStorage.getItem("auth_token")`,
 		`window.location.search`,
 		`Authorization`,
-		`api\/plugins`,
+		`/\/plugins\/[^/?#]+\/api(?:\/|$)/`,
 		`/plugins/demo/assets/app.js?v=`,
 		`/plugins/demo/assets/app.css?v=`,
 	} {

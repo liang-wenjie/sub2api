@@ -27,7 +27,7 @@ const pluginAuthBridgeScript = `<script>
       }
 
       function shouldAttachPluginAuth(url) {
-        return /\/api\/plugins\//.test(url);
+        return /\/plugins\/[^/?#]+\/api(?:\/|$)/.test(url);
       }
 
       function mergeHeaders(baseHeaders, extraHeaders) {

@@ -13,7 +13,7 @@ import (
 	imagemanifest "github.com/Wei-Shaw/sub2api/plugin-service/plugins/image-generation/manifest"
 )
 
-const apiBasePath = "/api/plugins/" + imagemanifest.Key
+const apiBasePath = "/plugins/" + imagemanifest.Key + "/api"
 
 type HandlerDeps struct {
 	PluginKey  string

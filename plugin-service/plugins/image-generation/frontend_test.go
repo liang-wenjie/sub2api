@@ -24,7 +24,7 @@ func TestFrontendInjectsPluginAuthBridgeScript(t *testing.T) {
 		`localStorage.getItem("auth_token")`,
 		`window.location.search`,
 		`Authorization`,
-		`/api/plugins/`,
+		`/plugins/image-generation/api`,
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("frontend html missing auth bridge marker %q", needle)

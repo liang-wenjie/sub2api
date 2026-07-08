@@ -60,27 +60,7 @@ describe('embedded-url', () => {
     expect(buildEmbeddedUrl('not a url', 1, 'token')).toBe('not a url')
   })
 
-  it('supports relative urls for host-side launch endpoints', () => {
-    const result = buildEmbeddedUrl(
-      '/launch?plugin=image-generation&path=/plugins/image-generation',
-      7,
-      'token-abc',
-      'dark',
-      'zh-CN',
-    )
-
-    expect(result).toContain('/launch?')
-    const url = new URL(result, 'https://app.example.com')
-    expect(url.pathname).toBe('/launch')
-    expect(url.searchParams.get('plugin')).toBe('image-generation')
-    expect(url.searchParams.get('path')).toBe('/plugins/image-generation')
-    expect(url.searchParams.get('user_id')).toBe('7')
-    expect(url.searchParams.get('token')).toBe('token-abc')
-    expect(url.searchParams.get('theme')).toBe('dark')
-    expect(url.searchParams.get('lang')).toBe('zh-CN')
-  })
-
-  it('builds a plugin launch url for plugin-server entry urls', () => {
+  it('builds a same-origin plugin embed url for plugin-server entry urls', () => {
     const result = buildCustomMenuEmbeddedUrl(
       'http://plugin-server/plugins/image-generation',
       7,
@@ -90,9 +70,8 @@ describe('embedded-url', () => {
     )
 
     const url = new URL(result, 'https://app.example.com')
-    expect(url.pathname).toBe('/launch')
-    expect(url.searchParams.get('plugin')).toBe('image-generation')
-    expect(url.searchParams.get('path')).toBe('/plugins/image-generation')
+    expect(url.origin).toBe('https://app.example.com')
+    expect(url.pathname).toBe('/plugins/image-generation')
     expect(url.searchParams.get('token')).toBe('token-abc')
     expect(url.searchParams.get('theme')).toBe('dark')
     expect(url.searchParams.get('lang')).toBe('zh-CN')

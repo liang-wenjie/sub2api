@@ -188,7 +188,7 @@ const embeddedUrl = computed(() => {
 const isValidUrl = computed(() => {
   if (isMarkdownMode.value) return false
   const url = embeddedUrl.value
-  return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/launch?')
+  return url.startsWith('http://') || url.startsWith('https://')
 })
 
 function generateHeadingId(text: string, index: number): string {

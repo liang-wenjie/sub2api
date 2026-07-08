@@ -23,10 +23,7 @@ export function buildEmbeddedUrl(
 ): string {
   if (!baseUrl) return baseUrl
   try {
-    const isRelativePath = baseUrl.startsWith('/')
-    const url = isRelativePath && typeof window !== 'undefined'
-      ? new URL(baseUrl, window.location.origin)
-      : new URL(baseUrl)
+    const url = new URL(baseUrl)
     if (userId) {
       url.searchParams.set(EMBEDDED_USER_ID_QUERY_KEY, String(userId))
     }
@@ -43,9 +40,6 @@ export function buildEmbeddedUrl(
       url.searchParams.set(EMBEDDED_SRC_HOST_QUERY_KEY, window.location.origin)
       url.searchParams.set(EMBEDDED_SRC_QUERY_KEY, window.location.href)
     }
-    if (typeof window !== 'undefined' && isRelativePath) {
-      return `${url.pathname}${url.search}${url.hash}`
-    }
     return url.toString()
   } catch {
     return baseUrl
@@ -54,12 +48,6 @@ export function buildEmbeddedUrl(
 
 export function isPluginEntryPath(rawUrl: string): boolean {
   return getPluginEntryPath(rawUrl) !== ''
-}
-
-export function getPluginKeyFromEntryPath(rawUrl: string): string {
-  const pluginPath = getPluginEntryPath(rawUrl)
-  const match = /^\/plugins\/([^/?#]+)/.exec(pluginPath)
-  return match?.[1] ?? ''
 }
 
 export function getPluginEntryPath(rawUrl: string): string {
@@ -74,14 +62,11 @@ export function getPluginEntryPath(rawUrl: string): string {
   }
 }
 
-export function buildPluginLaunchPath(rawUrl: string): string {
+export function buildPluginEmbedPath(rawUrl: string): string {
   const pluginPath = getPluginEntryPath(rawUrl)
-  const plugin = getPluginKeyFromEntryPath(rawUrl)
-  if (!plugin || !pluginPath) return rawUrl
-  const query = new URLSearchParams()
-  query.set('plugin', plugin)
-  query.set('path', pluginPath)
-  return `/launch?${query.toString()}`
+  if (!pluginPath) return rawUrl
+  if (typeof window === 'undefined') return pluginPath
+  return new URL(pluginPath, window.location.origin).toString()
 }
 
 export function buildCustomMenuEmbeddedUrl(
@@ -91,7 +76,7 @@ export function buildCustomMenuEmbeddedUrl(
   theme: 'light' | 'dark' = 'light',
   lang?: string,
 ): string {
-  const target = isPluginEntryPath(baseUrl) ? buildPluginLaunchPath(baseUrl) : baseUrl
+  const target = isPluginEntryPath(baseUrl) ? buildPluginEmbedPath(baseUrl) : baseUrl
   return buildEmbeddedUrl(target, userId, authToken, theme, lang)
 }
 
