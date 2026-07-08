@@ -86,6 +86,32 @@ func TestRouter_LaunchGenerateAndListHistory(t *testing.T) {
 	}
 }
 
+func TestRouter_HealthDoesNotExposeSpecificPlugin(t *testing.T) {
+	router := NewRouter(config.Config{
+		ListenAddr:     ":0",
+		SessionTTL:     time.Hour,
+		HistoryEnabled: true,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["plugin"]; ok {
+		t.Fatalf("health payload exposes a specific plugin: %#v", payload)
+	}
+	if got := payload["status"]; got != "ok" {
+		t.Fatalf("health status payload = %#v, want %q", got, "ok")
+	}
+}
+
 func TestRouter_LaunchCreatesSessionFromMainSiteAuthToken(t *testing.T) {
 	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/auth/me" {
@@ -216,7 +242,7 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 		t.Fatalf("namespaced creations status = %d, want %d; body=%s", creationsRec.Code, http.StatusOK, creationsRec.Body.String())
 	}
 	var creationsPayload struct {
-		Items []model.CreationRecord `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.NewDecoder(creationsRec.Body).Decode(&creationsPayload); err != nil {
 		t.Fatal(err)
@@ -224,8 +250,8 @@ func TestRouter_ImageGenerationNamespacedGenerateAndList(t *testing.T) {
 	if len(creationsPayload.Items) != 1 {
 		t.Fatalf("namespaced creation count = %d, want 1", len(creationsPayload.Items))
 	}
-	if creationsPayload.Items[0].PluginKey != "image-generation" {
-		t.Fatalf("namespaced creation plugin_key = %q, want %q", creationsPayload.Items[0].PluginKey, "image-generation")
+	if got := creationsPayload.Items[0]["plugin_key"]; got != "image-generation" {
+		t.Fatalf("namespaced creation plugin_key = %#v, want %q", got, "image-generation")
 	}
 }
 
@@ -733,7 +759,7 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 		t.Fatalf("user creations status = %d, want %d; body=%s", userCreationsRec.Code, http.StatusOK, userCreationsRec.Body.String())
 	}
 	var userPayload struct {
-		Items []model.CreationRecord `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.NewDecoder(userCreationsRec.Body).Decode(&userPayload); err != nil {
 		t.Fatal(err)
@@ -741,8 +767,8 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 	if len(userPayload.Items) != 1 {
 		t.Fatalf("user creation count = %d, want 1", len(userPayload.Items))
 	}
-	if userPayload.Items[0].UserID != 7 {
-		t.Fatalf("user creation user_id = %d, want 7", userPayload.Items[0].UserID)
+	if got := userPayload.Items[0]["user_id"]; got != float64(7) {
+		t.Fatalf("user creation user_id = %#v, want 7", got)
 	}
 
 	adminCreationsReq := httptest.NewRequest(http.MethodGet, "/api/plugins/image-generation/creations", nil)
@@ -753,7 +779,7 @@ func TestRouter_CreationsVisibilityFollowsRole(t *testing.T) {
 		t.Fatalf("admin creations status = %d, want %d; body=%s", adminCreationsRec.Code, http.StatusOK, adminCreationsRec.Body.String())
 	}
 	var adminPayload struct {
-		Items []model.CreationRecord `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.NewDecoder(adminCreationsRec.Body).Decode(&adminPayload); err != nil {
 		t.Fatal(err)

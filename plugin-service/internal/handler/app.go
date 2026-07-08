@@ -5,7 +5,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
-	imagemanifest "github.com/Wei-Shaw/sub2api/plugin-service/plugins/image-generation/manifest"
 )
 
 type AppDeps struct {
@@ -34,6 +33,5 @@ func (a *App) WithCommonHeaders(next http.Handler) http.Handler {
 func (a *App) Health(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
-		"plugin": imagemanifest.Key,
 	})
 }

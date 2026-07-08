@@ -18,8 +18,8 @@ func NewHistoryService(repo *repository.HistoryRepository) *HistoryService {
 	return &HistoryService{repo: repo}
 }
 
-func (s *HistoryService) Create(ctx context.Context, principal model.CurrentPrincipal, req model.GenerateRequest) (*model.HistoryRecord, error) {
-	return s.repo.Create(ctx, principal, req)
+func (s *HistoryService) Create(ctx context.Context, principal model.CurrentPrincipal, prompt string, request map[string]any) (*model.HistoryRecord, error) {
+	return s.repo.Create(ctx, principal, prompt, request)
 }
 
 func (s *HistoryService) Update(ctx context.Context, record *model.HistoryRecord) error {

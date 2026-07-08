@@ -2,6 +2,7 @@ package pluginregistry
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 )
 
@@ -111,6 +112,43 @@ func TestRegistry_GetReturnsFalseForMissingPlugin(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("Get() plugin = %#v, want nil", got)
+	}
+}
+
+type routableTestPlugin struct {
+	StaticPlugin
+	called bool
+}
+
+func (p *routableTestPlugin) RegisterRoutes(mux *http.ServeMux, _ RouteDeps) {
+	p.called = true
+	mux.HandleFunc("GET /plugins/test-plugin", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func TestRegistry_RegisterRoutesCallsRegisteredPlugins(t *testing.T) {
+	registry := New()
+	plugin := &routableTestPlugin{
+		StaticPlugin: StaticPlugin{
+			Meta: Metadata{
+				Key:              "test-plugin",
+				Name:             "Test Plugin",
+				FrontendMode:     FrontendModeHosted,
+				DefaultEntryPath: "/plugins/test-plugin",
+			},
+		},
+	}
+
+	if err := registry.Register(plugin); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	registry.RegisterRoutes(mux, RouteDeps{})
+
+	if !plugin.called {
+		t.Fatal("RegisterRoutes() did not call plugin route registration")
 	}
 }
 

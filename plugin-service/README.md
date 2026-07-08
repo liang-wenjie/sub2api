@@ -112,4 +112,4 @@ This creates the `plugin_session` cookie directly so `/api/plugins/image-generat
 2. Update the manifest metadata and entry path.
 3. Implement plugin backend handlers and register their routes.
 4. Add hosted frontend assets under `web/`.
-5. Register the plugin in router bootstrap.
+5. Register the plugin from `plugins.RegisterAll`; the host router discovers routes through the registry.

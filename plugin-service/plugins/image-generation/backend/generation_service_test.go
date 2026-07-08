@@ -1,18 +1,19 @@
-package service
+package backend
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"io"
 	"mime"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/repository"
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
 
 func TestGenerationService_GenerateRecordsRealImageResult(t *testing.T) {
@@ -30,7 +31,7 @@ func TestGenerationService_GenerateRecordsRealImageResult(t *testing.T) {
 	defer upstream.Close()
 
 	historyRepo := repository.NewHistoryRepository()
-	history := NewHistoryService(historyRepo)
+	history := service.NewHistoryService(historyRepo)
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 
 	principal := model.CurrentPrincipal{
@@ -40,7 +41,7 @@ func TestGenerationService_GenerateRecordsRealImageResult(t *testing.T) {
 		Username: "user",
 		Plugin:   "gen",
 	}
-	resp, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
+	resp, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
 		Prompt:         "make a poster",
 		ProviderAPIKey: "provider-secret",
 		Model:          "gpt-image-1",
@@ -117,16 +118,16 @@ func TestGenerationService_GenerateUploadsReferenceImageAsMultipartFile(t *testi
 	defer upstream.Close()
 
 	historyRepo := repository.NewHistoryRepository()
-	history := NewHistoryService(historyRepo)
+	history := service.NewHistoryService(historyRepo)
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Email: "user@example.com", Username: "user", Plugin: "gen"}
 
-	_, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
+	_, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
 		Prompt:         "use this reference",
 		ProviderAPIKey: "provider-secret",
 		Model:          "gpt-image-1",
 		Size:           "1024x1024",
-		ReferenceImages: []model.ReferenceImage{{
+		ReferenceImages: []ReferenceImage{{
 			Name:     "reference.png",
 			MimeType: "image/png",
 			DataURL:  "data:image/png;base64,cG5nLWJ5dGVz",
@@ -153,14 +154,14 @@ func TestGenerationService_ListCreationsForAdminAndUser(t *testing.T) {
 	defer upstream.Close()
 
 	historyRepo := repository.NewHistoryRepository()
-	history := NewHistoryService(historyRepo)
+	history := service.NewHistoryService(historyRepo)
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 
 	userA := model.CurrentPrincipal{UserID: 1, Role: model.RoleUser, Email: "a@example.com", Username: "a", Plugin: "gen"}
 	userB := model.CurrentPrincipal{UserID: 2, Role: model.RoleUser, Email: "b@example.com", Username: "b", Plugin: "gen"}
 	admin := model.CurrentPrincipal{UserID: 99, Role: model.RoleAdmin, Email: "admin@example.com", Username: "admin", Plugin: "gen"}
 
-	_, err := svc.Generate(ctx, userA, upstream.URL, model.GenerateRequest{
+	_, err := svc.Generate(ctx, userA, upstream.URL, GenerateRequest{
 		Prompt:         "first image",
 		ProviderAPIKey: "user-a-key",
 		Model:          "gpt-image-1",
@@ -168,7 +169,7 @@ func TestGenerationService_ListCreationsForAdminAndUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = svc.Generate(ctx, userB, upstream.URL, model.GenerateRequest{
+	_, err = svc.Generate(ctx, userB, upstream.URL, GenerateRequest{
 		Prompt:         "second image",
 		ProviderAPIKey: "user-b-key",
 		Model:          "gpt-image-1",
@@ -215,7 +216,7 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 	defer upstream.Close()
 
 	historyRepo := repository.NewHistoryRepository()
-	history := NewHistoryService(historyRepo)
+	history := service.NewHistoryService(historyRepo)
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 
 	principal := model.CurrentPrincipal{
@@ -226,7 +227,7 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 		Plugin:   "image-generation",
 	}
 
-	resp, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
+	resp, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
 		Prompt:         "Follow the user request.\nUser request: draw a camera",
 		ProviderAPIKey: "provider-secret",
 		Model:          "gpt-image-1",
@@ -268,7 +269,7 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 func TestGenerationServiceGenerateRequiresProviderBaseURL(t *testing.T) {
 	ctx := context.Background()
 	historyRepo := repository.NewHistoryRepository()
-	history := NewHistoryService(historyRepo)
+	history := service.NewHistoryService(historyRepo)
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 	principal := model.CurrentPrincipal{
 		UserID:   7,
@@ -278,7 +279,7 @@ func TestGenerationServiceGenerateRequiresProviderBaseURL(t *testing.T) {
 		Plugin:   "image-generation",
 	}
 
-	_, err := svc.Generate(ctx, principal, "", model.GenerateRequest{
+	_, err := svc.Generate(ctx, principal, "", GenerateRequest{
 		Prompt:         "draw a city",
 		ProviderAPIKey: "provider-key",
 	})
@@ -297,7 +298,7 @@ func TestGenerationService_GenerateReturnsUpstreamStatusAndMessage(t *testing.T)
 	defer upstream.Close()
 
 	historyRepo := repository.NewHistoryRepository()
-	history := NewHistoryService(historyRepo)
+	history := service.NewHistoryService(historyRepo)
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 	principal := model.CurrentPrincipal{
 		UserID:   7,
@@ -307,7 +308,7 @@ func TestGenerationService_GenerateReturnsUpstreamStatusAndMessage(t *testing.T)
 		Plugin:   "image-generation",
 	}
 
-	resp, err := svc.Generate(ctx, principal, upstream.URL, model.GenerateRequest{
+	resp, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
 		Prompt:         "draw a city",
 		ProviderAPIKey: "provider-key",
 		Model:          "gpt-image-1",

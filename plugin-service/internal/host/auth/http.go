@@ -17,12 +17,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
 
-const (
-	CanonicalPluginKey   = "image-generation"
-	CanonicalPluginName  = "Image Generation"
-	CanonicalPluginEntry = "/plugins/image-generation"
-)
-
 type HandlerDeps struct {
 	Config   config.Config
 	Sessions *service.SessionService
@@ -266,7 +260,7 @@ func (h *Handler) GetPlugin(w http.ResponseWriter, r *http.Request) {
 
 func normalizeRedirectPath(raw string, fallback string) string {
 	if strings.TrimSpace(fallback) == "" {
-		fallback = CanonicalPluginEntry
+		fallback = "/"
 	}
 	if raw == "" {
 		return fallback
@@ -304,15 +298,12 @@ func toPluginMetadata(metadata pluginregistry.Metadata) model.PluginMetadata {
 }
 
 func (h *Handler) defaultPluginKey() string {
-	if _, ok := h.registry.Get(CanonicalPluginKey); ok {
-		return CanonicalPluginKey
-	}
 	for _, metadata := range h.registry.List() {
 		if strings.TrimSpace(metadata.Key) != "" {
 			return metadata.Key
 		}
 	}
-	return CanonicalPluginKey
+	return ""
 }
 
 func (h *Handler) defaultPluginEntry(pluginKey string) string {
@@ -323,16 +314,14 @@ func (h *Handler) defaultPluginEntry(pluginKey string) string {
 		}
 	}
 
-	if pluginKey != CanonicalPluginKey {
-		if plugin, ok := h.registry.Get(CanonicalPluginKey); ok {
-			entry := strings.TrimSpace(plugin.Metadata().DefaultEntryPath)
-			if entry != "" {
-				return entry
-			}
+	for _, metadata := range h.registry.List() {
+		entry := strings.TrimSpace(metadata.DefaultEntryPath)
+		if entry != "" {
+			return entry
 		}
 	}
 
-	return CanonicalPluginEntry
+	return "/"
 }
 
 func (h *Handler) resolvePluginKey(raw string) (string, bool) {

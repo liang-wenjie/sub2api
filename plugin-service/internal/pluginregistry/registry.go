@@ -3,6 +3,7 @@ package pluginregistry
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 )
@@ -15,6 +16,21 @@ var (
 
 type Registry struct {
 	plugins map[string]Plugin
+}
+
+type registeredPlugin struct {
+	plugin Plugin
+	meta   Metadata
+}
+
+func (p registeredPlugin) Metadata() Metadata {
+	return p.meta
+}
+
+func (p registeredPlugin) RegisterRoutes(mux *http.ServeMux, deps RouteDeps) {
+	if routable, ok := p.plugin.(RoutablePlugin); ok {
+		routable.RegisterRoutes(mux, deps)
+	}
 }
 
 func New() *Registry {
@@ -39,7 +55,10 @@ func (r *Registry) Register(plugin Plugin) error {
 		return fmt.Errorf("%w: %s", ErrDuplicatePluginKey, key)
 	}
 
-	r.plugins[key] = StaticPlugin{Meta: metadata}
+	r.plugins[key] = registeredPlugin{
+		plugin: plugin,
+		meta:   metadata,
+	}
 	return nil
 }
 
@@ -60,4 +79,12 @@ func (r *Registry) List() []Metadata {
 		plugins = append(plugins, r.plugins[key].Metadata())
 	}
 	return plugins
+}
+
+func (r *Registry) RegisterRoutes(mux *http.ServeMux, deps RouteDeps) {
+	for _, plugin := range r.plugins {
+		if routable, ok := plugin.(RoutablePlugin); ok {
+			routable.RegisterRoutes(mux, deps)
+		}
+	}
 }

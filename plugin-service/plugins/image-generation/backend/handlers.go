@@ -20,14 +20,14 @@ type HandlerDeps struct {
 	Config     config.Config
 	PluginKey  string
 	History    *service.HistoryService
-	Generation *service.GenerationService
+	Generation *GenerationService
 }
 
 type Handler struct {
 	cfg        config.Config
 	pluginKey  string
 	history    *service.HistoryService
-	generation *service.GenerationService
+	generation *GenerationService
 }
 
 func NewHandler(deps HandlerDeps) *Handler {
@@ -69,7 +69,7 @@ func (h *Handler) Me(w http.ResponseWriter, _ *http.Request, principal model.Cur
 }
 
 func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	var req model.GenerateRequest
+	var req GenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid json body")
 		return
@@ -87,11 +87,11 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 
 	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r, h.cfg), req)
 	if err != nil {
-		if errors.Is(err, service.ErrPromptRequired) || errors.Is(err, service.ErrProviderKeyRequired) {
+		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		var upstreamErr *service.UpstreamHTTPError
+		var upstreamErr *UpstreamHTTPError
 		if errors.As(err, &upstreamErr) {
 			log.Printf("[plugin-service] generate handler upstream error user_id=%d status=%d err=%s", principal.UserID, upstreamErr.StatusCode, upstreamErr.Message)
 			httpx.WriteError(w, upstreamErr.StatusCode, upstreamErr.Message)

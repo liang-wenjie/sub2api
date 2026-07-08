@@ -56,45 +56,6 @@ type HistoryRecord struct {
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
-type GenerateRequest struct {
-	Prompt          string           `json:"prompt"`
-	ProviderAPIKey  string           `json:"provider_api_key,omitempty"`
-	Model           string           `json:"model,omitempty"`
-	Size            string           `json:"size,omitempty"`
-	ResponseFormat  string           `json:"response_format,omitempty"`
-	ReferenceImages []ReferenceImage `json:"reference_images,omitempty"`
-	Inputs          map[string]any   `json:"inputs,omitempty"`
-}
-
-type GenerateResponse struct {
-	JobID  string         `json:"job_id"`
-	Status string         `json:"status"`
-	Result map[string]any `json:"result,omitempty"`
-}
-
-type ReferenceImage struct {
-	Name      string `json:"name,omitempty"`
-	MimeType  string `json:"mime_type,omitempty"`
-	DataURL   string `json:"data_url,omitempty"`
-	RemoteURL string `json:"remote_url,omitempty"`
-}
-
-type CreationRecord struct {
-	ID        string         `json:"id"`
-	HistoryID string         `json:"history_id"`
-	UserID    int64          `json:"user_id"`
-	UserEmail string         `json:"user_email"`
-	PluginKey string         `json:"plugin_key"`
-	Prompt    string         `json:"prompt"`
-	Model     string         `json:"model,omitempty"`
-	Size      string         `json:"size,omitempty"`
-	ImageURL  string         `json:"image_url,omitempty"`
-	B64JSON   string         `json:"b64_json,omitempty"`
-	Result    map[string]any `json:"result,omitempty"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-}
-
 type PluginMetadata struct {
 	Key              string `json:"key"`
 	Name             string `json:"name"`

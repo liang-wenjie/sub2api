@@ -1,4 +1,4 @@
-package service
+package backend
 
 import (
 	"bytes"
@@ -14,8 +14,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
 
 var (
@@ -35,7 +37,7 @@ type GenerationServiceOptions struct {
 }
 
 type GenerationService struct {
-	history    *HistoryService
+	history    *service.HistoryService
 	httpClient *http.Client
 }
 
@@ -68,7 +70,46 @@ type openAIImageResponseItem struct {
 	RevisedPrompt string `json:"revised_prompt"`
 }
 
-func NewGenerationService(history *HistoryService, opts GenerationServiceOptions) *GenerationService {
+type GenerateRequest struct {
+	Prompt          string           `json:"prompt"`
+	ProviderAPIKey  string           `json:"provider_api_key,omitempty"`
+	Model           string           `json:"model,omitempty"`
+	Size            string           `json:"size,omitempty"`
+	ResponseFormat  string           `json:"response_format,omitempty"`
+	ReferenceImages []ReferenceImage `json:"reference_images,omitempty"`
+	Inputs          map[string]any   `json:"inputs,omitempty"`
+}
+
+type GenerateResponse struct {
+	JobID  string         `json:"job_id"`
+	Status string         `json:"status"`
+	Result map[string]any `json:"result,omitempty"`
+}
+
+type ReferenceImage struct {
+	Name      string `json:"name,omitempty"`
+	MimeType  string `json:"mime_type,omitempty"`
+	DataURL   string `json:"data_url,omitempty"`
+	RemoteURL string `json:"remote_url,omitempty"`
+}
+
+type CreationRecord struct {
+	ID        string         `json:"id"`
+	HistoryID string         `json:"history_id"`
+	UserID    int64          `json:"user_id"`
+	UserEmail string         `json:"user_email"`
+	PluginKey string         `json:"plugin_key"`
+	Prompt    string         `json:"prompt"`
+	Model     string         `json:"model,omitempty"`
+	Size      string         `json:"size,omitempty"`
+	ImageURL  string         `json:"image_url,omitempty"`
+	B64JSON   string         `json:"b64_json,omitempty"`
+	Result    map[string]any `json:"result,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+func NewGenerationService(history *service.HistoryService, opts GenerationServiceOptions) *GenerationService {
 	client := opts.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -79,7 +120,7 @@ func NewGenerationService(history *HistoryService, opts GenerationServiceOptions
 	}
 }
 
-func (s *GenerationService) Generate(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, req model.GenerateRequest) (*model.GenerateResponse, error) {
+func (s *GenerationService) Generate(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
 		return nil, ErrPromptRequired
@@ -112,7 +153,7 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 		strings.TrimSpace(providerBaseURL),
 	)
 
-	record, err := s.history.Create(ctx, principal, req)
+	record, err := s.history.Create(ctx, principal, displayPrompt(req), requestPayload(req))
 	if err != nil {
 		log.Printf("[plugin-service] image generation create history failed user_id=%d err=%v", principal.UserID, err)
 		return nil, err
@@ -137,19 +178,19 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 
 	log.Printf("[plugin-service] image generation succeeded user_id=%d history_id=%s", principal.UserID, record.ID)
 
-	return &model.GenerateResponse{
+	return &GenerateResponse{
 		JobID:  record.ID,
 		Status: record.Status,
 		Result: record.Result,
 	}, nil
 }
 
-func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.GenerateResponse, error) {
+func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
 	record, err := s.history.Get(ctx, principal, id)
 	if err != nil {
 		return nil, err
 	}
-	retryReq := model.GenerateRequest{
+	retryReq := GenerateRequest{
 		Prompt:          stringValue(record.Request["prompt"]),
 		ProviderAPIKey:  stringValue(record.Request["provider_api_key"]),
 		Model:           stringValue(record.Request["model"]),
@@ -179,12 +220,12 @@ func (s *GenerationService) Cancel(ctx context.Context, principal model.CurrentP
 	return record, nil
 }
 
-func (s *GenerationService) ListCreations(ctx context.Context, principal model.CurrentPrincipal, query model.HistoryQuery) ([]model.CreationRecord, error) {
+func (s *GenerationService) ListCreations(ctx context.Context, principal model.CurrentPrincipal, query model.HistoryQuery) ([]CreationRecord, error) {
 	records, err := s.history.List(ctx, principal, query)
 	if err != nil {
 		return nil, err
 	}
-	creations := make([]model.CreationRecord, 0, len(records))
+	creations := make([]CreationRecord, 0, len(records))
 	for _, record := range records {
 		if record.Status != model.HistoryStatusSucceeded {
 			continue
@@ -198,7 +239,7 @@ func (s *GenerationService) ListCreations(ctx context.Context, principal model.C
 		}
 		for index, image := range images {
 			creationID := record.ID + "-" + strconv.Itoa(index)
-			creations = append(creations, model.CreationRecord{
+			creations = append(creations, CreationRecord{
 				ID:        creationID,
 				HistoryID: record.ID,
 				UserID:    record.UserID,
@@ -218,7 +259,7 @@ func (s *GenerationService) ListCreations(ctx context.Context, principal model.C
 	return creations, nil
 }
 
-func (s *GenerationService) generateWithProvider(ctx context.Context, providerBaseURL string, req model.GenerateRequest) (map[string]any, error) {
+func (s *GenerationService) generateWithProvider(ctx context.Context, providerBaseURL string, req GenerateRequest) (map[string]any, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(providerBaseURL), "/")
 	if baseURL == "" {
 		return nil, ErrProviderBaseURL
@@ -270,7 +311,7 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 	return normalizeImagesResult(req, payload), nil
 }
 
-func (s *GenerationService) newGenerationRequest(ctx context.Context, baseURL string, req model.GenerateRequest) (*http.Request, error) {
+func (s *GenerationService) newGenerationRequest(ctx context.Context, baseURL string, req GenerateRequest) (*http.Request, error) {
 	payload := map[string]any{
 		"model":           req.Model,
 		"prompt":          req.Prompt,
@@ -294,7 +335,7 @@ func (s *GenerationService) newGenerationRequest(ctx context.Context, baseURL st
 	return httpReq, nil
 }
 
-func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, req model.GenerateRequest) (*http.Request, error) {
+func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, req GenerateRequest) (*http.Request, error) {
 	hasRemoteOnly := true
 	for _, image := range req.ReferenceImages {
 		if strings.TrimSpace(image.DataURL) != "" {
@@ -395,7 +436,7 @@ func escapeQuotes(value string) string {
 	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
 }
 
-func normalizeImagesResult(req model.GenerateRequest, payload openAIImagesResponse) map[string]any {
+func normalizeImagesResult(req GenerateRequest, payload openAIImagesResponse) map[string]any {
 	images := make([]map[string]any, 0, len(payload.Data))
 	for _, item := range payload.Data {
 		images = append(images, map[string]any{
@@ -466,7 +507,40 @@ func copyMap(input map[string]any) map[string]any {
 	return out
 }
 
-func referenceImagesValue(value any) []model.ReferenceImage {
+func displayPrompt(req GenerateRequest) string {
+	text := strings.TrimSpace(stringValue(req.Inputs["display_prompt"]))
+	if text != "" {
+		return text
+	}
+	return req.Prompt
+}
+
+func requestPayload(req GenerateRequest) map[string]any {
+	payload := make(map[string]any)
+	for key, value := range req.Inputs {
+		payload[key] = value
+	}
+	payload["prompt"] = req.Prompt
+	payload["provider_api_key"] = req.ProviderAPIKey
+	payload["model"] = req.Model
+	payload["size"] = req.Size
+	payload["response_format"] = req.ResponseFormat
+	if len(req.ReferenceImages) > 0 {
+		references := make([]map[string]any, 0, len(req.ReferenceImages))
+		for _, reference := range req.ReferenceImages {
+			references = append(references, map[string]any{
+				"name":       reference.Name,
+				"mime_type":  reference.MimeType,
+				"data_url":   reference.DataURL,
+				"remote_url": reference.RemoteURL,
+			})
+		}
+		payload["reference_images"] = references
+	}
+	return payload
+}
+
+func referenceImagesValue(value any) []ReferenceImage {
 	items, ok := value.([]map[string]any)
 	if !ok {
 		rawItems, ok := value.([]any)
@@ -481,9 +555,9 @@ func referenceImagesValue(value any) []model.ReferenceImage {
 			}
 		}
 	}
-	references := make([]model.ReferenceImage, 0, len(items))
+	references := make([]ReferenceImage, 0, len(items))
 	for _, item := range items {
-		references = append(references, model.ReferenceImage{
+		references = append(references, ReferenceImage{
 			Name:      stringValue(item["name"]),
 			MimeType:  stringValue(item["mime_type"]),
 			DataURL:   stringValue(item["data_url"]),

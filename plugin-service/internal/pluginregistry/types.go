@@ -1,5 +1,13 @@
 package pluginregistry
 
+import (
+	"net/http"
+
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
+	hostsession "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/session"
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
+)
+
 type FrontendMode string
 
 const (
@@ -19,6 +27,17 @@ type Metadata struct {
 
 type Plugin interface {
 	Metadata() Metadata
+}
+
+type RouteDeps struct {
+	Config            config.Config
+	SessionMiddleware *hostsession.Middleware
+	History           *service.HistoryService
+}
+
+type RoutablePlugin interface {
+	Plugin
+	RegisterRoutes(mux *http.ServeMux, deps RouteDeps)
 }
 
 type StaticPlugin struct {

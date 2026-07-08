@@ -28,21 +28,16 @@ func NewHistoryRepository() *HistoryRepository {
 	}
 }
 
-func (r *HistoryRepository) Create(_ context.Context, principal model.CurrentPrincipal, req model.GenerateRequest) (*model.HistoryRecord, error) {
+func (r *HistoryRepository) Create(_ context.Context, principal model.CurrentPrincipal, prompt string, request map[string]any) (*model.HistoryRecord, error) {
 	now := r.now().UTC()
-	requestPayload := copyRequestPayload(req)
-	displayPrompt := strings.TrimSpace(requestStringValue(req.Inputs["display_prompt"]))
-	if displayPrompt == "" {
-		displayPrompt = req.Prompt
-	}
 	record := model.HistoryRecord{
 		ID:        randomID(),
 		UserID:    principal.UserID,
 		UserEmail: principal.Email,
 		PluginKey: principal.Plugin,
-		Prompt:    displayPrompt,
+		Prompt:    strings.TrimSpace(prompt),
 		Status:    model.HistoryStatusPending,
-		Request:   requestPayload,
+		Request:   copyMap(request),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -131,32 +126,13 @@ func randomID() string {
 	return hex.EncodeToString(buf)
 }
 
-func copyRequestPayload(req model.GenerateRequest) map[string]any {
-	payload := make(map[string]any)
-	for key, value := range req.Inputs {
-		payload[key] = value
+func copyMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
 	}
-	payload["prompt"] = req.Prompt
-	payload["provider_api_key"] = req.ProviderAPIKey
-	payload["model"] = req.Model
-	payload["size"] = req.Size
-	payload["response_format"] = req.ResponseFormat
-	if len(req.ReferenceImages) > 0 {
-		references := make([]map[string]any, 0, len(req.ReferenceImages))
-		for _, reference := range req.ReferenceImages {
-			references = append(references, map[string]any{
-				"name":       reference.Name,
-				"mime_type":  reference.MimeType,
-				"data_url":   reference.DataURL,
-				"remote_url": reference.RemoteURL,
-			})
-		}
-		payload["reference_images"] = references
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = value
 	}
-	return payload
-}
-
-func requestStringValue(value any) string {
-	text, _ := value.(string)
-	return text
+	return out
 }
