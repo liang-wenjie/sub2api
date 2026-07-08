@@ -5,8 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/frontendhost"
 )
 
 const imageHistoryListNeedle = `Nt(T.value,v=>(re(),ae("button",{key:v.id,type:"button","data-testid":"history-item"`
@@ -21,76 +22,18 @@ const imageNewConversationNeedle = "function M(){const f=`conversation-live-${Da
 const imageNewConversationReplacement = "function M(){const f=`conversation-live-${Date.now()}`,p=new Date().toLocaleString();T.value.unshift({id:f,title:t(\"imageGeneration.conversationFallbackTitle\"),preview:\"\",lastUsedAt:p,messages:[],referenceImages:[]}),L.value=f,y.value=\"\"}"
 
 func RegisterFrontend(mux *http.ServeMux) {
-	webRoot := webRoot()
-	assetRoot := filepath.Join(webRoot, "assets")
-	indexPath := indexPath(webRoot)
-
-	mux.HandleFunc("GET /plugins/image-generation", func(w http.ResponseWriter, r *http.Request) {
-		disableFrontendCache(w)
-		body, err := os.ReadFile(indexPath)
-		if err != nil {
-			http.Error(w, "plugin frontend not found", http.StatusNotFound)
-			return
-		}
-		html := string(body)
-		html = strings.ReplaceAll(html, "/plugins/image-generation/assets/app.js", "/plugins/image-generation/assets/app.js?v="+assetVersion(assetRoot, "app.js"))
-		html = strings.ReplaceAll(html, "/plugins/image-generation/assets/app.css", "/plugins/image-generation/assets/app.css?v="+assetVersion(assetRoot, "app.css"))
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(html))
+	frontendhost.RegisterHostedPlugin(mux, frontendhost.HostedPluginOptions{
+		PluginKey: "image-generation",
+		WebRoot:   webRoot(),
+		PatchAppJS: func(input string) string {
+			js := strings.Replace(input, imageHistoryListNeedle, imageHistoryListReplacement, 1)
+			js = strings.Replace(js, imageHistoryTimestampNeedle, imageHistoryTimestampReplacement, 1)
+			js = strings.Replace(js, imageRemoteConversationNeedle, imageRemoteConversationReplacement, 1)
+			js = strings.Replace(js, imageLocalSendNeedle, imageLocalSendReplacement, 1)
+			js = strings.Replace(js, imageNewConversationNeedle, imageNewConversationReplacement, 1)
+			return js
+		},
 	})
-
-	assets := http.StripPrefix("/plugins/image-generation/assets/", http.FileServer(http.Dir(assetRoot)))
-	mux.Handle("GET /plugins/image-generation/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		disableFrontendCache(w)
-		if strings.HasSuffix(r.URL.Path, "/app.js") {
-			servePatchedAppJS(w, assetRoot)
-			return
-		}
-		assets.ServeHTTP(w, r)
-	}))
-}
-
-func servePatchedAppJS(w http.ResponseWriter, assetRoot string) {
-	body, err := os.ReadFile(filepath.Join(assetRoot, "app.js"))
-	if err != nil {
-		http.Error(w, "plugin asset not found", http.StatusNotFound)
-		return
-	}
-	js := strings.Replace(string(body), imageHistoryListNeedle, imageHistoryListReplacement, 1)
-	js = strings.Replace(js, imageHistoryTimestampNeedle, imageHistoryTimestampReplacement, 1)
-	js = strings.Replace(js, imageRemoteConversationNeedle, imageRemoteConversationReplacement, 1)
-	js = strings.Replace(js, imageLocalSendNeedle, imageLocalSendReplacement, 1)
-	js = strings.Replace(js, imageNewConversationNeedle, imageNewConversationReplacement, 1)
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	_, _ = w.Write([]byte(js))
-}
-
-func disableFrontendCache(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Expires", "0")
-}
-
-func assetVersion(assetRoot string, name string) string {
-	info, err := os.Stat(filepath.Join(assetRoot, name))
-	if err != nil {
-		return "0"
-	}
-	return strconv.FormatInt(info.ModTime().UnixNano(), 10)
-}
-
-func indexPath(webRoot string) string {
-	for _, name := range []string{
-		"index.html",
-		"plugin-image-generation.html",
-		filepath.Join("plugin-image-generation", "index.html"),
-	} {
-		candidate := filepath.Join(webRoot, name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return filepath.Join(webRoot, "index.html")
 }
 
 func webRoot() string {

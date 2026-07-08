@@ -23,10 +23,9 @@ func (Plugin) RegisterRoutes(mux *http.ServeMux, deps pluginregistry.RouteDeps) 
 
 	generation := backend.NewGenerationService(deps.History, backend.GenerationServiceOptions{})
 	handler := backend.NewHandler(backend.HandlerDeps{
-		Config:     deps.Config,
 		PluginKey:  manifest.Key,
 		History:    deps.History,
 		Generation: generation,
 	})
-	backend.RegisterRoutes(mux, deps.SessionMiddleware, handler)
+	backend.RegisterRoutes(mux, deps.Auth, handler)
 }

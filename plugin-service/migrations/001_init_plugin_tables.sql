@@ -1,17 +1,3 @@
-CREATE TABLE plugin_sessions (
-  id TEXT PRIMARY KEY,
-  user_id BIGINT NOT NULL,
-  role TEXT NOT NULL,
-  email TEXT NOT NULL,
-  username TEXT NOT NULL,
-  plugin_key TEXT NOT NULL,
-  expires_at TIMESTAMP NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_plugin_sessions_expires_at
-  ON plugin_sessions(expires_at);
-
 CREATE TABLE plugin_generation_history (
   id TEXT PRIMARY KEY,
   user_id BIGINT NOT NULL,

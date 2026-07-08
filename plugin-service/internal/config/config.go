@@ -6,25 +6,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Config struct {
-	ListenAddr      string
-	SessionTTL      time.Duration
-	HistoryEnabled  bool
-	DevLoginEnabled bool
+	ListenAddr string
 }
 
 func MustLoad() Config {
 	loadDotEnvIfPresent()
-	ttlSeconds := envInt("PLUGIN_SERVER_SESSION_TTL_SECONDS", 3600)
 	port := envInt("PLUGIN_SERVER_PORT", 8091)
 	return Config{
-		ListenAddr:      ":" + strconv.Itoa(port),
-		SessionTTL:      time.Duration(ttlSeconds) * time.Second,
-		HistoryEnabled:  envBool("PLUGIN_SERVER_HISTORY_ENABLED", true),
-		DevLoginEnabled: envBool("PLUGIN_SERVER_DEV_LOGIN_ENABLED", false),
+		ListenAddr: ":" + strconv.Itoa(port),
 	}
 }
 
@@ -74,14 +66,6 @@ func applyDotEnvFile(path string) {
 	}
 }
 
-func envString(key string, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
 func envInt(key string, fallback int) int {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -92,18 +76,4 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
-}
-
-func envBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	switch value {
-	case "":
-		return fallback
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
 }

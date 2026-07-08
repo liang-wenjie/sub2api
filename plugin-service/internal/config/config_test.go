@@ -7,13 +7,10 @@ import (
 )
 
 func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
-	unsetEnv(t,
-		"PLUGIN_SERVER_HISTORY_ENABLED",
-		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
-	)
+	unsetEnv(t, "PLUGIN_SERVER_PORT")
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_HISTORY_ENABLED=false\nPLUGIN_SERVER_DEV_LOGIN_ENABLED=true\n")
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_PORT=19091\n")
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -25,22 +22,16 @@ func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
 	}
 
 	cfg := MustLoad()
-	if cfg.HistoryEnabled {
-		t.Fatal("expected history disabled from .env")
-	}
-	if !cfg.DevLoginEnabled {
-		t.Fatal("expected dev login enabled from .env")
+	if cfg.ListenAddr != ":19091" {
+		t.Fatalf("listen addr = %q, want %q", cfg.ListenAddr, ":19091")
 	}
 }
 
 func TestMustLoadLoadsSharedDotEnvFromParentDir(t *testing.T) {
-	unsetEnv(t,
-		"PLUGIN_SERVER_HISTORY_ENABLED",
-		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
-	)
+	unsetEnv(t, "PLUGIN_SERVER_PORT")
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_HISTORY_ENABLED=false\nPLUGIN_SERVER_DEV_LOGIN_ENABLED=true\n")
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_PORT=18091\n")
 	if err := os.MkdirAll(filepath.Join(tempDir, "plugin-service"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -55,27 +46,17 @@ func TestMustLoadLoadsSharedDotEnvFromParentDir(t *testing.T) {
 	}
 
 	cfg := MustLoad()
-	if cfg.HistoryEnabled {
-		t.Fatal("expected history disabled from shared parent .env")
-	}
-	if !cfg.DevLoginEnabled {
-		t.Fatal("expected dev login enabled from shared parent .env")
+	if cfg.ListenAddr != ":18091" {
+		t.Fatalf("listen addr = %q, want %q", cfg.ListenAddr, ":18091")
 	}
 }
 
 func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
-	unsetEnv(t,
-		"PLUGIN_SERVER_HISTORY_ENABLED",
-		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
-	)
+	unsetEnv(t, "PLUGIN_SERVER_PORT")
 
 	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_HISTORY_ENABLED=false\nPLUGIN_SERVER_DEV_LOGIN_ENABLED=true\n")
-
-	if err := os.Setenv("PLUGIN_SERVER_HISTORY_ENABLED", "true"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Setenv("PLUGIN_SERVER_DEV_LOGIN_ENABLED", "false"); err != nil {
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_PORT=18091\n")
+	if err := os.Setenv("PLUGIN_SERVER_PORT", "17091"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,47 +70,30 @@ func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 	}
 
 	cfg := MustLoad()
-	if !cfg.HistoryEnabled {
-		t.Fatal("expected process env to override .env and keep history enabled")
-	}
-	if cfg.DevLoginEnabled {
-		t.Fatal("expected process env to override .env and keep dev login disabled")
+	if cfg.ListenAddr != ":17091" {
+		t.Fatalf("listen addr = %q, want %q", cfg.ListenAddr, ":17091")
 	}
 }
 
-func TestMustLoadUsesPluginServerPort(t *testing.T) {
+func TestMustLoadUsesDefaultPortWhenUnset(t *testing.T) {
 	unsetEnv(t, "PLUGIN_SERVER_PORT")
 
-	if err := os.Setenv("PLUGIN_SERVER_PORT", "19091"); err != nil {
-		t.Fatal(err)
-	}
 	cfg := MustLoad()
-	if cfg.ListenAddr != ":19091" {
-		t.Fatalf("listen addr = %q, want %q", cfg.ListenAddr, ":19091")
+	if cfg.ListenAddr != ":8091" {
+		t.Fatalf("listen addr = %q, want default %q", cfg.ListenAddr, ":8091")
 	}
 }
 
 func TestMustLoadIgnoresLegacyPluginServiceEnvNames(t *testing.T) {
-	unsetEnv(t,
-		"PLUGIN_SERVER_PORT",
-		"PLUGIN_SERVER_DEV_LOGIN_ENABLED",
-		"PLUGIN_SERVICE_LISTEN_ADDR",
-		"PLUGIN_SERVICE_DEV_LOGIN_ENABLED",
-	)
+	unsetEnv(t, "PLUGIN_SERVER_PORT", "PLUGIN_SERVICE_LISTEN_ADDR")
 
 	if err := os.Setenv("PLUGIN_SERVICE_LISTEN_ADDR", ":19091"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Setenv("PLUGIN_SERVICE_DEV_LOGIN_ENABLED", "true"); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := MustLoad()
 	if cfg.ListenAddr != ":8091" {
 		t.Fatalf("listen addr = %q, want default %q", cfg.ListenAddr, ":8091")
-	}
-	if cfg.DevLoginEnabled {
-		t.Fatal("expected legacy PLUGIN_SERVICE_* env to be ignored")
 	}
 }
 

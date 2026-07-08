@@ -12,17 +12,6 @@ const (
 	HistoryStatusCanceled  = "canceled"
 )
 
-type LaunchClaims struct {
-	UserID    int64  `json:"user_id"`
-	Role      string `json:"role"`
-	Email     string `json:"email"`
-	Username  string `json:"username"`
-	Plugin    string `json:"plugin"`
-	IssuedAt  int64  `json:"iat"`
-	ExpiresAt int64  `json:"exp"`
-	Nonce     string `json:"nonce"`
-}
-
 type CurrentPrincipal struct {
 	UserID   int64  `json:"user_id"`
 	Role     string `json:"role"`
@@ -33,13 +22,6 @@ type CurrentPrincipal struct {
 
 func (p CurrentPrincipal) IsAdmin() bool {
 	return p.Role == RoleAdmin
-}
-
-type Session struct {
-	ID        string
-	Principal CurrentPrincipal
-	ExpiresAt time.Time
-	CreatedAt time.Time
 }
 
 type HistoryRecord struct {

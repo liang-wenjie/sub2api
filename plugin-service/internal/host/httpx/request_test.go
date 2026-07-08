@@ -5,26 +5,6 @@ import (
 	"testing"
 )
 
-func TestResolveRequestBaseURLPrefersSourceHostQuery(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://plugin-service/launch?src_host=https%3A%2F%2Fapp.example.com", nil)
-	req.Header.Set("Origin", "http://127.0.0.1:8091")
-
-	got := ResolveRequestBaseURL(req)
-	if got != "https://app.example.com" {
-		t.Fatalf("ResolveRequestBaseURL() = %q, want %q", got, "https://app.example.com")
-	}
-}
-
-func TestResolveRequestBaseURLFallsBackToReferer(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://plugin-service/launch", nil)
-	req.Header.Set("Referer", "https://main.example.com/custom/image?id=1")
-
-	got := ResolveRequestBaseURL(req)
-	if got != "https://main.example.com" {
-		t.Fatalf("ResolveRequestBaseURL() = %q, want %q", got, "https://main.example.com")
-	}
-}
-
 func TestResolveRequestBaseURLFallsBackToForwardedHost(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://plugin-service/launch", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
@@ -33,5 +13,12 @@ func TestResolveRequestBaseURLFallsBackToForwardedHost(t *testing.T) {
 	got := ResolveRequestBaseURL(req)
 	if got != "https://edge.example.com" {
 		t.Fatalf("ResolveRequestBaseURL() = %q, want %q", got, "https://edge.example.com")
+	}
+}
+
+func TestResolveRequestBaseURLReturnsEmptyWithoutForwardedHost(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://plugin-service/launch", nil)
+	if got := ResolveRequestBaseURL(req); got != "http://plugin-service" {
+		t.Fatalf("ResolveRequestBaseURL() = %q, want %q", got, "http://plugin-service")
 	}
 }

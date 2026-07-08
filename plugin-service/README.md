@@ -44,20 +44,25 @@ plugin service host in the same Docker network or environment:
 
 ## Auth Model
 
-The plugin host keeps its own short-lived `plugin_session` cookie. The only
-shared entry point is `/launch`, which reads the Sub2API auth token or same-site
-cookie from the incoming request, calls the main site `/api/v1/auth/me`, and
-then creates the plugin session.
+The plugin host fully reuses the main Sub2API login state. It does not create
+its own session cookie, does not persist plugin login state, and does not
+provide a standalone development login entry.
 
 Launch flow:
 
 1. Main custom menu stores `http://plugin-server/plugins/image-generation` as the plugin base URL.
 2. Main frontend opens `/launch?plugin=image-generation&path=/plugins/image-generation` on the same domain.
 3. Browser carries the current Sub2API token query parameter or same-site cookie.
-4. Plugin service loads the current user from the main site.
-5. Plugin service creates its own `plugin_session` httpOnly cookie.
-6. The launch redirects to the plugin entry path from the registered manifest.
-7. Plugin API requests use the plugin session cookie.
+4. Plugin service forwards those credentials to the main site `/api/v1/auth/me`.
+5. If the main site confirms the user, `/launch` redirects to the plugin entry path.
+6. Every protected plugin API request repeats the same main-site identity check.
+
+The main site base URL for auth verification is discovered automatically inside
+the deployment environment. The plugin host tries these candidates in order:
+
+- `http://sub2api:8080`
+- `http://localhost:8080`
+- `http://127.0.0.1:8080`
 
 The standalone host enforces role-aware history access:
 
@@ -69,7 +74,7 @@ The standalone host enforces role-aware history access:
 - Host routes:
   - `GET /healthz`
   - `GET /launch`
-  - `GET /dev/login`
+  - `GET /api/me`
   - `GET /api/plugins`
   - `GET /api/plugins/{key}`
 - Hosted image-generation page:
@@ -87,24 +92,6 @@ The standalone host enforces role-aware history access:
   - `POST /api/plugins/image-generation/history/{id}/cancel`
 
 `POST /api/plugins/image-generation/generate` proxies image generation requests to the main Sub2API gateway resolved from the same-origin request headers. The request must include `provider_api_key`, and the plugin service persists structured history plus a flattened creations list for gallery-style views.
-
-## Local Development Login
-
-For local development without Sub2API credentials, enable:
-
-```env
-PLUGIN_SERVER_DEV_LOGIN_ENABLED=true
-```
-
-Configure plugin settings in the project root `.env`. The plugin service shares that same environment file with the main service.
-
-Then open a URL like:
-
-```text
-http://localhost:8091/dev/login?user_id=7&role=admin&email=admin@example.com&username=dev-admin&plugin=image-generation&path=/plugins/image-generation
-```
-
-This creates the `plugin_session` cookie directly so `/api/plugins/image-generation/me`, `/api/plugins/image-generation/generate`, and `/api/plugins/image-generation/history` can be exercised without the main service.
 
 ## Adding a New Plugin
 

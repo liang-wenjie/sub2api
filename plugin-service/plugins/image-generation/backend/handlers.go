@@ -6,9 +6,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
-	hostsession "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/session"
+	hostprincipal "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 	imagemanifest "github.com/Wei-Shaw/sub2api/plugin-service/plugins/image-generation/manifest"
@@ -17,14 +16,12 @@ import (
 const apiBasePath = "/api/plugins/" + imagemanifest.Key
 
 type HandlerDeps struct {
-	Config     config.Config
 	PluginKey  string
 	History    *service.HistoryService
 	Generation *GenerationService
 }
 
 type Handler struct {
-	cfg        config.Config
 	pluginKey  string
 	history    *service.HistoryService
 	generation *GenerationService
@@ -37,28 +34,27 @@ func NewHandler(deps HandlerDeps) *Handler {
 	}
 
 	return &Handler{
-		cfg:        deps.Config,
 		pluginKey:  pluginKey,
 		history:    deps.History,
 		generation: deps.Generation,
 	}
 }
 
-func RegisterRoutes(mux *http.ServeMux, sessionMiddleware *hostsession.Middleware, handler *Handler) {
-	mux.HandleFunc("GET "+apiBasePath+"/me", sessionMiddleware.Require(handler.Me))
-	mux.HandleFunc("GET "+apiBasePath+"/config", sessionMiddleware.Require(handler.Config))
-	mux.HandleFunc("POST "+apiBasePath+"/generate", sessionMiddleware.Require(handler.Generate))
-	mux.HandleFunc("GET "+apiBasePath+"/creations", sessionMiddleware.Require(handler.ListCreations))
-	mux.HandleFunc("GET "+apiBasePath+"/history", sessionMiddleware.Require(handler.ListHistory))
-	mux.HandleFunc("GET "+apiBasePath+"/history/{id}", sessionMiddleware.Require(handler.GetHistory))
-	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/retry", sessionMiddleware.Require(handler.RetryHistory))
-	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/cancel", sessionMiddleware.Require(handler.CancelHistory))
+func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware, handler *Handler) {
+	mux.HandleFunc("GET "+apiBasePath+"/me", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Me))
+	mux.HandleFunc("GET "+apiBasePath+"/config", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Config))
+	mux.HandleFunc("POST "+apiBasePath+"/generate", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Generate))
+	mux.HandleFunc("GET "+apiBasePath+"/creations", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListCreations))
+	mux.HandleFunc("GET "+apiBasePath+"/history", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListHistory))
+	mux.HandleFunc("GET "+apiBasePath+"/history/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetHistory))
+	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/retry", authMiddleware.RequirePlugin(imagemanifest.Key, handler.RetryHistory))
+	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/cancel", authMiddleware.RequirePlugin(imagemanifest.Key, handler.CancelHistory))
 }
 
 func (h *Handler) Config(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"plugin_key":      h.pluginKey,
-		"history_enabled": h.cfg.HistoryEnabled,
+		"history_enabled": true,
 		"user_id":         principal.UserID,
 		"role":            principal.Role,
 	})
@@ -85,7 +81,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 		len(req.ReferenceImages),
 	)
 
-	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r, h.cfg), req)
+	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r), req)
 	if err != nil {
 		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
@@ -140,7 +136,7 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request, principal m
 }
 
 func (h *Handler) RetryHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	resp, err := h.generation.Retry(r.Context(), principal, resolveMainServiceBaseURL(r, h.cfg), r.PathValue("id"))
+	resp, err := h.generation.Retry(r.Context(), principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -159,6 +155,6 @@ func (h *Handler) CancelHistory(w http.ResponseWriter, r *http.Request, principa
 	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
 }
 
-func resolveMainServiceBaseURL(r *http.Request, cfg config.Config) string {
+func resolveMainServiceBaseURL(r *http.Request) string {
 	return httpx.ResolveRequestBaseURL(r)
 }

@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
-	hostsession "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/session"
+	hostprincipal "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
 
@@ -30,9 +30,9 @@ type Plugin interface {
 }
 
 type RouteDeps struct {
-	Config            config.Config
-	SessionMiddleware *hostsession.Middleware
-	History           *service.HistoryService
+	Config  config.Config
+	Auth    *hostprincipal.Middleware
+	History *service.HistoryService
 }
 
 type RoutablePlugin interface {
