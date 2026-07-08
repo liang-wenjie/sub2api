@@ -126,14 +126,20 @@ func TestRouter_LaunchCreatesSessionFromMainSiteAuthToken(t *testing.T) {
 	defer mainSite.Close()
 
 	cfg := config.Config{
-		ListenAddr:     ":0",
-		SessionTTL:     time.Hour,
-		HistoryEnabled: true,
+		ListenAddr:      ":0",
+		MainSiteBaseURL: mainSite.URL,
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
 	}
 	router := NewRouter(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/launch?session=launch-token&plugin=image-generation&path=/plugins/image-generation", nil)
-	addPublicBaseHeaders(req, mainSite.URL)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	req.Header.Set("Cookie", "token=wrong-cookie")
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Referer", "https://evil.example/path")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "evil.example")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
@@ -167,6 +173,49 @@ func TestRouter_LaunchCreatesSessionFromMainSiteAuthToken(t *testing.T) {
 	}
 	if principal.Plugin != "image-generation" {
 		t.Fatalf("plugin = %q, want %q", principal.Plugin, "image-generation")
+	}
+}
+
+func TestRouter_LaunchIgnoresRequestControlledMainSiteSignals(t *testing.T) {
+	mainSiteHit := false
+	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mainSiteHit = true
+		if r.URL.Path != "/api/v1/auth/me" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/api/v1/auth/me")
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("authorization = %q, want empty", got)
+		}
+		if got := r.Header.Get("Cookie"); got != "token=legit-cookie" {
+			t.Fatalf("cookie = %q, want %q", got, "token=legit-cookie")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"id":51,"email":"user51@example.com","username":"legit-user","role":"user"}}`))
+	}))
+	defer mainSite.Close()
+
+	cfg := config.Config{
+		ListenAddr:      ":0",
+		MainSiteBaseURL: mainSite.URL,
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/launch?plugin=image-generation&path=/plugins/image-generation&src_host=https%3A%2F%2Fevil.example", nil)
+	req.Header.Set("Authorization", "Bearer attack-token")
+	req.Header.Set("Cookie", "token=legit-cookie")
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Referer", "https://evil.example/path")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "evil.example")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("launch status = %d, want %d; body=%s", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	if !mainSiteHit {
+		t.Fatal("main site was not contacted")
 	}
 }
 
@@ -657,7 +706,7 @@ func TestRouter_ImageGenerationHostedAssets(t *testing.T) {
 	}
 }
 
-func TestRouter_ImageGenerationHostedAssetKeepsEmptyLiveConversation(t *testing.T) {
+func TestRouter_ImageGenerationHostedAssetHidesEmptyDefaultLiveConversation(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:      ":0",
 		SessionTTL:      time.Hour,
@@ -674,11 +723,11 @@ func TestRouter_ImageGenerationHostedAssetKeepsEmptyLiveConversation(t *testing.
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, `D.id===L.value`) {
-		t.Fatal("hosted image app does not preserve the selected empty live conversation")
+	if !strings.Contains(body, `Nt(T.value.filter(D=>D.id!=="conversation-live"||D.messages.length>0),v=>`) {
+		t.Fatal("hosted image app does not limit history items to sent conversations")
 	}
-	if strings.Contains(body, `D.id.startsWith("conversation-live")&&D.messages.length>0)`) {
-		t.Fatal("hosted image app still drops the empty live conversation when history is empty")
+	if strings.Contains(body, `Nt(T.value,v=>`) {
+		t.Fatal("hosted image app still renders the default live conversation directly in history")
 	}
 }
 
@@ -699,11 +748,39 @@ func TestRouter_ImageGenerationHostedAssetDoesNotRestoreComposerAfterSend(t *tes
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, `W(I,w=>({...w,title:w.messages.length===0?p.slice(0,24):w.title,preview:t("imageGeneration.generationWaiting"),messages:[...w.messages,v,$]})),y.value="",g.value=!0;try{`) {
+	if !strings.Contains(body, `W(I,w=>({...w,title:w.messages.length===0?p.slice(0,24):w.title,preview:t("imageGeneration.generationWaiting"),lastUsedAt:N,messages:[...w.messages,v,$]})),y.value="",g.value=!0;try{`) {
 		t.Fatal("hosted image app no longer clears the composer before sending")
 	}
 	if strings.Contains(body, `catch(w){y.value=p,`) {
 		t.Fatal("hosted image app still restores the composer text after send")
+	}
+}
+
+func TestRouter_ImageGenerationHostedAssetShowsConversationLastUsedTime(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:      ":0",
+		SessionTTL:      time.Hour,
+		HistoryEnabled:  true,
+		DevLoginEnabled: true,
+	}
+	router := NewRouter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/assets/app.js", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("hosted asset status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `V("div",{class:"mt-1 flex items-center justify-between gap-3 text-xs"},[V("div",{class:mt(["truncate",v.id===L.value?"text-slate-300":"text-slate-400"])},ie(v.preview||Le(t)("imageGeneration.justNow")),3),V("div",{class:mt(["shrink-0 tabular-nums",v.id===L.value?"text-slate-300":"text-slate-400"])},ie(v.lastUsedAt||Le(t)("imageGeneration.justNow")),3)])`) {
+		t.Fatal("hosted image app does not render the conversation last used time beside the preview")
+	}
+	if !strings.Contains(body, `lastUsedAt:ce(f.updated_at)`) {
+		t.Fatal("hosted image app does not derive remote conversation last used time from updated_at")
+	}
+	if !strings.Contains(body, `W(I,w=>({...w,title:w.messages.length===0?p.slice(0,24):w.title,preview:t("imageGeneration.generationWaiting"),lastUsedAt:N,messages:[...w.messages,v,$]})),y.value="",g.value=!0;try{`) {
+		t.Fatal("hosted image app does not update local conversation last used time when sending")
 	}
 }
 
