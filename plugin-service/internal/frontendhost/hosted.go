@@ -74,7 +74,6 @@ const pluginAuthBridgeScript = `<script>
 type HostedPluginOptions struct {
 	PluginKey   string
 	WebRoot     string
-	PatchAppJS  func(string) string
 	HTMLHeadTag string
 }
 
@@ -113,10 +112,6 @@ func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
 	assets := http.StripPrefix(assetPrefix, http.FileServer(http.Dir(assetRoot)))
 	mux.Handle("GET "+assetPrefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		disableFrontendCache(w)
-		if strings.HasSuffix(r.URL.Path, "/app.js") && opts.PatchAppJS != nil {
-			servePatchedAppJS(w, filepath.Join(assetRoot, "app.js"), opts.PatchAppJS)
-			return
-		}
 		assets.ServeHTTP(w, r)
 	}))
 }
@@ -131,22 +126,6 @@ func injectPluginAuthBridge(html string, headTag string) string {
 		return html
 	}
 	return html[:index] + pluginAuthBridgeScript + "\n  " + html[index:]
-}
-
-func servePatchedAppJS(w http.ResponseWriter, assetPath string, patch func(string) string) {
-	body, err := os.ReadFile(assetPath)
-	if err != nil {
-		http.Error(w, "plugin asset not found", http.StatusNotFound)
-		return
-	}
-
-	js := string(body)
-	if patch != nil {
-		js = patch(js)
-	}
-
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	_, _ = w.Write([]byte(js))
 }
 
 func disableFrontendCache(w http.ResponseWriter) {

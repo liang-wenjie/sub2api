@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestRegisterHostedPluginInjectsAuthBridgeAndPatchedAssets(t *testing.T) {
+func TestRegisterHostedPluginInjectsAuthBridgeAndServesAssets(t *testing.T) {
 	webRoot := t.TempDir()
 	assetRoot := filepath.Join(webRoot, "assets")
 	if err := os.MkdirAll(assetRoot, 0o755); err != nil {
@@ -29,9 +29,6 @@ func TestRegisterHostedPluginInjectsAuthBridgeAndPatchedAssets(t *testing.T) {
 	RegisterHostedPlugin(mux, HostedPluginOptions{
 		PluginKey: "demo",
 		WebRoot:   webRoot,
-		PatchAppJS: func(input string) string {
-			return strings.Replace(input, `"demo"`, `"patched"`, 1)
-		},
 	})
 
 	pageReq := httptest.NewRequest(http.MethodGet, "/plugins/demo", nil)
@@ -61,8 +58,8 @@ func TestRegisterHostedPluginInjectsAuthBridgeAndPatchedAssets(t *testing.T) {
 	if assetRec.Code != http.StatusOK {
 		t.Fatalf("asset status = %d, want %d; body=%s", assetRec.Code, http.StatusOK, assetRec.Body.String())
 	}
-	if !strings.Contains(assetRec.Body.String(), `"patched"`) {
-		t.Fatalf("patched asset body = %q", assetRec.Body.String())
+	if !strings.Contains(assetRec.Body.String(), `"demo"`) {
+		t.Fatalf("asset body = %q", assetRec.Body.String())
 	}
 }
 

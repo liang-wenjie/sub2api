@@ -3,6 +3,8 @@ package imagegeneration
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,7 +34,7 @@ func TestFrontendInjectsPluginAuthBridgeScript(t *testing.T) {
 	}
 }
 
-func TestFrontendPatchesImageGenerationHistoryRecords(t *testing.T) {
+func TestFrontendServesBundledImageGenerationHistoryRecordFixes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterFrontend(mux)
 
@@ -53,11 +55,30 @@ func TestFrontendPatchesImageGenerationHistoryRecords(t *testing.T) {
 		`W(I,w=>({...w,title:w.messages.length===0?p.slice(0,24):w.title,preview:t("imageGeneration.generationWaiting"),lastUsedAt:N,messages:[...w.messages,v,$]})),y.value="",g.value=!0;try{`,
 	} {
 		if !strings.Contains(body, needle) {
-			t.Fatalf("patched frontend asset missing %q", needle)
+			t.Fatalf("frontend asset missing bundled fix %q", needle)
 		}
 	}
 
 	if strings.Contains(body, `Nt(T.value,v=>`) {
-		t.Fatal("patched frontend asset still renders the default live conversation directly in history")
+		t.Fatal("frontend asset still renders the default live conversation directly in history")
+	}
+}
+
+func TestBundledFrontendAssetContainsHistoryRecordFixes(t *testing.T) {
+	bodyBytes, err := os.ReadFile(filepath.Join(webRoot(), "assets", "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := string(bodyBytes)
+	for _, needle := range []string{
+		`Nt(T.value.filter(D=>D.id!=="conversation-live"||D.messages.length>0),v=>`,
+		`lastUsedAt:ce(f.updated_at)`,
+		"function M(){const f=`conversation-live-${Date.now()}`,p=new Date().toLocaleString();T.value.unshift({id:f,title:t(\"imageGeneration.conversationFallbackTitle\"),preview:\"\",lastUsedAt:p,messages:[],referenceImages:[]}),L.value=f,y.value=\"\"}",
+		`W(I,w=>({...w,title:w.messages.length===0?p.slice(0,24):w.title,preview:t("imageGeneration.generationWaiting"),lastUsedAt:N,messages:[...w.messages,v,$]})),y.value="",g.value=!0;try{`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("bundled frontend asset missing %q", needle)
+		}
 	}
 }
