@@ -773,11 +773,14 @@ func TestRouter_ImageGenerationHostedAssetShowsConversationLastUsedTime(t *testi
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, `V("div",{class:"mt-1 flex items-center justify-between gap-3 text-xs"},[V("div",{class:mt(["truncate",v.id===L.value?"text-slate-300":"text-slate-400"])},ie(v.preview||Le(t)("imageGeneration.justNow")),3),V("div",{class:mt(["shrink-0 tabular-nums",v.id===L.value?"text-slate-300":"text-slate-400"])},ie(v.lastUsedAt||Le(t)("imageGeneration.justNow")),3)])`) {
+	if !strings.Contains(body, `V("div",{class:"mt-1 flex items-center justify-between gap-3 text-xs"},[V("div",{class:mt(["truncate",v.id===L.value?"text-slate-300":"text-slate-400"])},ie(v.preview||"（无内容）"),3),V("div",{class:mt(["shrink-0 tabular-nums",v.id===L.value?"text-slate-300":"text-slate-400"])},ie(v.lastUsedAt||Le(t)("imageGeneration.justNow")),3)])`) {
 		t.Fatal("hosted image app does not render the conversation last used time beside the preview")
 	}
 	if !strings.Contains(body, `lastUsedAt:ce(f.updated_at)`) {
 		t.Fatal("hosted image app does not derive remote conversation last used time from updated_at")
+	}
+	if !strings.Contains(body, `function M(){const f=`+"`"+`conversation-live-${Date.now()}`+"`"+`,p=new Date().toLocaleString();T.value.unshift({id:f,title:t("imageGeneration.conversationFallbackTitle"),preview:"",lastUsedAt:p,messages:[],referenceImages:[]}),L.value=f,y.value=""}`) {
+		t.Fatal("hosted image app does not stamp newly created empty conversations with creation time")
 	}
 	if !strings.Contains(body, `W(I,w=>({...w,title:w.messages.length===0?p.slice(0,24):w.title,preview:t("imageGeneration.generationWaiting"),lastUsedAt:N,messages:[...w.messages,v,$]})),y.value="",g.value=!0;try{`) {
 		t.Fatal("hosted image app does not update local conversation last used time when sending")
