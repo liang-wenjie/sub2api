@@ -19,10 +19,12 @@ const (
 	defaultPluginServicePort     = "8091"
 	localhostPluginServiceHost   = "127.0.0.1"
 	localhostPluginServiceScheme = "http"
+	dockerHostPluginServiceHost  = "host.docker.internal"
 )
 
 var pluginServiceDialTimeout = 200 * time.Millisecond
 var localhostPluginServiceReachableFunc = localhostPluginServiceReachable
+var dockerHostPluginServiceReachableFunc = dockerHostPluginServiceReachable
 
 // RegisterPluginProxyRoutes mounts the plugin-service reverse proxy on the main site.
 func RegisterPluginProxyRoutes(r *gin.Engine, upstreamBaseURL string, jwtAuth middleware.JWTAuthMiddleware) {
@@ -60,6 +62,9 @@ func resolvePluginServiceBaseURL(explicit string) string {
 	}
 	if localhostPluginServiceReachableFunc(port) {
 		return localhostPluginServiceScheme + "://" + localhostPluginServiceHost + ":" + port
+	}
+	if dockerHostPluginServiceReachableFunc(port) {
+		return localhostPluginServiceScheme + "://" + dockerHostPluginServiceHost + ":" + port
 	}
 	if strings.TrimSpace(os.Getenv("PLUGIN_SERVER_PORT")) != "" {
 		return "http://plugin-service:" + port
@@ -184,6 +189,16 @@ func requiresPluginAuthentication(req *http.Request) bool {
 
 func localhostPluginServiceReachable(port string) bool {
 	address := net.JoinHostPort(localhostPluginServiceHost, strings.TrimSpace(port))
+	conn, err := net.DialTimeout("tcp", address, pluginServiceDialTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func dockerHostPluginServiceReachable(port string) bool {
+	address := net.JoinHostPort(dockerHostPluginServiceHost, strings.TrimSpace(port))
 	conn, err := net.DialTimeout("tcp", address, pluginServiceDialTimeout)
 	if err != nil {
 		return false

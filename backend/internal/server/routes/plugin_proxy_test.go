@@ -157,6 +157,23 @@ func TestResolvePluginServiceBaseURLPrefersReachableLocalhost(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:"+port, resolvePluginServiceBaseURL(""))
 }
 
+func TestResolvePluginServiceBaseURLPrefersReachableDockerHost(t *testing.T) {
+	originalLocalReachable := localhostPluginServiceReachableFunc
+	originalDockerHostReachable := dockerHostPluginServiceReachableFunc
+	localhostPluginServiceReachableFunc = func(string) bool { return false }
+	dockerHostPluginServiceReachableFunc = func(string) bool { return true }
+	t.Cleanup(func() {
+		localhostPluginServiceReachableFunc = originalLocalReachable
+		dockerHostPluginServiceReachableFunc = originalDockerHostReachable
+	})
+
+	port := strconv.Itoa(19091)
+	t.Setenv("PLUGIN_SERVICE_BASE_URL", "")
+	t.Setenv("PLUGIN_SERVER_PORT", port)
+
+	require.Equal(t, "http://host.docker.internal:"+port, resolvePluginServiceBaseURL(""))
+}
+
 func TestPluginProxyRoutesAuthenticateEmbeddedTokenBeforeForwarding(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
