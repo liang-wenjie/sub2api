@@ -496,6 +496,36 @@
       overflow-y: auto;
     }
 
+    #app [data-testid="image-chat-composer"] textarea + div {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.375rem;
+    }
+
+    #app [data-testid="image-chat-composer"] textarea + div > button[type="button"],
+    #app [data-testid="image-chat-composer"] textarea + div > select {
+      width: auto !important;
+      min-width: 0 !important;
+      max-width: 100%;
+      height: 36px !important;
+      min-height: 36px !important;
+      flex: 0 0 auto;
+      font-size: 13px !important;
+      line-height: 1.25 !important;
+      padding-left: 0.75rem !important;
+      padding-right: 0.75rem !important;
+      white-space: nowrap;
+    }
+
+    #app [data-testid="image-chat-composer"] textarea + div > select {
+      padding-right: 1.75rem !important;
+      height: 40px !important;
+      min-height: 40px !important;
+      line-height: normal !important;
+    }
+
     @media (max-width: 1023px) {
       #app [data-testid="image-workspace"] {
         flex-direction: column;
@@ -528,6 +558,116 @@
 
       #app [data-testid="image-chat-composer"] {
         border-radius: 20px;
+      }
+    }
+
+    @media (max-width: 767px), (max-height: 720px) {
+      #app [data-testid="image-chat-thread"] > div:first-child {
+        padding: 0.875rem !important;
+      }
+
+      #app [data-testid="image-chat-thread"] > div:first-child:not(:has(article)) {
+        justify-content: flex-start;
+        padding-top: 1.5rem !important;
+      }
+
+      #app [data-testid="image-chat-composer"] {
+        padding: 0.75rem !important;
+        border-radius: 16px !important;
+      }
+
+      #app [data-testid="image-chat-composer"] > div:first-child {
+        gap: 0.625rem;
+      }
+
+      #app [data-testid="image-chat-composer"] > div:first-child > div:last-child {
+        gap: 0.625rem;
+      }
+
+      #app [data-testid="image-chat-composer"] textarea {
+        min-height: 56px !important;
+        max-height: 20dvh;
+      }
+
+      #app label:has(> [data-testid="reference-image-input"]) {
+        width: 56px !important;
+        height: 56px !important;
+        min-width: 56px;
+        border-radius: 14px !important;
+      }
+
+      #app [data-testid="reference-image-input"] + img,
+      #app [data-testid="reference-image-preview"] {
+        border-radius: 14px;
+      }
+
+      #app [data-testid="reference-image-input"]::file-selector-button {
+        font-size: 0.75rem;
+      }
+
+      #app [data-testid="image-chat-composer"] textarea + div {
+        gap: 0.375rem;
+      }
+
+      #app [data-testid="image-model-select"] {
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 100%;
+      }
+
+      #app [data-testid="image-chat-composer"] [class*="tabular-nums"] {
+        height: 36px !important;
+        min-height: 36px !important;
+        flex: 0 0 auto;
+        font-size: 13px !important;
+      }
+
+      #app [data-testid="image-chat-composer"] [class*="ml-auto"] {
+        margin-left: auto !important;
+        align-self: flex-end;
+        flex: 0 0 auto;
+        gap: 0.375rem;
+      }
+
+      #app [data-testid="image-send-button"] {
+        width: 40px !important;
+        height: 40px !important;
+        font-size: 1rem !important;
+      }
+
+      #app [data-testid="image-chat-composer"] [class*="max-w-[132px]"] {
+        display: none;
+      }
+    }
+
+    @media (max-width: 640px) {
+      #app [data-testid="image-chat-composer"] > div:first-child {
+        align-items: flex-start;
+      }
+
+      #app [data-testid="image-chat-composer"] > div:first-child > div:last-child {
+        width: auto;
+        min-width: 0;
+        flex: 1 1 0;
+      }
+
+      #app label:has(> [data-testid="reference-image-input"]) {
+        width: 48px !important;
+        height: 48px !important;
+        min-width: 48px;
+      }
+
+      #app [data-testid="image-chat-composer"] textarea + div > button[type="button"],
+      #app [data-testid="image-chat-composer"] textarea + div > select,
+      #app [data-testid="image-model-select"] {
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 100%;
+      }
+
+      #app [data-testid="image-chat-composer"] [class*="ml-auto"] {
+        margin-left: auto !important;
+        align-self: flex-end;
       }
     }
 
