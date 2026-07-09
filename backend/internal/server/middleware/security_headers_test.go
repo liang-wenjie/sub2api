@@ -151,6 +151,33 @@ func TestSecurityHeaders(t *testing.T) {
 		assert.Empty(t, GetNonceFromContext(c))
 	})
 
+	t.Run("plugin_proxy_routes_skip_frame_blocking_headers", func(t *testing.T) {
+		cfg := config.CSPConfig{
+			Enabled: true,
+			Policy:  "default-src 'self'; script-src 'self' __CSP_NONCE__",
+		}
+		middleware := SecurityHeaders(cfg, nil)
+
+		for _, path := range []string{
+			"/plugins/image-generation",
+			"/plugins/image-generation/api/generate",
+		} {
+			t.Run(path, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(w)
+				c.Request = httptest.NewRequest(http.MethodGet, path, nil)
+
+				middleware(c)
+
+				assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+				assert.Equal(t, "strict-origin-when-cross-origin", w.Header().Get("Referrer-Policy"))
+				assert.Empty(t, w.Header().Get("X-Frame-Options"))
+				assert.Empty(t, w.Header().Get("Content-Security-Policy"))
+				assert.Empty(t, GetNonceFromContext(c))
+			})
+		}
+	})
+
 	t.Run("csp_enabled_with_nonce_placeholder", func(t *testing.T) {
 		cfg := config.CSPConfig{
 			Enabled: true,
@@ -342,6 +369,13 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		assert.Contains(t, enhanced, AirwallexDemoCheckoutDomain)
 		assert.Contains(t, enhanced, "style-src 'self'")
 		assert.Contains(t, enhanced, "frame-src 'self'")
+	})
+
+	t.Run("allows_same_origin_iframes_for_plugin_proxy_pages", func(t *testing.T) {
+		policy := "default-src 'self'; script-src 'self' __CSP_NONCE__; frame-src https://example.com"
+		enhanced := enhanceCSPPolicy(policy)
+
+		assert.Equal(t, 1, countDirectiveValue(enhanced, "frame-src", "'self'"))
 	})
 
 	t.Run("does_not_duplicate_airwallex_domains", func(t *testing.T) {

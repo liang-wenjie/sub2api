@@ -34,6 +34,7 @@ var requiredCSPDirectiveValues = []struct {
 	directive string
 	value     string
 }{
+	{"frame-src", "'self'"},
 	{"script-src", CloudflareInsightsDomain},
 	{"script-src", StripeDomain},
 	{"frame-src", StripeDomain},
@@ -92,8 +93,13 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 		}
 
 		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-Frame-Options", "DENY")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		if isPluginProxyRoutePath(c) {
+			c.Next()
+			return
+		}
+
+		c.Header("X-Frame-Options", "DENY")
 		if isAPIRoutePath(c) {
 			c.Next()
 			return
@@ -113,6 +119,14 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 		}
 		c.Next()
 	}
+}
+
+func isPluginProxyRoutePath(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	path := c.Request.URL.Path
+	return strings.HasPrefix(path, "/plugins/")
 }
 
 func isAPIRoutePath(c *gin.Context) bool {

@@ -17,6 +17,7 @@ This directory contains files for deploying Sub2API on Linux servers.
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `remote_deploy.py` | SSH one-click remote deployment script |
+| `remote_deploy_plugin_service.py` | SSH deploy script for plugin-service only |
 | `.remote.example` | Remote server SSH configuration template |
 | `.env.example` | Docker environment variables template |
 | `DOCKER.md` | Docker Hub documentation |
@@ -87,7 +88,7 @@ echo "JWT_SECRET=${JWT_SECRET}" >> .env
 echo "TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}" >> .env
 
 # Create data directories
-mkdir -p data postgres_data redis_data
+mkdir -p data plugin_data postgres_data redis_data
 
 # Start all services using local directory version
 docker compose -f docker-compose.local.yml up -d
@@ -115,6 +116,12 @@ cp deploy/.env.example deploy/.env
 python deploy/remote_deploy.py
 ```
 
+To update only the plugin service on the remote host:
+
+```bash
+python deploy/remote_deploy_plugin_service.py
+```
+
 To deploy the exact source code from your local working tree, build and save a
 local image first, then enable `local_image` mode in `deploy/.remote`:
 
@@ -130,14 +137,29 @@ LOCAL_IMAGE_TAR=deploy/weishaw-sub2api-latest.tar
 python deploy/remote_deploy.py
 ```
 
+For plugin-service local image deployment:
+
+```bash
+docker build -t weishaw/sub2api-plugin-service:latest -f plugin-service/Dockerfile .
+docker save -o deploy/weishaw-sub2api-plugin-service-latest.tar weishaw/sub2api-plugin-service:latest
+
+# deploy/.remote
+IMAGE_SOURCE=local_image
+PLUGIN_LOCAL_IMAGE=weishaw/sub2api-plugin-service:latest
+PLUGIN_LOCAL_IMAGE_TAR=deploy/weishaw-sub2api-plugin-service-latest.tar
+
+python deploy/remote_deploy_plugin_service.py
+```
+
 What the remote deployment script does:
 - Reads server credentials from `deploy/.remote`
 - Uploads the `deploy/` directory contents to the remote server
 - Uploads `deploy/.env` to the remote deployment directory
-- Creates `data/`, `postgres_data/`, and `redis_data/`
-- Runs `docker compose --env-file .env -f docker-compose.local.yml up -d`
-- When `IMAGE_SOURCE=local_image`, uploads `LOCAL_IMAGE_TAR`, runs `docker load`
-  on the remote server, and recreates only the `sub2api` service with the loaded image
+- Creates `data/`, `plugin_data/`, `postgres_data/`, and `redis_data/`
+- Runs `docker compose --env-file .env -f docker-compose.local.yml up -d` for `sub2api` and `plugin-service`
+- When `DEPLOY_TARGET=plugin_service`, updates only the `plugin-service` container
+- When `IMAGE_SOURCE=local_image`, uploads the configured image tar files, runs `docker load`
+  on the remote server, and recreates only the selected services with the loaded images
 - Prints container status and recent logs after deployment
 
 Remote deployment requirements:
@@ -145,6 +167,19 @@ Remote deployment requirements:
 - Docker and Docker Compose are already installed on the remote server
 - Local Docker is installed when using `IMAGE_SOURCE=local_image`
 - Local Python environment has `paramiko` installed
+
+### Plugin Service Remote Deployment Notes
+
+- `docker-compose.yml`, `docker-compose.local.yml`, and `docker-compose.standalone.yml`
+  include `plugin-service` alongside `sub2api`.
+- The shared deployment env should include:
+  ```env
+  PLUGIN_SERVER_PORT=8091
+  PLUGIN_SERVER_IMAGE=weishaw/sub2api-plugin-service:latest
+  ```
+- The main site should forward `/plugins/*` to `plugin-service:${PLUGIN_SERVER_PORT}`.
+- The current plugin history repository is in-memory, so plugin history does not
+  survive a `plugin-service` container restart yet.
 
 Install `paramiko` locally if needed:
 

@@ -1,0 +1,143 @@
+package frontendhost
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+const pluginAuthBridgeScript = `<script>
+    (function () {
+      function getPluginAuthToken() {
+        try {
+          var params = new URLSearchParams(window.location.search);
+          var urlToken = params.get("token") || params.get("session");
+          if (urlToken) {
+            return urlToken;
+          }
+        } catch (error) {}
+
+        try {
+          return window.localStorage.getItem("auth_token") || "";
+        } catch (error) {
+          return "";
+        }
+      }
+
+      function shouldAttachPluginAuth(url) {
+        return /\/plugins\/[^/?#]+\/api(?:\/|$)/.test(url);
+      }
+
+      function mergeHeaders(baseHeaders, extraHeaders) {
+        var headers = new Headers(baseHeaders || {});
+        if (extraHeaders) {
+          new Headers(extraHeaders).forEach(function (value, key) {
+            headers.set(key, value);
+          });
+        }
+        return headers;
+      }
+
+      var originalFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        var requestUrl = typeof input === "string" ? input : (input && input.url) || "";
+        if (!shouldAttachPluginAuth(requestUrl)) {
+          return originalFetch(input, init);
+        }
+
+        var token = getPluginAuthToken();
+        if (!token) {
+          return originalFetch(input, init);
+        }
+
+        if (input instanceof Request) {
+          var requestHeaders = mergeHeaders(input.headers, init && init.headers);
+          if (!requestHeaders.has("Authorization")) {
+            requestHeaders.set("Authorization", "Bearer " + token);
+          }
+          return originalFetch(new Request(input, { headers: requestHeaders }), init);
+        }
+
+        var nextInit = init ? Object.assign({}, init) : {};
+        var headers = mergeHeaders(null, nextInit.headers);
+        if (!headers.has("Authorization")) {
+          headers.set("Authorization", "Bearer " + token);
+        }
+        nextInit.headers = headers;
+        return originalFetch(input, nextInit);
+      };
+    })();
+  </script>`
+
+type HostedPluginOptions struct {
+	PluginKey   string
+	WebRoot     string
+	HTMLHeadTag string
+}
+
+func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
+	pluginKey := strings.TrimSpace(opts.PluginKey)
+	if mux == nil || pluginKey == "" {
+		return
+	}
+
+	webRoot := strings.TrimSpace(opts.WebRoot)
+	if webRoot == "" {
+		return
+	}
+
+	assetRoot := filepath.Join(webRoot, "assets")
+	indexPath := filepath.Join(webRoot, "index.html")
+	pagePath := "/plugins/" + pluginKey
+	assetPrefix := pagePath + "/assets/"
+
+	mux.HandleFunc("GET "+pagePath, func(w http.ResponseWriter, r *http.Request) {
+		disableFrontendCache(w)
+		body, err := os.ReadFile(indexPath)
+		if err != nil {
+			http.Error(w, "plugin frontend not found", http.StatusNotFound)
+			return
+		}
+
+		html := injectPluginAuthBridge(string(body), opts.HTMLHeadTag)
+		html = strings.ReplaceAll(html, assetPrefix+"app.js", assetPrefix+"app.js?v="+assetVersion(assetRoot, "app.js"))
+		html = strings.ReplaceAll(html, assetPrefix+"app.css", assetPrefix+"app.css?v="+assetVersion(assetRoot, "app.css"))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(html))
+	})
+
+	assets := http.StripPrefix(assetPrefix, http.FileServer(http.Dir(assetRoot)))
+	mux.Handle("GET "+assetPrefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		disableFrontendCache(w)
+		assets.ServeHTTP(w, r)
+	}))
+}
+
+func injectPluginAuthBridge(html string, headTag string) string {
+	tag := strings.TrimSpace(headTag)
+	if tag == "" {
+		tag = `<script type="module" crossorigin src="`
+	}
+	index := strings.Index(html, tag)
+	if index < 0 {
+		return html
+	}
+	return html[:index] + pluginAuthBridgeScript + "\n  " + html[index:]
+}
+
+func disableFrontendCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
+func assetVersion(assetRoot string, name string) string {
+	info, err := os.Stat(filepath.Join(assetRoot, name))
+	if err != nil {
+		return "0"
+	}
+	return strconv.FormatInt(info.ModTime().UnixNano(), 10)
+}

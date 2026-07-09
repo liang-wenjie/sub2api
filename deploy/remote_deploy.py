@@ -21,6 +21,7 @@ UPLOAD_EXCLUDED_PARTS = {
     "__pycache__",
     "node_modules",
     "data",
+    "plugin_data",
     "postgres_data",
     "redis_data",
     ".DS_Store",
@@ -58,11 +59,34 @@ class RemoteDeployConfig:
     ssh_port: int
     remote_dir: str
     compose_file: str
+    deploy_target: str
     image_source: str
     local_image: str
     local_image_tar: str
     build_local_image: bool
     local_image_build_args: tuple[str, ...]
+    plugin_local_image: str
+    plugin_local_image_tar: str
+    build_plugin_local_image: bool
+    plugin_local_image_build_args: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DeployPlan:
+    services: tuple[str, ...]
+    force_recreate: bool
+    no_deps: bool
+    health_checks: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ImageAsset:
+    service_name: str
+    image_name: str
+    tar_path: Path
+    build_enabled: bool
+    dockerfile_path: Path
+    build_args: tuple[str, ...]
 
 
 def parse_env_file(env_path: Path) -> dict[str, str]:
@@ -145,6 +169,7 @@ def load_remote_config(env_path: Path = REMOTE_ENV_FILE) -> RemoteDeployConfig:
     ssh_port_text = env_map.get("SSH_PORT", "22").strip()
     remote_dir = env_map.get("REMOTE_DIR", "/opt/sub2api-deploy").strip()
     compose_file = env_map.get("COMPOSE_FILE", "docker-compose.local.yml").strip()
+    deploy_target = env_map.get("DEPLOY_TARGET", "all").strip() or "all"
     image_source = env_map.get("IMAGE_SOURCE", "compose").strip() or "compose"
     local_image = env_map.get("LOCAL_IMAGE", "").strip()
     local_image_tar = env_map.get("LOCAL_IMAGE_TAR", "").strip()
@@ -153,6 +178,14 @@ def load_remote_config(env_path: Path = REMOTE_ENV_FILE) -> RemoteDeployConfig:
         f"{key.removeprefix('LOCAL_IMAGE_BUILD_ARG_')}={value.strip()}"
         for key, value in sorted(env_map.items())
         if key.startswith("LOCAL_IMAGE_BUILD_ARG_") and value.strip()
+    )
+    plugin_local_image = env_map.get("PLUGIN_LOCAL_IMAGE", "").strip()
+    plugin_local_image_tar = env_map.get("PLUGIN_LOCAL_IMAGE_TAR", "").strip()
+    build_plugin_local_image = parse_bool(env_map.get("BUILD_PLUGIN_LOCAL_IMAGE", "false"))
+    plugin_local_image_build_args = tuple(
+        f"{key.removeprefix('PLUGIN_LOCAL_IMAGE_BUILD_ARG_')}={value.strip()}"
+        for key, value in sorted(env_map.items())
+        if key.startswith("PLUGIN_LOCAL_IMAGE_BUILD_ARG_") and value.strip()
     )
 
     if not ssh_host:
@@ -163,13 +196,21 @@ def load_remote_config(env_path: Path = REMOTE_ENV_FILE) -> RemoteDeployConfig:
         raise ValueError("Missing required REMOTE_DIR in deploy/.remote")
     if not compose_file:
         raise ValueError("Missing required COMPOSE_FILE in deploy/.remote")
+    if deploy_target not in {"all", "plugin_service"}:
+        raise ValueError(f"Invalid DEPLOY_TARGET: {deploy_target}")
     if image_source not in {"compose", "local_image"}:
         raise ValueError(f"Invalid IMAGE_SOURCE: {image_source}")
     if image_source == "local_image":
-        if not local_image:
-            raise ValueError("LOCAL_IMAGE must be configured when IMAGE_SOURCE=local_image")
-        if not local_image_tar:
-            raise ValueError("LOCAL_IMAGE_TAR must be configured when IMAGE_SOURCE=local_image")
+        if deploy_target == "all":
+            if not local_image:
+                raise ValueError("LOCAL_IMAGE must be configured when IMAGE_SOURCE=local_image")
+            if not local_image_tar:
+                raise ValueError("LOCAL_IMAGE_TAR must be configured when IMAGE_SOURCE=local_image")
+        if deploy_target == "plugin_service":
+            if not plugin_local_image:
+                raise ValueError("PLUGIN_LOCAL_IMAGE must be configured when IMAGE_SOURCE=local_image")
+            if not plugin_local_image_tar:
+                raise ValueError("PLUGIN_LOCAL_IMAGE_TAR must be configured when IMAGE_SOURCE=local_image")
 
     try:
         ssh_port = int(ssh_port_text)
@@ -189,11 +230,16 @@ def load_remote_config(env_path: Path = REMOTE_ENV_FILE) -> RemoteDeployConfig:
         ssh_port=ssh_port,
         remote_dir=remote_dir,
         compose_file=compose_file,
+        deploy_target=deploy_target,
         image_source=image_source,
         local_image=local_image,
         local_image_tar=local_image_tar,
         build_local_image=build_local_image,
         local_image_build_args=local_image_build_args,
+        plugin_local_image=plugin_local_image,
+        plugin_local_image_tar=plugin_local_image_tar,
+        build_plugin_local_image=build_plugin_local_image,
+        plugin_local_image_build_args=plugin_local_image_build_args,
     )
 
 
@@ -204,42 +250,134 @@ def resolve_local_image_tar_path(config: RemoteDeployConfig, project_root: Path 
     return image_tar_path
 
 
+def resolve_plugin_local_image_tar_path(config: RemoteDeployConfig, project_root: Path = PROJECT_ROOT) -> Path:
+    image_tar_path = Path(config.plugin_local_image_tar).expanduser()
+    if not image_tar_path.is_absolute():
+        image_tar_path = project_root / image_tar_path
+    return image_tar_path
+
+
 def build_compose_up_command(
     remote_dir: str,
     compose_file: str,
-    image_source: str,
-    reuse_existing_data_services: bool,
+    services: tuple[str, ...],
+    force_recreate: bool,
+    no_deps: bool,
 ) -> str:
     quoted_remote_dir = shlex.quote(remote_dir)
     quoted_compose = shlex.quote(compose_file)
-    if image_source == "local_image" or reuse_existing_data_services:
-        return (
-            f"cd {quoted_remote_dir} && "
-            f"docker compose --env-file .env -f {quoted_compose} up -d --no-deps --force-recreate sub2api"
-        )
+    command_parts = [
+        f"cd {quoted_remote_dir} && docker compose --env-file .env -f {quoted_compose} up -d"
+    ]
+    if no_deps:
+        command_parts.append("--no-deps")
+    if force_recreate:
+        command_parts.append("--force-recreate")
+    command_parts.extend(shlex.quote(service) for service in services)
+    return " ".join(command_parts)
+
+
+def build_compose_pull_command(
+    remote_dir: str,
+    compose_file: str,
+    services: tuple[str, ...],
+) -> str:
+    quoted_remote_dir = shlex.quote(remote_dir)
+    quoted_compose = shlex.quote(compose_file)
     return (
-        f"cd {quoted_remote_dir} && "
-        f"docker compose --env-file .env -f {quoted_compose} up -d"
+        f"cd {quoted_remote_dir} && docker compose --env-file .env -f {quoted_compose} pull "
+        + " ".join(shlex.quote(service) for service in services)
     )
 
 
-def build_docker_build_command(config: RemoteDeployConfig, project_root: Path = PROJECT_ROOT) -> list[str]:
-    command = ["docker", "build", "-t", config.local_image, "-f", str(project_root / "Dockerfile")]
-    for build_arg in config.local_image_build_args:
+def get_deploy_plan(config: RemoteDeployConfig, reuse_existing_data_services: bool) -> DeployPlan:
+    return get_deploy_plan_with_assets(config, reuse_existing_data_services, ())
+
+
+def get_deploy_plan_with_assets(
+    config: RemoteDeployConfig,
+    reuse_existing_data_services: bool,
+    local_image_services: tuple[str, ...],
+) -> DeployPlan:
+    if config.deploy_target == "plugin_service":
+        return DeployPlan(
+            services=("plugin-service",),
+            force_recreate=True,
+            no_deps=True,
+            health_checks=(("plugin-service", "plugin-service"),),
+        )
+
+    services = ("sub2api", "plugin-service")
+    if config.image_source == "local_image":
+        if local_image_services:
+            services = tuple(service for service in services if service in local_image_services)
+        else:
+            services = ("sub2api",)
+
+    force_recreate = config.image_source == "local_image" or reuse_existing_data_services
+    no_deps = force_recreate
+    return DeployPlan(
+        services=services,
+        force_recreate=force_recreate,
+        no_deps=no_deps,
+        health_checks=tuple(
+            (service_name, service_name) for service_name in services
+        ),
+    )
+
+
+def build_docker_build_command(
+    image_name: str,
+    dockerfile_path: Path,
+    build_args: tuple[str, ...],
+    project_root: Path = PROJECT_ROOT,
+) -> list[str]:
+    command = ["docker", "build", "-t", image_name, "-f", str(dockerfile_path)]
+    for build_arg in build_args:
         command.extend(["--build-arg", build_arg])
     command.append(str(project_root))
     return command
 
 
-def build_docker_save_command(config: RemoteDeployConfig, project_root: Path = PROJECT_ROOT) -> list[str]:
-    return ["docker", "save", "-o", str(resolve_local_image_tar_path(config, project_root)), config.local_image]
+def build_docker_save_command(image_name: str, image_tar_path: Path) -> list[str]:
+    return ["docker", "save", "-o", str(image_tar_path), image_name]
 
 
-def build_local_source_image(config: RemoteDeployConfig, project_root: Path = PROJECT_ROOT) -> None:
-    print(f"Building local source image: {config.local_image}")
-    subprocess.run(build_docker_build_command(config, project_root), check=True)
-    print(f"Saving local source image: {config.local_image_tar}")
-    subprocess.run(build_docker_save_command(config, project_root), check=True)
+def get_image_assets(config: RemoteDeployConfig, project_root: Path = PROJECT_ROOT) -> tuple[ImageAsset, ...]:
+    assets: list[ImageAsset] = []
+    if config.deploy_target == "all":
+        assets.append(
+            ImageAsset(
+                service_name="sub2api",
+                image_name=config.local_image,
+                tar_path=resolve_local_image_tar_path(config, project_root),
+                build_enabled=config.build_local_image,
+                dockerfile_path=project_root / "Dockerfile",
+                build_args=config.local_image_build_args,
+            )
+        )
+    if config.plugin_local_image and config.plugin_local_image_tar:
+        assets.append(
+            ImageAsset(
+                service_name="plugin-service",
+                image_name=config.plugin_local_image,
+                tar_path=resolve_plugin_local_image_tar_path(config, project_root),
+                build_enabled=config.build_plugin_local_image,
+                dockerfile_path=project_root / "plugin-service" / "Dockerfile",
+                build_args=config.plugin_local_image_build_args,
+            )
+        )
+    return tuple(assets)
+
+
+def build_local_source_image(asset: ImageAsset, project_root: Path = PROJECT_ROOT) -> None:
+    print(f"Building local source image for {asset.service_name}: {asset.image_name}")
+    subprocess.run(
+        build_docker_build_command(asset.image_name, asset.dockerfile_path, asset.build_args, project_root),
+        check=True,
+    )
+    print(f"Saving local source image for {asset.service_name}: {asset.tar_path}")
+    subprocess.run(build_docker_save_command(asset.image_name, asset.tar_path), check=True)
 
 
 def iter_upload_paths(project_root: Path = PROJECT_ROOT) -> Iterable[Path]:
@@ -491,6 +629,15 @@ def print_remote_runtime_diagnostics(client: object, remote_dir: str, compose_fi
         print("\nDocker port mapping:\n")
         print(port_binding)
 
+    plugin_port_binding = try_exec_remote_command(
+        client,
+        "docker port plugin-service 8091",
+        timeout=30,
+    )
+    if plugin_port_binding:
+        print("\nPlugin service port mapping:\n")
+        print(plugin_port_binding)
+
     listeners = try_exec_remote_command(
         client,
         "sh -lc 'ss -lntp 2>/dev/null | grep 8080 || netstat -lntp 2>/dev/null | grep 8080 || true'",
@@ -524,17 +671,17 @@ def deploy_to_remote(config: RemoteDeployConfig) -> None:
     """
 
     ensure_runtime_env_exists()
-    if config.image_source == "local_image" and config.build_local_image:
-        build_local_source_image(config)
-
-    local_image_tar_path = None
+    image_assets: tuple[ImageAsset, ...] = ()
     if config.image_source == "local_image":
-        local_image_tar_path = resolve_local_image_tar_path(config)
-        if not local_image_tar_path.is_file():
-            raise FileNotFoundError(
-                f"Local image tar not found: {local_image_tar_path}. "
-                f"Build and save {config.local_image} first."
-            )
+        image_assets = get_image_assets(config)
+        for asset in image_assets:
+            if asset.build_enabled:
+                build_local_source_image(asset)
+            if not asset.tar_path.is_file():
+                raise FileNotFoundError(
+                    f"Local image tar not found for {asset.service_name}: {asset.tar_path}. "
+                    f"Build and save {asset.image_name} first."
+                )
 
     archive = build_deploy_archive()
     client = connect_ssh(config)
@@ -542,7 +689,8 @@ def deploy_to_remote(config: RemoteDeployConfig) -> None:
     quoted_remote_dir = shlex.quote(config.remote_dir)
 
     try:
-        total_steps = 8 if config.image_source == "local_image" else 6
+        plan = get_deploy_plan_with_assets(config, False, ())
+        total_steps = 6 + (len(image_assets) * 2 if config.image_source == "local_image" else 0)
         print(f"[1/{total_steps}] Ensuring remote directory: {config.remote_dir}")
         exec_remote_command(client, f"mkdir -p {quoted_remote_dir}")
 
@@ -564,48 +712,68 @@ def deploy_to_remote(config: RemoteDeployConfig) -> None:
         print(f"[5/{total_steps}] Creating data directories...")
         exec_remote_command(
             client,
-            f"cd {quoted_remote_dir} && mkdir -p data postgres_data redis_data",
+            f"cd {quoted_remote_dir} && mkdir -p data postgres_data redis_data plugin_data",
             timeout=60,
         )
 
         reuse_existing_data_services = remote_container_exists(client, "sub2api-postgres") or remote_container_exists(
             client, "sub2api-redis"
         )
-        if reuse_existing_data_services:
-            print("Detected existing postgres/redis containers, will recreate only sub2api.")
+        plan = get_deploy_plan_with_assets(
+            config,
+            reuse_existing_data_services,
+            tuple(asset.service_name for asset in image_assets),
+        )
+        if reuse_existing_data_services and config.deploy_target != "plugin_service":
+            print("Detected existing postgres/redis containers, will recreate app services only.")
 
-        if config.image_source == "local_image" and local_image_tar_path is not None:
-            remote_image_tar_path = f"{config.remote_dir.rstrip('/')}/{local_image_tar_path.name}"
-            print(f"[6/{total_steps}] Uploading local image tar: {local_image_tar_path.name}")
-            sftp.put(str(local_image_tar_path), remote_image_tar_path)
+        current_step = 6
+        if config.image_source == "local_image":
+            for asset in image_assets:
+                remote_image_tar_path = f"{config.remote_dir.rstrip('/')}/{asset.tar_path.name}"
+                print(f"[{current_step}/{total_steps}] Uploading local image tar for {asset.service_name}: {asset.tar_path.name}")
+                sftp.put(str(asset.tar_path), remote_image_tar_path)
+                current_step += 1
 
-            print(f"[7/{total_steps}] Loading local image on remote: {config.local_image}")
-            load_output = exec_remote_command(
-                client,
-                f"cd {quoted_remote_dir} && docker load -i {shlex.quote(local_image_tar_path.name)}",
-                timeout=1800,
-            )
-            if load_output:
-                print(load_output)
+                print(f"[{current_step}/{total_steps}] Loading local image on remote for {asset.service_name}: {asset.image_name}")
+                load_output = exec_remote_command(
+                    client,
+                    f"cd {quoted_remote_dir} && docker load -i {shlex.quote(asset.tar_path.name)}",
+                    timeout=1800,
+                )
+                if load_output:
+                    print(load_output)
+                current_step += 1
 
-            print(f"[8/{total_steps}] Starting Docker Compose with local image...")
+            print(f"[{current_step}/{total_steps}] Starting Docker Compose with local image...")
         else:
-            print(f"[6/{total_steps}] Starting Docker Compose...")
+            print(f"[{current_step}/{total_steps}] Starting Docker Compose...")
+            if config.deploy_target == "plugin_service":
+                pull_output = exec_remote_command(
+                    client,
+                    build_compose_pull_command(config.remote_dir, config.compose_file, plan.services),
+                    timeout=1200,
+                )
+                if pull_output:
+                    print(pull_output)
 
         exec_remote_command(
             client,
             build_compose_up_command(
                 config.remote_dir,
                 config.compose_file,
-                config.image_source,
-                reuse_existing_data_services,
+                plan.services,
+                plan.force_recreate,
+                plan.no_deps,
             ),
             timeout=1200,
         )
 
-        print("\nWaiting for sub2api container health...")
-        final_status = wait_for_container_health(client, "sub2api")
-        print(f"sub2api health status: {final_status}\n")
+        print("")
+        for service_name, container_name in plan.health_checks:
+            print(f"Waiting for {service_name} container health...")
+            final_status = wait_for_container_health(client, container_name)
+            print(f"{service_name} health status: {final_status}\n")
         print_remote_runtime_diagnostics(client, config.remote_dir, config.compose_file)
     finally:
         sftp.close()
