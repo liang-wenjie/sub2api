@@ -9,6 +9,9 @@
   <script>
     (function () {
       var emptyLabel = "\u6682\u65e0\u53ef\u7528 key";
+      var manualHistoryCollapsed = false;
+      var autoHistoryCollapsed = false;
+      var historyLayoutObserver = null;
 
       function ensureEmptyKeyOption() {
         var select = document.querySelector('[data-testid="image-key-select"]');
@@ -40,6 +43,169 @@
           existingPlaceholder.textContent = emptyLabel;
           existingPlaceholder.selected = true;
         }
+      }
+
+      function setHistoryDrawerOpen(open) {
+        var root = document.documentElement;
+        if (!root) {
+          return;
+        }
+        root.classList.toggle('image-history-drawer-open', !!open && isHistoryCollapsed());
+      }
+
+      function isHistoryDrawerOpen() {
+        return document.documentElement.classList.contains('image-history-drawer-open');
+      }
+
+      function isHistoryCollapsed() {
+        return manualHistoryCollapsed || autoHistoryCollapsed;
+      }
+
+      function syncHistoryDrawerState() {
+        var root = document.documentElement;
+        if (!root) {
+          return;
+        }
+
+        var collapsed = isHistoryCollapsed();
+        root.classList.toggle('image-history-collapsed', collapsed);
+        root.classList.toggle('image-history-auto-collapsed', autoHistoryCollapsed);
+        root.classList.toggle('image-history-manual-collapsed', manualHistoryCollapsed);
+        if (!collapsed) {
+          root.classList.remove('image-history-drawer-open');
+        }
+
+        var inlineButton = document.querySelector('[data-testid="history-inline-collapse"]');
+        if (inlineButton instanceof HTMLButtonElement) {
+          inlineButton.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+
+        var floatingButton = document.querySelector('[data-testid="history-drawer-toggle"]');
+        if (floatingButton instanceof HTMLButtonElement) {
+          floatingButton.setAttribute('aria-expanded', isHistoryDrawerOpen() ? 'true' : 'false');
+        }
+      }
+
+      function toggleHistoryDrawer() {
+        setHistoryDrawerOpen(!isHistoryDrawerOpen());
+        syncHistoryDrawerState();
+      }
+
+      function closeHistoryDrawer() {
+        setHistoryDrawerOpen(false);
+        syncHistoryDrawerState();
+      }
+
+      function collapseHistoryManually() {
+        manualHistoryCollapsed = true;
+        closeHistoryDrawer();
+      }
+
+      function expandHistoryFromDrawer() {
+        if (!autoHistoryCollapsed) {
+          manualHistoryCollapsed = false;
+        }
+        setHistoryDrawerOpen(true);
+        syncHistoryDrawerState();
+      }
+
+      function updateAutoHistoryCollapsed() {
+        var workspace = document.querySelector('[data-testid="image-workspace"]');
+        if (!(workspace instanceof HTMLElement)) {
+          return;
+        }
+
+        var width = workspace.getBoundingClientRect().width;
+        autoHistoryCollapsed = width < 1024;
+        syncHistoryDrawerState();
+      }
+
+      function ensureHistoryDrawerChrome() {
+        var history = document.querySelector('[data-testid="image-history"]');
+        if (!(history instanceof HTMLElement)) {
+          return;
+        }
+
+        var parent = history.parentElement;
+        if (!(parent instanceof HTMLElement)) {
+          return;
+        }
+
+        var topbar = history.querySelector('[data-testid="history-drawer-topbar"]');
+        if (!(topbar instanceof HTMLElement)) {
+          topbar = document.createElement('div');
+          topbar.setAttribute('data-testid', 'history-drawer-topbar');
+          topbar.className = 'image-history-drawer-topbar';
+
+          var inlineButton = document.createElement('button');
+          inlineButton.type = 'button';
+          inlineButton.setAttribute('data-testid', 'history-inline-collapse');
+          inlineButton.setAttribute('aria-label', 'Collapse history sidebar');
+          inlineButton.setAttribute('aria-expanded', 'true');
+          inlineButton.className = 'image-history-inline-collapse';
+          inlineButton.innerHTML = '<span aria-hidden="true"></span>';
+          inlineButton.addEventListener('click', function () {
+            collapseHistoryManually();
+          });
+
+          var title = document.createElement('span');
+          title.className = 'image-history-drawer-title';
+          title.textContent = '历史记录';
+
+          topbar.appendChild(title);
+          topbar.appendChild(inlineButton);
+          history.insertBefore(topbar, history.firstChild);
+        }
+
+        var handle = parent.querySelector('[data-testid="history-drawer-toggle"]');
+        if (!(handle instanceof HTMLButtonElement)) {
+          handle = document.createElement('button');
+          handle.type = 'button';
+          handle.setAttribute('data-testid', 'history-drawer-toggle');
+          handle.setAttribute('aria-label', 'Toggle history drawer');
+          handle.setAttribute('aria-expanded', 'false');
+          handle.className = 'image-history-drawer-handle';
+          handle.innerHTML = '<span class="image-history-drawer-handle-text">历史</span>';
+          handle.addEventListener('click', function () {
+            if (manualHistoryCollapsed && !autoHistoryCollapsed) {
+              expandHistoryFromDrawer();
+              return;
+            }
+            toggleHistoryDrawer();
+          });
+          parent.appendChild(handle);
+        }
+
+        var overlay = parent.querySelector('[data-testid="history-drawer-overlay"]');
+        if (!(overlay instanceof HTMLButtonElement)) {
+          overlay = document.createElement('button');
+          overlay.type = 'button';
+          overlay.setAttribute('data-testid', 'history-drawer-overlay');
+          overlay.setAttribute('aria-label', 'Close history drawer');
+          overlay.className = 'image-history-drawer-overlay';
+          overlay.addEventListener('click', function () {
+            closeHistoryDrawer();
+          });
+          parent.appendChild(overlay);
+        }
+
+        history.classList.add('image-history-drawer');
+        history.setAttribute('aria-hidden', 'false');
+        updateAutoHistoryCollapsed();
+      }
+
+      function observeHistoryLayout() {
+        var workspace = document.querySelector('[data-testid="image-workspace"]');
+        if (!(workspace instanceof HTMLElement)) {
+          return;
+        }
+
+        if (!historyLayoutObserver && 'ResizeObserver' in window) {
+          historyLayoutObserver = new ResizeObserver(updateAutoHistoryCollapsed);
+          historyLayoutObserver.observe(workspace);
+        }
+
+        updateAutoHistoryCollapsed();
       }
 
       function getChatScrollArea() {
@@ -85,16 +251,28 @@
 
       document.addEventListener("DOMContentLoaded", function () {
         ensureEmptyKeyOption();
+        ensureHistoryDrawerChrome();
+        observeHistoryLayout();
         observeChatScroll();
 
         var attempts = 0;
         var timer = window.setInterval(function () {
           ensureEmptyKeyOption();
+          ensureHistoryDrawerChrome();
+          observeHistoryLayout();
           attempts += 1;
           if (attempts >= 20) {
             window.clearInterval(timer);
           }
         }, 300);
+
+        document.addEventListener('keydown', function (event) {
+          if (event.key === 'Escape') {
+            closeHistoryDrawer();
+          }
+        });
+
+        window.addEventListener('resize', updateAutoHistoryCollapsed);
       });
     })();
   </script>
@@ -134,6 +312,7 @@
 
     #app [data-testid="image-workspace"] {
       display: flex;
+      position: relative;
       height: 100%;
       min-height: 0 !important;
       border-radius: 0;
@@ -145,9 +324,128 @@
     }
 
     #app [data-testid="image-history"] {
+      position: relative;
+      z-index: 20;
       height: 100%;
       max-height: none;
       overflow: hidden;
+      transform: translateX(0);
+      pointer-events: auto;
+      transition: transform 0.18s ease-out, opacity 0.18s ease-out;
+    }
+
+    #app [data-testid="history-drawer-topbar"] {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    #app .image-history-drawer-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.875rem;
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    #app [data-testid="history-inline-collapse"] {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      width: 2rem;
+      height: 2rem;
+      border: 1px solid #e2e8f0;
+      border-radius: 9999px;
+      background: #ffffff;
+      color: #0f172a;
+      cursor: pointer;
+    }
+
+    #app [data-testid="history-inline-collapse"] span {
+      display: block;
+      width: 0.75rem;
+      height: 0.75rem;
+      border: 2px solid currentColor;
+      border-right: 0;
+      border-bottom: 0;
+      transform: rotate(-45deg);
+    }
+
+    #app [data-testid="history-drawer-toggle"] {
+      position: fixed;
+      left: 0;
+      top: max(1rem, env(safe-area-inset-top));
+      z-index: 30;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      width: 2.75rem;
+      height: 2.75rem;
+      padding: 0;
+      border-radius: 0 9999px 9999px 0;
+      border: 1px solid #e2e8f0;
+      border-left: 0;
+      background: #ffffff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+    }
+
+    #app [data-testid="history-drawer-toggle"] .image-history-drawer-handle-text {
+      display: none;
+    }
+
+    #app [data-testid="history-drawer-toggle"]::before {
+      content: '';
+      width: 1rem;
+      height: 1rem;
+      border-radius: 9999px;
+      border: 2px solid #0f172a;
+      border-left: 0;
+      border-top: 0;
+      transform: rotate(135deg);
+    }
+
+    #app [data-testid="history-drawer-overlay"] {
+      position: fixed;
+      inset: 0;
+      z-index: 15;
+      display: none;
+      border: 0;
+      background: rgba(15, 23, 42, 0.4);
+      cursor: pointer;
+    }
+
+    html.image-history-collapsed #app [data-testid="image-history"] {
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: min(88vw, 320px);
+      max-width: none;
+      border-right: 1px solid #e2e8f0;
+      border-bottom: 0;
+      box-shadow: 16px 0 32px rgba(15, 23, 42, 0.16);
+      transform: translateX(-100%);
+      pointer-events: none;
+    }
+
+    html.image-history-collapsed #app [data-testid="history-drawer-toggle"] {
+      display: inline-flex;
+    }
+
+    html.image-history-collapsed.image-history-drawer-open #app [data-testid="history-drawer-toggle"] {
+      display: none;
+    }
+
+    html.image-history-collapsed.image-history-drawer-open #app [data-testid="image-history"] {
+      transform: translateX(0);
+      pointer-events: auto;
+    }
+
+    html.image-history-collapsed.image-history-drawer-open #app [data-testid="history-drawer-overlay"] {
+      display: block;
     }
 
     #app [data-testid="history-list"] {
@@ -203,14 +501,6 @@
         flex-direction: column;
       }
 
-      #app [data-testid="image-history"] {
-        width: 100%;
-        max-width: none;
-        max-height: 38dvh;
-        border-right: 0;
-        border-bottom: 1px solid #e2e8f0;
-      }
-
       #app [data-testid="image-chat-panel"] {
         flex: 1 1 auto;
       }
@@ -223,8 +513,11 @@
 
     @media (max-width: 767px) {
       #app [data-testid="image-history"] {
-        max-height: 34dvh;
         padding: 0.75rem;
+      }
+
+      html.image-history-collapsed #app [data-testid="image-history"] {
+        width: min(92vw, 340px);
       }
 
       #app [data-testid="image-chat-thread"] > div:first-child {
@@ -235,6 +528,40 @@
 
       #app [data-testid="image-chat-composer"] {
         border-radius: 20px;
+      }
+    }
+
+    @media (min-width: 1024px) {
+      #app [data-testid="image-history"] {
+        width: 300px;
+        box-shadow: none;
+      }
+
+      html.image-history-collapsed #app [data-testid="image-history"] {
+        width: 300px;
+        box-shadow: 16px 0 32px rgba(15, 23, 42, 0.16);
+      }
+
+      #app [data-testid="history-drawer-toggle"] {
+        width: auto;
+        gap: 0.375rem;
+        padding: 0.625rem 0.75rem;
+        border-radius: 0 9999px 9999px 0;
+      }
+
+      #app [data-testid="history-drawer-toggle"] .image-history-drawer-handle-text {
+        display: inline;
+      }
+
+      #app [data-testid="history-drawer-toggle"]::before {
+        content: '';
+        width: 1rem;
+        height: 1rem;
+        border: 0;
+        border-left: 0;
+        border-top: 0;
+        border-radius: 0;
+        transform: rotate(135deg);
       }
     }
   </style>
