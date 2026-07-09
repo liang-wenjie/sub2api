@@ -6,27 +6,6 @@ import (
 	"testing"
 )
 
-func TestMustLoadLoadsDotEnvFromCurrentDir(t *testing.T) {
-	unsetEnv(t, "PLUGIN_SERVER_PORT")
-
-	tempDir := t.TempDir()
-	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_PORT=19091\n")
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(cwd) }()
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := MustLoad()
-	if cfg.ListenAddr != ":19091" {
-		t.Fatalf("listen addr = %q, want %q", cfg.ListenAddr, ":19091")
-	}
-}
-
 func TestMustLoadLoadsSharedDotEnvFromParentDir(t *testing.T) {
 	unsetEnv(t, "PLUGIN_SERVER_PORT")
 
@@ -51,11 +30,39 @@ func TestMustLoadLoadsSharedDotEnvFromParentDir(t *testing.T) {
 	}
 }
 
+func TestMustLoadIgnoresPluginServiceLocalDotEnv(t *testing.T) {
+	unsetEnv(t, "PLUGIN_SERVER_PORT")
+
+	tempDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tempDir, "plugin-service"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_PORT=18091\n")
+	writeFile(t, filepath.Join(tempDir, "plugin-service", ".env"), "PLUGIN_SERVER_PORT=19091\n")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+	if err := os.Chdir(filepath.Join(tempDir, "plugin-service")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := MustLoad()
+	if cfg.ListenAddr != ":18091" {
+		t.Fatalf("listen addr = %q, want %q", cfg.ListenAddr, ":18091")
+	}
+}
+
 func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 	unsetEnv(t, "PLUGIN_SERVER_PORT")
 
 	tempDir := t.TempDir()
 	writeFile(t, filepath.Join(tempDir, ".env"), "PLUGIN_SERVER_PORT=18091\n")
+	if err := os.MkdirAll(filepath.Join(tempDir, "plugin-service"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Setenv("PLUGIN_SERVER_PORT", "17091"); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +72,7 @@ func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(cwd) }()
-	if err := os.Chdir(tempDir); err != nil {
+	if err := os.Chdir(filepath.Join(tempDir, "plugin-service")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,11 +83,14 @@ func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 }
 
 func TestMustLoadUsesDefaultPortWhenUnset(t *testing.T) {
-	unsetEnv(t, "PLUGIN_SERVER_PORT")
+	unsetEnv(t, "PLUGIN_SERVER_PORT", "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE")
 
 	cfg := MustLoad()
 	if cfg.ListenAddr != ":8091" {
 		t.Fatalf("listen addr = %q, want default %q", cfg.ListenAddr, ":8091")
+	}
+	if cfg.Database.Enabled {
+		t.Fatal("database should be disabled when shared database env is unset")
 	}
 }
 
@@ -94,6 +104,125 @@ func TestMustLoadIgnoresLegacyPluginServiceEnvNames(t *testing.T) {
 	cfg := MustLoad()
 	if cfg.ListenAddr != ":8091" {
 		t.Fatalf("listen addr = %q, want default %q", cfg.ListenAddr, ":8091")
+	}
+}
+
+func TestMustLoadUsesSharedDatabaseURL(t *testing.T) {
+	unsetEnv(t, "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE")
+
+	if err := os.Setenv("DATABASE_URL", "postgres://sub2api:secret@postgres:5432/sub2api?sslmode=disable"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := MustLoad()
+	if !cfg.Database.Enabled {
+		t.Fatal("database should be enabled when DATABASE_URL is set")
+	}
+	if cfg.Database.DSN() != "postgres://sub2api:secret@postgres:5432/sub2api?sslmode=disable" {
+		t.Fatalf("database dsn = %q", cfg.Database.DSN())
+	}
+}
+
+func TestMustLoadUsesSharedDatabaseFields(t *testing.T) {
+	unsetEnv(t, "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE")
+
+	for key, value := range map[string]string{
+		"DATABASE_HOST":     "postgres",
+		"DATABASE_PORT":     "5433",
+		"DATABASE_USER":     "sub2api",
+		"DATABASE_PASSWORD": "secret",
+		"DATABASE_DBNAME":   "sub2api",
+		"DATABASE_SSLMODE":  "disable",
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := MustLoad()
+	if !cfg.Database.Enabled {
+		t.Fatal("database should be enabled when DATABASE_HOST is set")
+	}
+	want := "host=postgres port=5433 user=sub2api password=secret dbname=sub2api sslmode=disable"
+	if cfg.Database.DSN() != want {
+		t.Fatalf("database dsn = %q, want %q", cfg.Database.DSN(), want)
+	}
+}
+
+func TestMustLoadFallsBackToDeployDotEnv(t *testing.T) {
+	unsetEnv(t, "PLUGIN_SERVER_PORT", "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE")
+
+	tempDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tempDir, "plugin-service"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(tempDir, "deploy", ".env"), "DATABASE_HOST=deploy-postgres\nDATABASE_PORT=5439\nDATABASE_USER=deploy-user\nDATABASE_PASSWORD=deploy-pass\nDATABASE_DBNAME=deploy-db\nDATABASE_SSLMODE=disable\n")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+	if err := os.Chdir(filepath.Join(tempDir, "plugin-service")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := MustLoad()
+	if !cfg.Database.Enabled {
+		t.Fatal("database should be enabled from deploy/.env")
+	}
+	want := "host=deploy-postgres port=5439 user=deploy-user password=deploy-pass dbname=deploy-db sslmode=disable"
+	if cfg.Database.DSN() != want {
+		t.Fatalf("database dsn = %q, want %q", cfg.Database.DSN(), want)
+	}
+}
+
+func TestMustLoadRootDotEnvOverridesDeployDotEnv(t *testing.T) {
+	unsetEnv(t, "PLUGIN_SERVER_PORT", "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE")
+
+	tempDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tempDir, "plugin-service"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(tempDir, ".env"), "DATABASE_HOST=root-postgres\nDATABASE_PORT=5438\nDATABASE_USER=root-user\nDATABASE_PASSWORD=root-pass\nDATABASE_DBNAME=root-db\nDATABASE_SSLMODE=disable\n")
+	writeFile(t, filepath.Join(tempDir, "deploy", ".env"), "DATABASE_HOST=deploy-postgres\nDATABASE_PORT=5439\nDATABASE_USER=deploy-user\nDATABASE_PASSWORD=deploy-pass\nDATABASE_DBNAME=deploy-db\nDATABASE_SSLMODE=disable\n")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+	if err := os.Chdir(filepath.Join(tempDir, "plugin-service")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := MustLoad()
+	want := "host=root-postgres port=5438 user=root-user password=root-pass dbname=root-db sslmode=disable"
+	if cfg.Database.DSN() != want {
+		t.Fatalf("database dsn = %q, want %q", cfg.Database.DSN(), want)
+	}
+}
+
+func TestMustLoadFallsBackToPostgresEnvNames(t *testing.T) {
+	unsetEnv(t, "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB")
+
+	for key, value := range map[string]string{
+		"POSTGRES_USER":     "sub2api",
+		"POSTGRES_PASSWORD": "secret",
+		"POSTGRES_DB":       "sub2api",
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := MustLoad()
+	if !cfg.Database.Enabled {
+		t.Fatal("database should be enabled from POSTGRES_* env")
+	}
+	want := "host=127.0.0.1 port=5432 user=sub2api password=secret dbname=sub2api sslmode=disable"
+	if cfg.Database.DSN() != want {
+		t.Fatalf("database dsn = %q, want %q", cfg.Database.DSN(), want)
 	}
 }
 

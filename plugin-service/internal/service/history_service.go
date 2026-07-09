@@ -11,10 +11,18 @@ import (
 var ErrHistoryForbidden = errors.New("history record is not accessible")
 
 type HistoryService struct {
-	repo *repository.HistoryRepository
+	repo HistoryRepository
 }
 
-func NewHistoryService(repo *repository.HistoryRepository) *HistoryService {
+type HistoryRepository interface {
+	Create(ctx context.Context, principal model.CurrentPrincipal, prompt string, request map[string]any) (*model.HistoryRecord, error)
+	Update(ctx context.Context, record *model.HistoryRecord) error
+	Get(ctx context.Context, id string) (*model.HistoryRecord, bool, error)
+	ListAll(ctx context.Context, query model.HistoryQuery) ([]model.HistoryRecord, error)
+	ListByUser(ctx context.Context, userID int64, query model.HistoryQuery) ([]model.HistoryRecord, error)
+}
+
+func NewHistoryService(repo HistoryRepository) *HistoryService {
 	return &HistoryService{repo: repo}
 }
 
@@ -28,13 +36,16 @@ func (s *HistoryService) Update(ctx context.Context, record *model.HistoryRecord
 
 func (s *HistoryService) List(ctx context.Context, principal model.CurrentPrincipal, query model.HistoryQuery) ([]model.HistoryRecord, error) {
 	if principal.IsAdmin() {
-		return s.repo.ListAll(ctx, query), nil
+		return s.repo.ListAll(ctx, query)
 	}
-	return s.repo.ListByUser(ctx, principal.UserID, query), nil
+	return s.repo.ListByUser(ctx, principal.UserID, query)
 }
 
 func (s *HistoryService) Get(ctx context.Context, principal model.CurrentPrincipal, id string) (*model.HistoryRecord, error) {
-	record, ok := s.repo.Get(ctx, id)
+	record, ok, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, repository.ErrNotFound
 	}

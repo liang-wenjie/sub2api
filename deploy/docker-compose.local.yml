@@ -197,6 +197,13 @@ services:
     environment:
       - PLUGIN_SERVER_PORT=${PLUGIN_SERVER_PORT:-8091}
       - PLUGIN_MAIN_SERVICE_BASE_URL=${PLUGIN_MAIN_SERVICE_BASE_URL:-http://sub2api:8080}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=${POSTGRES_USER:-sub2api}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - DATABASE_DBNAME=${POSTGRES_DB:-sub2api}
+      - DATABASE_SSLMODE=disable
     volumes:
       - ./plugin_data:/app/data:Z
     depends_on:

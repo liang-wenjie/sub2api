@@ -40,6 +40,11 @@ internal plugin service host in the same Docker network or environment:
 
 - `/plugins/*`
 
+The plugin service reuses the same PostgreSQL configuration as the main site.
+If `DATABASE_URL` or the shared `DATABASE_*` environment variables are present,
+image generation history is persisted into `plugin_generation_history`;
+otherwise it falls back to in-memory history for local-only runs.
+
 ## Auth Model
 
 The plugin host fully reuses the main Sub2API login state. It does not create

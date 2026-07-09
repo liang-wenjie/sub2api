@@ -19,19 +19,21 @@ type HistoryRepository struct {
 	mu      sync.RWMutex
 	records map[string]model.HistoryRecord
 	now     func() time.Time
+	newID   func() string
 }
 
 func NewHistoryRepository() *HistoryRepository {
 	return &HistoryRepository{
 		records: make(map[string]model.HistoryRecord),
 		now:     time.Now,
+		newID:   randomID,
 	}
 }
 
 func (r *HistoryRepository) Create(_ context.Context, principal model.CurrentPrincipal, prompt string, request map[string]any) (*model.HistoryRecord, error) {
 	now := r.now().UTC()
 	record := model.HistoryRecord{
-		ID:        randomID(),
+		ID:        r.newID(),
 		UserID:    principal.UserID,
 		UserEmail: principal.Email,
 		PluginKey: principal.Plugin,
@@ -61,27 +63,27 @@ func (r *HistoryRepository) Update(_ context.Context, record *model.HistoryRecor
 	return nil
 }
 
-func (r *HistoryRepository) Get(_ context.Context, id string) (*model.HistoryRecord, bool) {
+func (r *HistoryRepository) Get(_ context.Context, id string) (*model.HistoryRecord, bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	record, ok := r.records[id]
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
-	return &record, true
+	return &record, true, nil
 }
 
-func (r *HistoryRepository) ListAll(_ context.Context, query model.HistoryQuery) []model.HistoryRecord {
+func (r *HistoryRepository) ListAll(_ context.Context, query model.HistoryQuery) ([]model.HistoryRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	records := make([]model.HistoryRecord, 0, len(r.records))
 	for _, record := range r.records {
 		records = append(records, record)
 	}
-	return paginate(sortRecords(records), query)
+	return paginate(sortRecords(records), query), nil
 }
 
-func (r *HistoryRepository) ListByUser(_ context.Context, userID int64, query model.HistoryQuery) []model.HistoryRecord {
+func (r *HistoryRepository) ListByUser(_ context.Context, userID int64, query model.HistoryQuery) ([]model.HistoryRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	records := make([]model.HistoryRecord, 0)
@@ -90,7 +92,7 @@ func (r *HistoryRepository) ListByUser(_ context.Context, userID int64, query mo
 			records = append(records, record)
 		}
 	}
-	return paginate(sortRecords(records), query)
+	return paginate(sortRecords(records), query), nil
 }
 
 func sortRecords(records []model.HistoryRecord) []model.HistoryRecord {
