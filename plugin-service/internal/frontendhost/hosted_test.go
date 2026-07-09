@@ -63,6 +63,117 @@ func TestRegisterHostedPluginInjectsAuthBridgeAndServesAssets(t *testing.T) {
 	}
 }
 
+func TestRegisterHostedPluginInjectsFaviconFromResolver(t *testing.T) {
+	webRoot := t.TempDir()
+	assetRoot := filepath.Join(webRoot, "assets")
+	if err := os.MkdirAll(assetRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte(`<!doctype html><html><head><title>demo</title></head><body></body></html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterHostedPlugin(mux, HostedPluginOptions{
+		PluginKey: "demo",
+		WebRoot:   webRoot,
+		FaviconResolver: func(*http.Request) string {
+			return "/brand/logo.png"
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/plugins/demo", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `rel="icon"`) {
+		t.Fatalf("page missing favicon link: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `href="/brand/logo.png"`) {
+		t.Fatalf("page missing resolver favicon: %s", rec.Body.String())
+	}
+}
+
+func TestRegisterHostedPluginFallsBackToDefaultFavicon(t *testing.T) {
+	webRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte(`<!doctype html><html><head><title>demo</title></head><body></body></html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterHostedPlugin(mux, HostedPluginOptions{
+		PluginKey: "demo",
+		WebRoot:   webRoot,
+		FaviconResolver: func(*http.Request) string {
+			return ""
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/plugins/demo", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `href="/logo.png"`) {
+		t.Fatalf("page missing default favicon fallback: %s", rec.Body.String())
+	}
+}
+
+func TestRegisterHostedPluginInjectsMenuTitleFromResolver(t *testing.T) {
+	webRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte(`<!doctype html><html><head><title>demo</title></head><body></body></html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterHostedPlugin(mux, HostedPluginOptions{
+		PluginKey: "image-generation",
+		WebRoot:   webRoot,
+		PageTitleResolver: func(*http.Request) string {
+			return "测试"
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `<title>测试</title>`) {
+		t.Fatalf("page missing menu title: %s", rec.Body.String())
+	}
+}
+
+func TestRegisterHostedPluginPreservesOriginalTitleWhenResolverEmpty(t *testing.T) {
+	webRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte(`<!doctype html><html><head><title>demo</title></head><body></body></html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterHostedPlugin(mux, HostedPluginOptions{
+		PluginKey: "image-generation",
+		WebRoot:   webRoot,
+		PageTitleResolver: func(*http.Request) string {
+			return ""
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `<title>demo</title>`) {
+		t.Fatalf("page title should keep original value: %s", rec.Body.String())
+	}
+}
+
 func TestRegisterHostedPluginRequiresIndexHTML(t *testing.T) {
 	webRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(webRoot, "plugin-image-generation.html"), []byte(`legacy`), 0o644); err != nil {
