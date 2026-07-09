@@ -6,15 +6,26 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
-const defaultPluginServiceURL = "http://plugin-service:8091"
+const (
+	defaultPluginServiceURL      = "http://plugin-service:8091"
+	defaultPluginServicePort     = "8091"
+	localhostPluginServiceHost   = "127.0.0.1"
+	localhostPluginServiceScheme = "http"
+)
+
+var pluginServiceDialTimeout = 200 * time.Millisecond
+var localhostPluginServiceReachableFunc = localhostPluginServiceReachable
 
 // RegisterPluginProxyRoutes mounts the plugin-service reverse proxy on the main site.
-func RegisterPluginProxyRoutes(r *gin.Engine, upstreamBaseURL string) {
+func RegisterPluginProxyRoutes(r *gin.Engine, upstreamBaseURL string, jwtAuth middleware.JWTAuthMiddleware) {
 	if r == nil {
 		return
 	}
@@ -25,7 +36,15 @@ func RegisterPluginProxyRoutes(r *gin.Engine, upstreamBaseURL string) {
 	}
 
 	handler := gin.WrapH(proxy)
-	r.Any("/plugins/*path", handler)
+	r.Any("/plugins/*path", func(c *gin.Context) {
+		if requiresPluginAuthentication(c.Request) {
+			if !authenticatePluginProxyRequest(c, jwtAuth) {
+				return
+			}
+			attachPluginPrincipalHeaders(c.Request, c)
+		}
+		handler(c)
+	})
 }
 
 func resolvePluginServiceBaseURL(explicit string) string {
@@ -35,7 +54,14 @@ func resolvePluginServiceBaseURL(explicit string) string {
 	if trimmed := strings.TrimSpace(os.Getenv("PLUGIN_SERVICE_BASE_URL")); trimmed != "" {
 		return trimmed
 	}
-	if port := strings.TrimSpace(os.Getenv("PLUGIN_SERVER_PORT")); port != "" {
+	port := strings.TrimSpace(os.Getenv("PLUGIN_SERVER_PORT"))
+	if port == "" {
+		port = defaultPluginServicePort
+	}
+	if localhostPluginServiceReachableFunc(port) {
+		return localhostPluginServiceScheme + "://" + localhostPluginServiceHost + ":" + port
+	}
+	if strings.TrimSpace(os.Getenv("PLUGIN_SERVER_PORT")) != "" {
 		return "http://plugin-service:" + port
 	}
 	return defaultPluginServiceURL
@@ -106,4 +132,62 @@ func appendForwardedFor(req *http.Request, clientIP string) {
 		return
 	}
 	req.Header.Set("X-Forwarded-For", clientIP)
+}
+
+func authenticatePluginProxyRequest(c *gin.Context, jwtAuth middleware.JWTAuthMiddleware) bool {
+	if c == nil || jwtAuth == nil {
+		return true
+	}
+	if strings.TrimSpace(c.GetHeader("Authorization")) == "" {
+		if token := firstNonEmptyPluginToken(c.Request); token != "" {
+			c.Request.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
+	jwtAuth(c)
+	return !c.IsAborted()
+}
+
+func firstNonEmptyPluginToken(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	for _, key := range []string{"token", "session"} {
+		if value := strings.TrimSpace(req.URL.Query().Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func attachPluginPrincipalHeaders(req *http.Request, c *gin.Context) {
+	if req == nil || c == nil {
+		return
+	}
+	if subject, ok := middleware.GetAuthSubjectFromContext(c); ok && subject.UserID > 0 {
+		req.Header.Set("X-Sub2api-User-Id", strconv.FormatInt(subject.UserID, 10))
+	}
+	if role, ok := middleware.GetUserRoleFromContext(c); ok && strings.TrimSpace(role) != "" {
+		req.Header.Set("X-Sub2api-User-Role", strings.TrimSpace(role))
+	}
+}
+
+func requiresPluginAuthentication(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	path := strings.TrimSpace(req.URL.Path)
+	if path == "" {
+		return false
+	}
+	return strings.Contains(path, "/api/")
+}
+
+func localhostPluginServiceReachable(port string) bool {
+	address := net.JoinHostPort(localhostPluginServiceHost, strings.TrimSpace(port))
+	conn, err := net.DialTimeout("tcp", address, pluginServiceDialTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }

@@ -118,6 +118,38 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	}
 }
 
+func TestRouterGenerateUsesConfiguredMainServiceBaseURL(t *testing.T) {
+	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/images/generations" {
+			t.Fatalf("main service path = %s, want /v1/images/generations", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-secret" {
+			t.Fatalf("provider authorization = %q, want %q", got, "Bearer provider-secret")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/generated.png"}]}`))
+	}))
+	defer mainSite.Close()
+
+	restoreMainSiteResolver(t, mainSite.URL)
+	t.Setenv("PLUGIN_MAIN_SERVICE_BASE_URL", mainSite.URL)
+	router := NewRouter(config.Config{ListenAddr: ":0"})
+
+	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
+	req := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
+	req.Header.Set("X-Sub2api-User-Id", "42")
+	req.Header.Set("X-Sub2api-User-Role", "user")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Forwarded-Host", "192.168.0.230:8080")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("generate status = %d, want %d; body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
 func restoreMainSiteResolver(t *testing.T, baseURL string) {
 	t.Helper()
 	previous := hostprincipal.ResolveMainSiteBaseCandidates

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
 	hostprincipal "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
@@ -156,5 +158,8 @@ func (h *Handler) CancelHistory(w http.ResponseWriter, r *http.Request, principa
 }
 
 func resolveMainServiceBaseURL(r *http.Request) string {
+	if baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("PLUGIN_MAIN_SERVICE_BASE_URL")), "/"); baseURL != "" {
+		return baseURL
+	}
 	return httpx.ResolveRequestBaseURL(r)
 }

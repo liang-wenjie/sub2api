@@ -4,9 +4,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +34,8 @@ func TestPluginProxyRoutesForwardRequests(t *testing.T) {
 		forwardedProto string
 		realIP         string
 		auth           string
+		userID         string
+		userRole       string
 		cookie         string
 		body           string
 	}
@@ -46,6 +51,8 @@ func TestPluginProxyRoutesForwardRequests(t *testing.T) {
 			forwardedProto: r.Header.Get("X-Forwarded-Proto"),
 			realIP:         r.Header.Get("X-Real-IP"),
 			auth:           r.Header.Get("Authorization"),
+			userID:         r.Header.Get("X-Sub2api-User-Id"),
+			userRole:       r.Header.Get("X-Sub2api-User-Role"),
 			cookie:         r.Header.Get("Cookie"),
 			body:           string(payload),
 		}
@@ -56,7 +63,7 @@ func TestPluginProxyRoutesForwardRequests(t *testing.T) {
 	defer upstream.Close()
 
 	router := gin.New()
-	RegisterPluginProxyRoutes(router, upstream.URL)
+	RegisterPluginProxyRoutes(router, upstream.URL, nil)
 
 	tests := []struct {
 		name      string
@@ -114,6 +121,15 @@ func TestPluginProxyRoutesForwardRequests(t *testing.T) {
 }
 
 func TestResolvePluginServiceBaseURL(t *testing.T) {
+	originalTimeout := pluginServiceDialTimeout
+	pluginServiceDialTimeout = 10 * time.Millisecond
+	originalReachable := localhostPluginServiceReachableFunc
+	localhostPluginServiceReachableFunc = func(string) bool { return false }
+	t.Cleanup(func() {
+		pluginServiceDialTimeout = originalTimeout
+		localhostPluginServiceReachableFunc = originalReachable
+	})
+
 	t.Setenv("PLUGIN_SERVICE_BASE_URL", "")
 	t.Setenv("PLUGIN_SERVER_PORT", "")
 	require.Equal(t, "http://plugin-service:8091", resolvePluginServiceBaseURL(""))
@@ -125,4 +141,90 @@ func TestResolvePluginServiceBaseURL(t *testing.T) {
 	require.Equal(t, "http://custom-plugin:19091", resolvePluginServiceBaseURL(""))
 
 	require.Equal(t, "http://explicit-plugin:28091", resolvePluginServiceBaseURL("http://explicit-plugin:28091"))
+}
+
+func TestResolvePluginServiceBaseURLPrefersReachableLocalhost(t *testing.T) {
+	originalReachable := localhostPluginServiceReachableFunc
+	localhostPluginServiceReachableFunc = func(string) bool { return true }
+	t.Cleanup(func() {
+		localhostPluginServiceReachableFunc = originalReachable
+	})
+
+	port := strconv.Itoa(19091)
+	t.Setenv("PLUGIN_SERVICE_BASE_URL", "")
+	t.Setenv("PLUGIN_SERVER_PORT", port)
+
+	require.Equal(t, "http://127.0.0.1:"+port, resolvePluginServiceBaseURL(""))
+}
+
+func TestPluginProxyRoutesAuthenticateEmbeddedTokenBeforeForwarding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	results := make(chan map[string]string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		results <- map[string]string{
+			"auth":     r.Header.Get("Authorization"),
+			"user_id":  r.Header.Get("X-Sub2api-User-Id"),
+			"userRole": r.Header.Get("X-Sub2api-User-Role"),
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	router := gin.New()
+	RegisterPluginProxyRoutes(router, upstream.URL, func(c *gin.Context) {
+		require.Equal(t, "Bearer embedded-token", c.GetHeader("Authorization"))
+		c.Set("user", middleware.AuthSubject{UserID: 42})
+		c.Set("user_role", "admin")
+		c.Next()
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/me?token=embedded-token", nil)
+	w := &closeNotifyRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+	got := <-results
+	require.Equal(t, "Bearer embedded-token", got["auth"])
+	require.Equal(t, "42", got["user_id"])
+	require.Equal(t, "admin", got["userRole"])
+}
+
+func TestPluginProxyRoutesSkipAuthenticationForStaticAssets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	results := make(chan map[string]string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		results <- map[string]string{
+			"path":      r.URL.Path,
+			"auth":      r.Header.Get("Authorization"),
+			"user_id":   r.Header.Get("X-Sub2api-User-Id"),
+			"user_role": r.Header.Get("X-Sub2api-User-Role"),
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("asset"))
+	}))
+	defer upstream.Close()
+
+	router := gin.New()
+	authCalls := 0
+	RegisterPluginProxyRoutes(router, upstream.URL, func(c *gin.Context) {
+		authCalls++
+		c.AbortWithStatus(http.StatusUnauthorized)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/assets/app.js?v=123", nil)
+	w := &closeNotifyRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "asset", w.Body.String())
+	require.Equal(t, 0, authCalls)
+	got := <-results
+	require.Equal(t, "/plugins/image-generation/assets/app.js", got["path"])
+	require.Empty(t, got["auth"])
+	require.Empty(t, got["user_id"])
+	require.Empty(t, got["user_role"])
 }

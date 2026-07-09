@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
@@ -43,6 +44,10 @@ func (m *Middleware) requireForPlugin(pluginKey string, next func(http.ResponseW
 }
 
 func LoadCurrentPrincipal(r *http.Request, pluginKey string) (model.CurrentPrincipal, error) {
+	if principal, ok := loadForwardedPrincipal(r, pluginKey); ok {
+		return principal, nil
+	}
+
 	profile, err := loadMainSiteProfile(r)
 	if err != nil {
 		return model.CurrentPrincipal{}, err
@@ -60,6 +65,27 @@ func LoadCurrentPrincipal(r *http.Request, pluginKey string) (model.CurrentPrinc
 		Username: strings.TrimSpace(profile.Username),
 		Plugin:   strings.TrimSpace(pluginKey),
 	}, nil
+}
+
+func loadForwardedPrincipal(r *http.Request, pluginKey string) (model.CurrentPrincipal, bool) {
+	if r == nil {
+		return model.CurrentPrincipal{}, false
+	}
+	userID, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-Sub2api-User-Id")), 10, 64)
+	if err != nil || userID <= 0 {
+		return model.CurrentPrincipal{}, false
+	}
+	role := model.RoleUser
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Sub2api-User-Role")), model.RoleAdmin) {
+		role = model.RoleAdmin
+	}
+	return model.CurrentPrincipal{
+		UserID:   userID,
+		Role:     role,
+		Email:    strings.TrimSpace(r.Header.Get("X-Sub2api-User-Email")),
+		Username: strings.TrimSpace(r.Header.Get("X-Sub2api-User-Name")),
+		Plugin:   strings.TrimSpace(pluginKey),
+	}, true
 }
 
 type mainSiteProfileEnvelope struct {
@@ -161,6 +187,8 @@ func firstNonEmptyQuery(r *http.Request, keys ...string) string {
 func defaultResolveMainSiteBaseCandidates(_ *http.Request) []string {
 	return []string{
 		"http://sub2api:8080",
+		"http://localhost:8080",
+		"http://127.0.0.1:8080",
 	}
 }
 
