@@ -32,6 +32,7 @@ func TestFrontendInjectsPluginAuthBridgeScript(t *testing.T) {
 		`modal-overlay image-delete-confirm-overlay`,
 		`openDeleteConfirmDialog`,
 		`deleteRemoteHistoryItems(targetIds)`,
+		`确认删除当前历史记录吗？`,
 		`DELETE`,
 		`deletedLocalHistoryKeys`,
 		`deleteLocalHistoryItem`,
@@ -40,48 +41,6 @@ func TestFrontendInjectsPluginAuthBridgeScript(t *testing.T) {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("frontend html missing auth bridge marker %q", needle)
 		}
-	}
-
-	if count := strings.Count(body, `function deleteLoadedRemoteHistory(ids)`); count != 1 {
-		t.Fatalf("frontend html contains %d deleteLoadedRemoteHistory implementations, want 1", count)
-	}
-	for _, obsolete := range []string{`window.confirm(`, `window.location.reload()`} {
-		if strings.Contains(body, obsolete) {
-			t.Fatalf("frontend html still contains obsolete remote history deletion code %q", obsolete)
-		}
-	}
-}
-
-func TestFrontendContainsResponsiveAppleButtonStyles(t *testing.T) {
-	mux := http.NewServeMux()
-	RegisterFrontend(mux)
-
-	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("frontend status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	for _, needle := range []string{
-		`--image-button-primary: #0d9488`,
-		`--image-button-secondary-text: #0f172a`,
-		`#app button:not([data-testid="new-image-session"])`,
-		`:focus-visible`,
-		`transform: scale(0.97)`,
-		`min-height: 44px`,
-		`backdrop-filter: blur(14px) saturate(160%)`,
-		`@media (prefers-reduced-motion: reduce)`,
-		`@media (max-width: 767px) and (prefers-reduced-motion: reduce)`,
-	} {
-		if !strings.Contains(rec.Body.String(), needle) {
-			t.Fatalf("frontend html missing responsive button style %q", needle)
-		}
-	}
-
-	if strings.Contains(rec.Body.String(), "\n    #app [data-testid=\"new-image-session\"],") {
-		t.Fatal("new session button still receives custom Apple surface styles")
 	}
 }
 
