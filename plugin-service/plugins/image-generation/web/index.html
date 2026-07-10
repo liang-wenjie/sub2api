@@ -520,8 +520,8 @@
           title.className = 'image-history-drawer-title';
           title.textContent = '历史记录';
 
-          topbar.appendChild(title);
           topbar.appendChild(inlineButton);
+          topbar.appendChild(title);
           history.insertBefore(topbar, history.firstChild);
         }
 
@@ -533,7 +533,7 @@
           handle.setAttribute('aria-label', 'Toggle history drawer');
           handle.setAttribute('aria-expanded', 'false');
           handle.className = 'image-history-drawer-handle';
-          handle.innerHTML = '<span class="image-history-drawer-handle-text">历史</span>';
+          handle.innerHTML = '<span class="image-history-drawer-handle-text">侧边栏</span>';
           handle.addEventListener('click', function () {
             if (manualHistoryCollapsed && !autoHistoryCollapsed) {
               expandHistoryFromDrawer();
@@ -773,8 +773,8 @@
     #app [data-testid="history-drawer-topbar"] {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
+      justify-content: flex-start;
+      gap: 0.625rem;
       margin-bottom: 0.75rem;
     }
 
@@ -795,11 +795,44 @@
       flex: 0 0 auto;
       width: 2rem;
       height: 2rem;
-      border: 1px solid #e2e8f0;
-      border-radius: 9999px;
+      padding: 0;
+      border: 1px solid #cbd5e1;
+      border-radius: 0.5rem;
       background: #ffffff;
-      color: #0f172a;
+      color: #475569;
       cursor: pointer;
+      transition: transform 0.12s ease-out, background-color 0.16s ease-out,
+        border-color 0.16s ease-out, box-shadow 0.16s ease-out, color 0.16s ease-out;
+    }
+
+    #app [data-testid="history-inline-collapse"]:hover {
+      border-color: #94a3b8;
+      background: #f1f5f9;
+      color: #0f172a;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+    }
+
+    #app [data-testid="history-inline-collapse"]:active {
+      transform: scale(0.96);
+    }
+
+    #app [data-testid="history-inline-collapse"]:focus-visible {
+      outline: 2px solid #0d9488;
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.14);
+    }
+
+    html.dark #app [data-testid="history-inline-collapse"] {
+      border-color: #475569;
+      background: #1e293b;
+      color: #cbd5e1;
+    }
+
+    html.dark #app [data-testid="history-inline-collapse"]:hover {
+      border-color: #64748b;
+      background: #334155;
+      color: #f8fafc;
+      box-shadow: 0 2px 6px rgba(2, 6, 23, 0.28);
     }
 
     #app [data-testid="history-inline-collapse"] span {
@@ -827,7 +860,42 @@
       border: 1px solid #e2e8f0;
       border-left: 0;
       background: #ffffff;
+      color: #475569;
       box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+      cursor: pointer;
+      transition: transform 0.12s ease-out, background-color 0.16s ease-out,
+        border-color 0.16s ease-out, box-shadow 0.16s ease-out, color 0.16s ease-out;
+    }
+
+    #app [data-testid="history-drawer-toggle"]:hover {
+      border-color: #94a3b8;
+      background: #f1f5f9;
+      color: #0f172a;
+      box-shadow: 0 10px 26px rgba(15, 23, 42, 0.16);
+    }
+
+    #app [data-testid="history-drawer-toggle"]:active {
+      transform: scale(0.96);
+    }
+
+    #app [data-testid="history-drawer-toggle"]:focus-visible {
+      outline: 2px solid #0d9488;
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.14), 0 8px 24px rgba(15, 23, 42, 0.12);
+    }
+
+    html.dark #app [data-testid="history-drawer-toggle"] {
+      border-color: #475569;
+      background: #1e293b;
+      color: #cbd5e1;
+      box-shadow: 0 8px 24px rgba(2, 6, 23, 0.32);
+    }
+
+    html.dark #app [data-testid="history-drawer-toggle"]:hover {
+      border-color: #64748b;
+      background: #334155;
+      color: #f8fafc;
+      box-shadow: 0 10px 26px rgba(2, 6, 23, 0.42);
     }
 
     #app [data-testid="history-drawer-toggle"] .image-history-drawer-handle-text {
@@ -841,8 +909,8 @@
       border-radius: 9999px;
       border: 2px solid #0f172a;
       border-left: 0;
-      border-top: 0;
-      transform: rotate(135deg);
+      border-bottom: 0;
+      transform: rotate(45deg);
     }
 
     #app [data-testid="history-drawer-overlay"] {
@@ -1095,7 +1163,7 @@
       }
 
       html.image-history-collapsed #app [data-testid="image-history"] {
-        width: min(92vw, 340px);
+        width: min(76vw, 280px);
       }
 
       #app [data-testid="image-chat-thread"] > div:first-child {
@@ -1245,11 +1313,11 @@
         content: '';
         width: 1rem;
         height: 1rem;
-        border: 0;
+        border: 2px solid currentColor;
         border-left: 0;
-        border-top: 0;
+        border-bottom: 0;
         border-radius: 0;
-        transform: rotate(135deg);
+        transform: rotate(45deg);
       }
     }
   </style>

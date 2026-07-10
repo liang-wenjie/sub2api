@@ -44,6 +44,64 @@ func TestFrontendInjectsPluginAuthBridgeScript(t *testing.T) {
 	}
 }
 
+func TestFrontendContainsCompactMobileHistoryDrawerWidth(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterFrontend(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("frontend status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `@media (max-width: 767px)`) {
+		t.Fatal("frontend html missing phone-width media query")
+	}
+	if !strings.Contains(body, `width: min(76vw, 280px);`) {
+		t.Fatal("frontend html missing compact phone history drawer width")
+	}
+}
+
+func TestFrontendContainsDirectionalHistoryControls(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterFrontend(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("frontend status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`topbar.appendChild(inlineButton);`,
+		`topbar.appendChild(title);`,
+		`border-radius: 0.5rem;`,
+		`#app [data-testid="history-inline-collapse"]:hover`,
+		`#app [data-testid="history-inline-collapse"]:focus-visible`,
+		`html.dark #app [data-testid="history-inline-collapse"]`,
+		`#app [data-testid="history-drawer-toggle"]:hover`,
+		`#app [data-testid="history-drawer-toggle"]:focus-visible`,
+		`html.dark #app [data-testid="history-drawer-toggle"]`,
+		`<span class="image-history-drawer-handle-text">侧边栏</span>`,
+		`transform: rotate(-45deg);`,
+		`transform: rotate(45deg);`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("frontend html missing history control marker %q", needle)
+		}
+	}
+
+	if strings.Index(body, `topbar.appendChild(inlineButton);`) > strings.Index(body, `topbar.appendChild(title);`) {
+		t.Fatal("history collapse button is not inserted before the title")
+	}
+}
+
 func TestFrontendServesBundledImageGenerationHistoryRecordFixes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterFrontend(mux)
