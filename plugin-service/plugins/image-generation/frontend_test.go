@@ -63,6 +63,7 @@ func TestFrontendContainsResponsiveAppleButtonStyles(t *testing.T) {
 		`min-height: 44px`,
 		`backdrop-filter: blur(14px) saturate(160%)`,
 		`@media (prefers-reduced-motion: reduce)`,
+		`@media (max-width: 767px) and (prefers-reduced-motion: reduce)`,
 	} {
 		if !strings.Contains(rec.Body.String(), needle) {
 			t.Fatalf("frontend html missing responsive button style %q", needle)
