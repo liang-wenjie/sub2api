@@ -204,38 +204,6 @@
         });
       }
 
-      function deleteLoadedRemoteHistory(ids) {
-        var targetIds = (ids && ids.length ? ids : remoteHistoryIds).slice();
-        if (!targetIds.length) {
-          return;
-        }
-        if (!window.confirm("确认删除当前历史记录吗？")) {
-          return;
-        }
-        Promise.all(targetIds.map(deleteHistoryRecord)).then(function () {
-          window.location.reload();
-        }).catch(function () {
-          window.alert("删除历史记录失败，请稍后重试");
-        });
-      }
-
-      deleteLoadedRemoteHistory = function (ids) {
-        var targetIds = (ids && ids.length ? ids : remoteHistoryIds).slice();
-        if (!targetIds.length) {
-          return;
-        }
-        openDeleteConfirmDialog().then(function (confirmed) {
-          if (!confirmed) {
-            return;
-          }
-          return Promise.all(targetIds.map(deleteHistoryRecord)).then(function () {
-            window.location.reload();
-          }).catch(function () {
-            window.alert("删除历史记录失败，请稍后重试");
-          });
-        });
-      };
-
       function getHistoryItemKey(item) {
         if (!(item instanceof HTMLElement)) {
           return "";
@@ -364,7 +332,7 @@
         selectFallbackHistoryItem(historyKey);
       }
 
-      deleteLoadedRemoteHistory = function (ids) {
+      function deleteLoadedRemoteHistory(ids) {
         var targetIds = (ids && ids.length ? ids : remoteHistoryIds).slice();
         if (!targetIds.length) {
           return;
@@ -379,7 +347,7 @@
             window.alert("删除历史记录失败，请稍后重试");
           });
         });
-      };
+      }
 
       function ensureEmptyKeyOption() {
         var select = document.querySelector('[data-testid="image-key-select"]');
@@ -580,7 +548,7 @@
           }
           item.style.display = "";
           var existingButton = item.querySelector('[data-testid="history-delete-button"]');
-          if (item.querySelector('[data-testid="history-delete-button"]')) {
+          if (existingButton) {
             return;
           }
           if (!item.textContent) {
@@ -984,16 +952,6 @@
       cursor: pointer;
     }
 
-    .image-delete-confirm-cancel {
-      background: #ffffff;
-      border-color: #d1d5db;
-      color: #374151;
-    }
-
-    .image-delete-confirm-cancel:hover {
-      background: #f9fafb;
-    }
-
     .image-delete-confirm-accept {
       background: #dc2626;
       color: #ffffff;
@@ -1263,7 +1221,7 @@
       --image-button-danger: #dc2626;
     }
 
-    #app button,
+    #app button:not([data-testid="new-image-session"]),
     .image-delete-confirm-dialog button,
     #app [role="button"] {
       -webkit-tap-highlight-color: transparent;
@@ -1272,14 +1230,14 @@
         border-color 160ms ease-out, box-shadow 160ms ease-out, color 160ms ease-out;
     }
 
-    #app button:not(:disabled):active,
+    #app button:not([data-testid="new-image-session"]):not(:disabled):active,
     .image-delete-confirm-dialog button:not(:disabled):active,
     #app [role="button"]:active {
       transform: scale(0.97);
       transition-duration: 80ms;
     }
 
-    #app button:focus-visible,
+    #app button:not([data-testid="new-image-session"]):focus-visible,
     .image-delete-confirm-dialog button:focus-visible,
     #app [role="button"]:focus-visible {
       outline: 2px solid var(--image-button-primary);
@@ -1287,7 +1245,7 @@
       box-shadow: 0 0 0 4px var(--image-button-focus);
     }
 
-    #app button:disabled,
+    #app button:not([data-testid="new-image-session"]):disabled,
     .image-delete-confirm-dialog button:disabled {
       transform: none;
       cursor: not-allowed;
@@ -1296,7 +1254,6 @@
 
     #app [data-testid="history-inline-collapse"],
     #app [data-testid="history-drawer-toggle"],
-    #app [data-testid="new-image-session"],
     #app [data-testid="image-chat-composer"] button[type="button"],
     .image-delete-confirm-cancel {
       border: 1px solid var(--image-button-border);
@@ -1309,7 +1266,6 @@
     }
 
     #app [data-testid="history-inline-collapse"],
-    #app [data-testid="new-image-session"],
     #app [data-testid="image-chat-composer"] button[type="button"],
     .image-delete-confirm-cancel,
     .image-delete-confirm-accept {
@@ -1346,10 +1302,6 @@
       color: #ffffff;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18),
         0 2px 7px rgba(220, 38, 38, 0.22);
-    }
-
-    .image-delete-confirm-accept:hover {
-      background: #b91c1c;
     }
 
     html.dark {
@@ -1406,13 +1358,13 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-      #app button,
+      #app button:not([data-testid="new-image-session"]),
       .image-delete-confirm-dialog button,
       #app [role="button"] {
         transition: none !important;
       }
 
-      #app button:not(:disabled):active,
+      #app button:not([data-testid="new-image-session"]):not(:disabled):active,
       .image-delete-confirm-dialog button:not(:disabled):active,
       #app [role="button"]:active {
         transform: none;
