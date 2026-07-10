@@ -58,6 +58,7 @@ func TestFrontendContainsResponsiveAppleButtonStyles(t *testing.T) {
 
 	for _, needle := range []string{
 		`--image-button-primary: #0d9488`,
+		`--image-button-secondary-text: #0f172a`,
 		`button:focus-visible`,
 		`transform: scale(0.97)`,
 		`min-height: 44px`,
