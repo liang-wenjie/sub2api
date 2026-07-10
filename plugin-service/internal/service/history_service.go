@@ -18,6 +18,7 @@ type HistoryRepository interface {
 	Create(ctx context.Context, principal model.CurrentPrincipal, prompt string, request map[string]any) (*model.HistoryRecord, error)
 	Update(ctx context.Context, record *model.HistoryRecord) error
 	Get(ctx context.Context, id string) (*model.HistoryRecord, bool, error)
+	Delete(ctx context.Context, id string) error
 	ListAll(ctx context.Context, query model.HistoryQuery) ([]model.HistoryRecord, error)
 	ListByUser(ctx context.Context, userID int64, query model.HistoryQuery) ([]model.HistoryRecord, error)
 }
@@ -53,4 +54,12 @@ func (s *HistoryService) Get(ctx context.Context, principal model.CurrentPrincip
 		return nil, ErrHistoryForbidden
 	}
 	return record, nil
+}
+
+func (s *HistoryService) Delete(ctx context.Context, principal model.CurrentPrincipal, id string) error {
+	record, err := s.Get(ctx, principal, id)
+	if err != nil {
+		return err
+	}
+	return s.repo.Delete(ctx, record.ID)
 }

@@ -250,6 +250,9 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 	if got := record.Request["prompt"]; got != "Follow the user request.\nUser request: draw a camera" {
 		t.Fatalf("stored request prompt = %#v", got)
 	}
+	if record.ConversationID != "" {
+		t.Fatalf("conversation id = %q, want empty", record.ConversationID)
+	}
 
 	if _, err := svc.Retry(ctx, principal, upstream.URL, record.ID); err != nil {
 		t.Fatal(err)
@@ -263,6 +266,40 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 	}
 	if prompts[1] != "Follow the user request.\nUser request: draw a camera" {
 		t.Fatalf("retry provider prompt = %q", prompts[1])
+	}
+}
+
+func TestGenerationService_GenerateStoresConversationID(t *testing.T) {
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/generated.png"}]}`))
+	}))
+	defer upstream.Close()
+
+	historyRepo := repository.NewHistoryRepository()
+	history := service.NewHistoryService(historyRepo)
+	svc := NewGenerationService(history, GenerationServiceOptions{})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Email: "user@example.com", Username: "user", Plugin: "image-generation"}
+
+	resp, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
+		Prompt:         "draw a camera",
+		ProviderAPIKey: "provider-secret",
+		Model:          "gpt-image-1",
+		Inputs: map[string]any{
+			"conversation_id": "conversation-live-123",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := history.Get(ctx, principal, resp.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ConversationID != "conversation-live-123" {
+		t.Fatalf("conversation id = %q, want %q", record.ConversationID, "conversation-live-123")
 	}
 }
 

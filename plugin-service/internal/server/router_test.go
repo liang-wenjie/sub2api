@@ -83,7 +83,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	restoreMainSiteResolver(t, mainSite.URL)
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
-	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
+	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
 	generateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
 	generateReq.Header.Set("Authorization", "Bearer launch-token")
 	addForwardedProviderOrigin(generateReq, upstream.URL)
@@ -91,6 +91,15 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	router.ServeHTTP(generateRec, generateReq)
 	if generateRec.Code != http.StatusCreated {
 		t.Fatalf("generate status = %d, want %d; body=%s", generateRec.Code, http.StatusCreated, generateRec.Body.String())
+	}
+	secondBody := bytes.NewBufferString(`{"prompt":"make another poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
+	secondGenerateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", secondBody)
+	secondGenerateReq.Header.Set("Authorization", "Bearer launch-token")
+	addForwardedProviderOrigin(secondGenerateReq, upstream.URL)
+	secondGenerateRec := httptest.NewRecorder()
+	router.ServeHTTP(secondGenerateRec, secondGenerateReq)
+	if secondGenerateRec.Code != http.StatusCreated {
+		t.Fatalf("second generate status = %d, want %d; body=%s", secondGenerateRec.Code, http.StatusCreated, secondGenerateRec.Body.String())
 	}
 
 	historyReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/history", nil)
@@ -107,14 +116,45 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	if err := json.NewDecoder(historyRec.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Items) != 1 {
-		t.Fatalf("history item count = %d, want 1", len(payload.Items))
+	if len(payload.Items) != 2 {
+		t.Fatalf("history item count = %d, want 2", len(payload.Items))
 	}
-	if payload.Items[0].UserID != 42 {
-		t.Fatalf("history user_id = %d, want 42", payload.Items[0].UserID)
+	for _, item := range payload.Items {
+		if item.UserID != 42 {
+			t.Fatalf("history user_id = %d, want 42", item.UserID)
+		}
+		if item.ConversationID != "conversation-live-test" {
+			t.Fatalf("history conversation_id = %q, want %q", item.ConversationID, "conversation-live-test")
+		}
+		if _, ok := item.Request["provider_api_key"]; ok {
+			t.Fatal("history exposed provider_api_key")
+		}
 	}
-	if _, ok := payload.Items[0].Request["provider_api_key"]; ok {
-		t.Fatal("history exposed provider_api_key")
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/plugins/image-generation/api/history/"+payload.Items[0].ID, nil)
+	deleteReq.Header.Set("Authorization", "Bearer launch-token")
+	deleteRec := httptest.NewRecorder()
+	router.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete history status = %d, want %d; body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+
+	historyAfterDeleteReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/history", nil)
+	historyAfterDeleteReq.Header.Set("Authorization", "Bearer launch-token")
+	historyAfterDeleteRec := httptest.NewRecorder()
+	router.ServeHTTP(historyAfterDeleteRec, historyAfterDeleteReq)
+	if historyAfterDeleteRec.Code != http.StatusOK {
+		t.Fatalf("history after delete status = %d, want %d; body=%s", historyAfterDeleteRec.Code, http.StatusOK, historyAfterDeleteRec.Body.String())
+	}
+
+	var afterDeletePayload struct {
+		Items []model.HistoryRecord `json:"items"`
+	}
+	if err := json.NewDecoder(historyAfterDeleteRec.Body).Decode(&afterDeletePayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(afterDeletePayload.Items) != 1 {
+		t.Fatalf("history item count after delete = %d, want 1", len(afterDeletePayload.Items))
 	}
 }
 

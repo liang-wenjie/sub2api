@@ -13,7 +13,7 @@ import (
 )
 
 const historyRecordColumns = `
-		id, user_id, user_email, plugin_key, prompt, status,
+		id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 		request_payload, result_payload, error_message, created_at, updated_at
 `
 
@@ -38,6 +38,7 @@ func EnsureHistorySchema(ctx context.Context, db *sql.DB) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS plugin_generation_history (
 			id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL DEFAULT '',
 			user_id BIGINT NOT NULL,
 			user_email TEXT NOT NULL,
 			plugin_key TEXT NOT NULL,
@@ -49,8 +50,11 @@ func EnsureHistorySchema(ctx context.Context, db *sql.DB) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE plugin_generation_history ADD COLUMN IF NOT EXISTS conversation_id TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_user_created
 			ON plugin_generation_history(user_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_conversation
+			ON plugin_generation_history(conversation_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_created
 			ON plugin_generation_history(created_at DESC)`,
 	}
@@ -65,15 +69,16 @@ func EnsureHistorySchema(ctx context.Context, db *sql.DB) error {
 func (r *SQLHistoryRepository) Create(ctx context.Context, principal model.CurrentPrincipal, prompt string, request map[string]any) (*model.HistoryRecord, error) {
 	now := r.now().UTC()
 	record := model.HistoryRecord{
-		ID:        r.newID(),
-		UserID:    principal.UserID,
-		UserEmail: principal.Email,
-		PluginKey: principal.Plugin,
-		Prompt:    strings.TrimSpace(prompt),
-		Status:    model.HistoryStatusPending,
-		Request:   copyMap(request),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             r.newID(),
+		ConversationID: conversationIDFromRequest(request),
+		UserID:         principal.UserID,
+		UserEmail:      principal.Email,
+		PluginKey:      principal.Plugin,
+		Prompt:         strings.TrimSpace(prompt),
+		Status:         model.HistoryStatusPending,
+		Request:        copyMap(request),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if record.Request == nil {
 		record.Request = map[string]any{}
@@ -85,12 +90,13 @@ func (r *SQLHistoryRepository) Create(ctx context.Context, principal model.Curre
 	}
 	_, err = r.db.ExecContext(ctx, `
 		INSERT INTO plugin_generation_history (
-			id, user_id, user_email, plugin_key, prompt, status,
+			id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 			request_payload, result_payload, error_message, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, '', $8, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, $9)
 	`,
 		record.ID,
+		record.ConversationID,
 		record.UserID,
 		record.UserEmail,
 		record.PluginKey,
@@ -120,14 +126,16 @@ func (r *SQLHistoryRepository) Update(ctx context.Context, record *model.History
 	updatedAt := r.now().UTC()
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE plugin_generation_history
-		SET status = $2,
-			request_payload = $3,
-			result_payload = $4,
-			error_message = $5,
-			updated_at = $6
+		SET conversation_id = $2,
+			status = $3,
+			request_payload = $4,
+			result_payload = $5,
+			error_message = $6,
+			updated_at = $7
 		WHERE id = $1
 	`,
 		record.ID,
+		record.ConversationID,
 		record.Status,
 		requestPayload,
 		resultPayload,
@@ -147,7 +155,7 @@ func (r *SQLHistoryRepository) Update(ctx context.Context, record *model.History
 
 func (r *SQLHistoryRepository) Get(ctx context.Context, id string) (*model.HistoryRecord, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, user_email, plugin_key, prompt, status,
+		SELECT id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 			request_payload, result_payload, error_message, created_at, updated_at
 		FROM plugin_generation_history
 		WHERE id = $1
@@ -162,10 +170,25 @@ func (r *SQLHistoryRepository) Get(ctx context.Context, id string) (*model.Histo
 	return record, true, nil
 }
 
+func (r *SQLHistoryRepository) Delete(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM plugin_generation_history
+		WHERE id = $1
+	`, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err == nil && rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *SQLHistoryRepository) ListAll(ctx context.Context, query model.HistoryQuery) ([]model.HistoryRecord, error) {
 	limit, offset := normalizePagination(query)
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, user_email, plugin_key, prompt, status,
+		SELECT id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 			request_payload, result_payload, error_message, created_at, updated_at
 		FROM plugin_generation_history
 		ORDER BY created_at DESC
@@ -181,7 +204,7 @@ func (r *SQLHistoryRepository) ListAll(ctx context.Context, query model.HistoryQ
 func (r *SQLHistoryRepository) ListByUser(ctx context.Context, userID int64, query model.HistoryQuery) ([]model.HistoryRecord, error) {
 	limit, offset := normalizePagination(query)
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, user_email, plugin_key, prompt, status,
+		SELECT id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 			request_payload, result_payload, error_message, created_at, updated_at
 		FROM plugin_generation_history
 		WHERE user_id = $1
@@ -205,6 +228,7 @@ func scanHistoryRecord(scanner historyScanner) (*model.HistoryRecord, error) {
 	var resultPayload sql.NullString
 	if err := scanner.Scan(
 		&record.ID,
+		&record.ConversationID,
 		&record.UserID,
 		&record.UserEmail,
 		&record.PluginKey,

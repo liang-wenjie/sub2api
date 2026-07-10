@@ -12,6 +12,374 @@
       var manualHistoryCollapsed = false;
       var autoHistoryCollapsed = false;
       var historyLayoutObserver = null;
+      var remoteHistoryIds = [];
+      var remoteHistoryKeys = [];
+      var deletedLocalHistoryKeys = [];
+      var deleteConfirmDialogState = null;
+
+      function rememberHistoryItems(payload) {
+        if (!payload || !Array.isArray(payload.items)) {
+          return;
+        }
+        remoteHistoryIds = payload.items.map(function (item) {
+          return item && item.id ? String(item.id) : "";
+        }).filter(Boolean);
+        var groups = new Map();
+        payload.items.forEach(function (item) {
+          if (!item || !item.id) {
+            return;
+          }
+          var request = item.request && typeof item.request === "object" ? item.request : {};
+          var conversationId = String(item.conversation_id || request.conversation_id || item.id);
+          var records = groups.get(conversationId) || [];
+          records.push(String(item.id));
+          groups.set(conversationId, records);
+        });
+        remoteHistoryKeys = Array.from(groups.values()).map(function (ids) {
+          return "history-remote-" + ids.join(",");
+        });
+      }
+
+      function installHistoryDeleteFetchObserver() {
+        if (window.__imageGenerationHistoryDeleteFetchObserverInstalled) {
+          return;
+        }
+        window.__imageGenerationHistoryDeleteFetchObserverInstalled = true;
+        var originalFetch = window.fetch;
+        window.fetch = function () {
+          var input = arguments[0];
+          var requestUrl = typeof input === "string" ? input : (input && input.url) || "";
+          return originalFetch.apply(this, arguments).then(function (response) {
+            if (/\/plugins\/image-generation\/api\/history(?:\?|$)/.test(requestUrl) && response.ok) {
+              response.clone().json().then(rememberHistoryItems).catch(function () {});
+            }
+            return response;
+          });
+        };
+      }
+
+      function deleteHistoryRecord(id) {
+        return window.fetch("/plugins/image-generation/api/history/" + encodeURIComponent(id), {
+          method: "DELETE",
+        }).then(function (response) {
+          if (!response.ok) {
+            throw new Error("delete history failed");
+          }
+        });
+      }
+
+      function ensureDeleteConfirmDialog() {
+        if (deleteConfirmDialogState) {
+          return deleteConfirmDialogState;
+        }
+
+        var overlay = document.createElement("div");
+        overlay.className = "modal-overlay image-delete-confirm-overlay";
+        overlay.setAttribute("data-testid", "history-delete-confirm-overlay");
+        overlay.setAttribute("hidden", "hidden");
+        overlay.setAttribute("aria-hidden", "true");
+
+        var dialog = document.createElement("div");
+        dialog.className = "modal-content image-delete-confirm-dialog";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-modal", "true");
+        dialog.setAttribute("aria-labelledby", "history-delete-confirm-title");
+        dialog.setAttribute("aria-describedby", "history-delete-confirm-message");
+
+        var header = document.createElement("div");
+        header.className = "modal-header";
+
+        var title = document.createElement("h3");
+        title.className = "modal-title";
+        title.id = "history-delete-confirm-title";
+        title.textContent = "确认删除";
+
+        var closeButton = document.createElement("button");
+        closeButton.type = "button";
+        closeButton.className = "image-delete-confirm-close";
+        closeButton.setAttribute("aria-label", "关闭删除确认弹窗");
+        closeButton.innerHTML = "&times;";
+
+        header.appendChild(title);
+        header.appendChild(closeButton);
+
+        var body = document.createElement("div");
+        body.className = "modal-body";
+
+        var message = document.createElement("p");
+        message.id = "history-delete-confirm-message";
+        message.className = "image-delete-confirm-message";
+        message.textContent = "确认删除当前历史记录吗？";
+        body.appendChild(message);
+
+        var footer = document.createElement("div");
+        footer.className = "modal-footer";
+
+        var cancelButton = document.createElement("button");
+        cancelButton.type = "button";
+        cancelButton.className = "image-delete-confirm-cancel";
+        cancelButton.textContent = "取消";
+
+        var confirmButton = document.createElement("button");
+        confirmButton.type = "button";
+        confirmButton.className = "image-delete-confirm-accept";
+        confirmButton.textContent = "删除";
+
+        footer.appendChild(cancelButton);
+        footer.appendChild(confirmButton);
+
+        dialog.appendChild(header);
+        dialog.appendChild(body);
+        dialog.appendChild(footer);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        deleteConfirmDialogState = {
+          overlay: overlay,
+          confirmButton: confirmButton,
+          cancelButton: cancelButton,
+          closeButton: closeButton,
+          resolver: null,
+          previousActiveElement: null,
+        };
+
+        function closeDeleteConfirm(result) {
+          if (!deleteConfirmDialogState || !deleteConfirmDialogState.resolver) {
+            return;
+          }
+          var resolver = deleteConfirmDialogState.resolver;
+          deleteConfirmDialogState.resolver = null;
+          overlay.setAttribute("hidden", "hidden");
+          overlay.setAttribute("aria-hidden", "true");
+          document.body.classList.remove("modal-open");
+          if (deleteConfirmDialogState.previousActiveElement && typeof deleteConfirmDialogState.previousActiveElement.focus === "function") {
+            deleteConfirmDialogState.previousActiveElement.focus();
+          }
+          deleteConfirmDialogState.previousActiveElement = null;
+          resolver(result);
+        }
+
+        overlay.addEventListener("click", function (event) {
+          if (event.target === overlay) {
+            closeDeleteConfirm(false);
+          }
+        });
+
+        cancelButton.addEventListener("click", function () {
+          closeDeleteConfirm(false);
+        });
+
+        closeButton.addEventListener("click", function () {
+          closeDeleteConfirm(false);
+        });
+
+        confirmButton.addEventListener("click", function () {
+          closeDeleteConfirm(true);
+        });
+
+        document.addEventListener("keydown", function (event) {
+          if (event.key === "Escape" && deleteConfirmDialogState && deleteConfirmDialogState.resolver) {
+            event.preventDefault();
+            closeDeleteConfirm(false);
+          }
+        });
+
+        return deleteConfirmDialogState;
+      }
+
+      function openDeleteConfirmDialog() {
+        var state = ensureDeleteConfirmDialog();
+        if (state.resolver) {
+          return Promise.resolve(false);
+        }
+        state.previousActiveElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        state.overlay.removeAttribute("hidden");
+        state.overlay.setAttribute("aria-hidden", "false");
+        document.body.classList.add("modal-open");
+        return new Promise(function (resolve) {
+          state.resolver = resolve;
+          window.requestAnimationFrame(function () {
+            state.confirmButton.focus();
+          });
+        });
+      }
+
+      function deleteLoadedRemoteHistory(ids) {
+        var targetIds = (ids && ids.length ? ids : remoteHistoryIds).slice();
+        if (!targetIds.length) {
+          return;
+        }
+        if (!window.confirm("确认删除当前历史记录吗？")) {
+          return;
+        }
+        Promise.all(targetIds.map(deleteHistoryRecord)).then(function () {
+          window.location.reload();
+        }).catch(function () {
+          window.alert("删除历史记录失败，请稍后重试");
+        });
+      }
+
+      deleteLoadedRemoteHistory = function (ids) {
+        var targetIds = (ids && ids.length ? ids : remoteHistoryIds).slice();
+        if (!targetIds.length) {
+          return;
+        }
+        openDeleteConfirmDialog().then(function (confirmed) {
+          if (!confirmed) {
+            return;
+          }
+          return Promise.all(targetIds.map(deleteHistoryRecord)).then(function () {
+            window.location.reload();
+          }).catch(function () {
+            window.alert("删除历史记录失败，请稍后重试");
+          });
+        });
+      };
+
+      function getHistoryItemKey(item) {
+        if (!(item instanceof HTMLElement)) {
+          return "";
+        }
+        if (item.dataset.historyKey) {
+          return item.dataset.historyKey;
+        }
+        var key = "";
+        if (item.__vnode && item.__vnode.key) {
+          key = String(item.__vnode.key);
+        } else if (item.__vueParentComponent && item.__vueParentComponent.vnode && item.__vueParentComponent.vnode.key) {
+          key = String(item.__vueParentComponent.vnode.key);
+        }
+        if (key) {
+          item.dataset.historyKey = key;
+        }
+        return key;
+      }
+
+      function isRemoteHistoryItemKey(key) {
+        return typeof key === "string" && key.indexOf("history-remote-") === 0;
+      }
+
+      function getRemoteHistoryIdsFromKey(key) {
+        if (!isRemoteHistoryItemKey(key)) {
+          return [];
+        }
+        return key.slice("history-remote-".length).split(",").map(function (id) {
+          return id.trim();
+        }).filter(Boolean);
+      }
+
+      function isDeletedLocalHistoryKey(key) {
+        return deletedLocalHistoryKeys.indexOf(key) >= 0;
+      }
+
+      function markLocalHistoryDeleted(key) {
+        if (!key || isDeletedLocalHistoryKey(key)) {
+          return;
+        }
+        deletedLocalHistoryKeys.push(key);
+      }
+
+      function removeRemoteHistoryCache(ids, key) {
+        var removedIds = (ids || []).map(function (id) {
+          return String(id);
+        });
+        if (removedIds.length) {
+          remoteHistoryIds = remoteHistoryIds.filter(function (id) {
+            return removedIds.indexOf(String(id)) === -1;
+          });
+        }
+        if (key) {
+          remoteHistoryKeys = remoteHistoryKeys.filter(function (historyKey) {
+            return historyKey !== key;
+          });
+        }
+      }
+
+      function findHistoryItemsByKey(key) {
+        if (!key) {
+          return [];
+        }
+        return Array.from(document.querySelectorAll('[data-testid="history-item"]')).filter(function (item) {
+          return item instanceof HTMLElement && getHistoryItemKey(item) === key;
+        });
+      }
+
+      function selectFallbackHistoryItem(excludedKey) {
+        var historyItems = Array.from(document.querySelectorAll('[data-testid="history-item"]'));
+        for (var index = 0; index < historyItems.length; index += 1) {
+          var item = historyItems[index];
+          if (!(item instanceof HTMLButtonElement)) {
+            continue;
+          }
+          var key = getHistoryItemKey(item);
+          if (!key || key === excludedKey || isDeletedLocalHistoryKey(key)) {
+            continue;
+          }
+          item.click();
+          return true;
+        }
+        var createButton = document.querySelector('[data-testid="new-image-session"]');
+        if (createButton instanceof HTMLButtonElement) {
+          createButton.click();
+          return true;
+        }
+        return false;
+      }
+
+      function deleteLocalHistoryItem(item, key) {
+        if (!(item instanceof HTMLElement) || !key) {
+          return;
+        }
+        var isActive = item.className.indexOf("bg-slate-950") >= 0;
+        markLocalHistoryDeleted(key);
+        if (isActive) {
+          selectFallbackHistoryItem(key);
+        }
+        item.style.display = "none";
+      }
+
+      function deleteRemoteHistoryItems(ids) {
+        var targetIds = (ids && ids.length ? ids : remoteHistoryIds).slice();
+        if (!targetIds.length) {
+          return;
+        }
+
+        var historyKey = "history-remote-" + targetIds.join(",");
+        var matchingItems = findHistoryItemsByKey(historyKey);
+
+        removeRemoteHistoryCache(targetIds, historyKey);
+        markLocalHistoryDeleted(historyKey);
+
+        if (matchingItems.length) {
+          matchingItems.forEach(function (item, index) {
+            var shouldSwitch = index === 0;
+            if (shouldSwitch && item.className.indexOf("bg-slate-950") >= 0) {
+              selectFallbackHistoryItem(historyKey);
+            }
+            item.style.display = "none";
+          });
+          return;
+        }
+
+        selectFallbackHistoryItem(historyKey);
+      }
+
+      deleteLoadedRemoteHistory = function (ids) {
+        var targetIds = (ids && ids.length ? ids : remoteHistoryIds).slice();
+        if (!targetIds.length) {
+          return;
+        }
+        openDeleteConfirmDialog().then(function (confirmed) {
+          if (!confirmed) {
+            return;
+          }
+          return Promise.all(targetIds.map(deleteHistoryRecord)).then(function () {
+            deleteRemoteHistoryItems(targetIds);
+          }).catch(function () {
+            window.alert("删除历史记录失败，请稍后重试");
+          });
+        });
+      };
 
       function ensureEmptyKeyOption() {
         var select = document.querySelector('[data-testid="image-key-select"]');
@@ -191,7 +559,68 @@
 
         history.classList.add('image-history-drawer');
         history.setAttribute('aria-hidden', 'false');
+        ensureHistoryDeleteButtons();
         updateAutoHistoryCollapsed();
+      }
+
+      function ensureHistoryDeleteButtons() {
+        var historyItems = Array.from(document.querySelectorAll('[data-testid="history-item"]'));
+        historyItems.forEach(function (item, index) {
+          if (!(item instanceof HTMLButtonElement)) {
+            return;
+          }
+          var historyKey = getHistoryItemKey(item);
+          if (!historyKey && remoteHistoryKeys[index]) {
+            historyKey = remoteHistoryKeys[index];
+            item.dataset.historyKey = historyKey;
+          }
+          if (historyKey && isDeletedLocalHistoryKey(historyKey)) {
+            item.style.display = "none";
+            return;
+          }
+          item.style.display = "";
+          var existingButton = item.querySelector('[data-testid="history-delete-button"]');
+          if (item.querySelector('[data-testid="history-delete-button"]')) {
+            return;
+          }
+          if (!item.textContent) {
+            return;
+          }
+
+          var deleteButton = document.createElement("span");
+          deleteButton.setAttribute("role", "button");
+          deleteButton.setAttribute("tabindex", "0");
+          deleteButton.setAttribute("aria-label", "Delete history");
+          deleteButton.setAttribute("data-testid", "history-delete-button");
+          deleteButton.className = "image-history-delete-button";
+          deleteButton.textContent = "删除";
+          deleteButton.addEventListener("click", function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            var key = getHistoryItemKey(item);
+            if (isRemoteHistoryItemKey(key)) {
+              var remoteHistoryIds = getRemoteHistoryIdsFromKey(key);
+              deleteLoadedRemoteHistory(remoteHistoryIds.length ? remoteHistoryIds : void 0);
+              return;
+            }
+            deleteLocalHistoryItem(item, key);
+          });
+          deleteButton.addEventListener("keydown", function (event) {
+            if (event.key !== "Enter" && event.key !== " ") {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            var key = getHistoryItemKey(item);
+            if (isRemoteHistoryItemKey(key)) {
+              var remoteHistoryIds = getRemoteHistoryIdsFromKey(key);
+              deleteLoadedRemoteHistory(remoteHistoryIds.length ? remoteHistoryIds : void 0);
+              return;
+            }
+            deleteLocalHistoryItem(item, key);
+          });
+          item.appendChild(deleteButton);
+        });
       }
 
       function observeHistoryLayout() {
@@ -249,6 +678,8 @@
         }, 100);
       }
 
+      installHistoryDeleteFetchObserver();
+
       document.addEventListener("DOMContentLoaded", function () {
         ensureEmptyKeyOption();
         ensureHistoryDrawerChrome();
@@ -259,6 +690,7 @@
         var timer = window.setInterval(function () {
           ensureEmptyKeyOption();
           ensureHistoryDrawerChrome();
+          ensureHistoryDeleteButtons();
           observeHistoryLayout();
           attempts += 1;
           if (attempts >= 20) {
@@ -289,6 +721,10 @@
     body {
       overflow: hidden;
       background: #f8f6f1;
+    }
+
+    body.modal-open {
+      overflow: hidden;
     }
 
     #app > div {
@@ -453,6 +889,118 @@
       overflow-y: auto;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
+    }
+
+    #app [data-testid="history-item"] {
+      position: relative;
+      padding-right: 3.75rem !important;
+    }
+
+    #app [data-testid="history-delete-button"] {
+      position: absolute;
+      right: 0.625rem;
+      top: 0.625rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2.25rem;
+      height: 1.5rem;
+      border-radius: 9999px;
+      background: rgba(248, 113, 113, 0.12);
+      color: #dc2626;
+      font-size: 0.75rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    #app [data-testid="history-delete-button"]:hover {
+      background: rgba(248, 113, 113, 0.2);
+    }
+
+    .modal-overlay.image-delete-confirm-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.75rem;
+      background: rgba(15, 23, 42, 0.45);
+    }
+
+    .modal-overlay.image-delete-confirm-overlay[hidden] {
+      display: none;
+    }
+
+    .image-delete-confirm-dialog {
+      width: min(100%, 28rem);
+      max-height: min(90vh, 32rem);
+      border-radius: 1rem;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 24px 48px rgba(15, 23, 42, 0.18);
+    }
+
+    .image-delete-confirm-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      border: 0;
+      border-radius: 0.75rem;
+      background: transparent;
+      color: #64748b;
+      font-size: 1.5rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .image-delete-confirm-close:hover {
+      background: #f8fafc;
+      color: #0f172a;
+    }
+
+    .image-delete-confirm-message {
+      margin: 0;
+      font-size: 0.875rem;
+      line-height: 1.6;
+      color: #475569;
+    }
+
+    .image-delete-confirm-cancel,
+    .image-delete-confirm-accept {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 4.5rem;
+      height: 2.5rem;
+      padding: 0 1rem;
+      border-radius: 0.5rem;
+      border: 1px solid transparent;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .image-delete-confirm-cancel {
+      background: #ffffff;
+      border-color: #d1d5db;
+      color: #374151;
+    }
+
+    .image-delete-confirm-cancel:hover {
+      background: #f9fafb;
+    }
+
+    .image-delete-confirm-accept {
+      background: #dc2626;
+      color: #ffffff;
+    }
+
+    .image-delete-confirm-accept:hover {
+      background: #b91c1c;
     }
 
     #app [data-testid="image-chat-panel"] {

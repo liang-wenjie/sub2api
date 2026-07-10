@@ -30,15 +30,15 @@ func TestSQLHistoryRepositoryCreateUpdateAndRead(t *testing.T) {
 		Email:  "user@example.com",
 		Plugin: "image-generation",
 	}
-	request := map[string]any{"prompt": "cat", "size": "1024x1024"}
+	request := map[string]any{"prompt": "cat", "size": "1024x1024", "conversation_id": "conversation-1"}
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO plugin_generation_history (
-			id, user_id, user_email, plugin_key, prompt, status,
+			id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 			request_payload, result_payload, error_message, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, '', $8, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, $9)
 	`)).
-		WithArgs("history-1", int64(42), "user@example.com", "image-generation", "cat", model.HistoryStatusPending, mustJSON(t, request), repo.now()).
+		WithArgs("history-1", "conversation-1", int64(42), "user@example.com", "image-generation", "cat", model.HistoryStatusPending, mustJSON(t, request), repo.now()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	record, err := repo.Create(ctx, principal, " cat ", request)
@@ -48,19 +48,23 @@ func TestSQLHistoryRepositoryCreateUpdateAndRead(t *testing.T) {
 	if record.ID != "history-1" {
 		t.Fatalf("created id = %q", record.ID)
 	}
+	if record.ConversationID != "conversation-1" {
+		t.Fatalf("created conversation id = %q, want %q", record.ConversationID, "conversation-1")
+	}
 
 	record.Status = model.HistoryStatusSucceeded
 	record.Result = map[string]any{"type": "image_generation"}
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE plugin_generation_history
-		SET status = $2,
-			request_payload = $3,
-			result_payload = $4,
-			error_message = $5,
-			updated_at = $6
+		SET conversation_id = $2,
+			status = $3,
+			request_payload = $4,
+			result_payload = $5,
+			error_message = $6,
+			updated_at = $7
 		WHERE id = $1
 	`)).
-		WithArgs("history-1", model.HistoryStatusSucceeded, mustJSON(t, request), mustJSON(t, record.Result), "", repo.now()).
+		WithArgs("history-1", "conversation-1", model.HistoryStatusSucceeded, mustJSON(t, request), mustJSON(t, record.Result), "", repo.now()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := repo.Update(ctx, record); err != nil {
@@ -68,14 +72,14 @@ func TestSQLHistoryRepositoryCreateUpdateAndRead(t *testing.T) {
 	}
 
 	rows := sqlmock.NewRows([]string{
-		"id", "user_id", "user_email", "plugin_key", "prompt", "status",
+		"id", "conversation_id", "user_id", "user_email", "plugin_key", "prompt", "status",
 		"request_payload", "result_payload", "error_message", "created_at", "updated_at",
 	}).AddRow(
-		"history-1", int64(42), "user@example.com", "image-generation", "cat", model.HistoryStatusSucceeded,
+		"history-1", "conversation-1", int64(42), "user@example.com", "image-generation", "cat", model.HistoryStatusSucceeded,
 		mustJSON(t, request), mustJSON(t, record.Result), "", repo.now(), repo.now(),
 	)
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, user_id, user_email, plugin_key, prompt, status,
+		SELECT id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 			request_payload, result_payload, error_message, created_at, updated_at
 		FROM plugin_generation_history
 		WHERE id = $1
@@ -93,6 +97,9 @@ func TestSQLHistoryRepositoryCreateUpdateAndRead(t *testing.T) {
 	if got.Result["type"] != "image_generation" {
 		t.Fatalf("result = %#v", got.Result)
 	}
+	if got.ConversationID != "conversation-1" {
+		t.Fatalf("read conversation id = %q, want %q", got.ConversationID, "conversation-1")
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -106,14 +113,14 @@ func TestSQLHistoryRepositoryListByUserUsesDatabasePagination(t *testing.T) {
 	repo := NewSQLHistoryRepository(db)
 	createdAt := time.Date(2026, 7, 9, 10, 11, 12, 0, time.UTC)
 	rows := sqlmock.NewRows([]string{
-		"id", "user_id", "user_email", "plugin_key", "prompt", "status",
+		"id", "conversation_id", "user_id", "user_email", "plugin_key", "prompt", "status",
 		"request_payload", "result_payload", "error_message", "created_at", "updated_at",
 	}).AddRow(
-		"history-2", int64(7), "user@example.com", "image-generation", "dog", model.HistoryStatusPending,
+		"history-2", "conversation-2", int64(7), "user@example.com", "image-generation", "dog", model.HistoryStatusPending,
 		`{"prompt":"dog"}`, sql.NullString{}, "", createdAt, createdAt,
 	)
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, user_id, user_email, plugin_key, prompt, status,
+		SELECT id, conversation_id, user_id, user_email, plugin_key, prompt, status,
 			request_payload, result_payload, error_message, created_at, updated_at
 		FROM plugin_generation_history
 		WHERE user_id = $1
@@ -130,6 +137,51 @@ func TestSQLHistoryRepositoryListByUserUsesDatabasePagination(t *testing.T) {
 	if len(records) != 1 || records[0].ID != "history-2" {
 		t.Fatalf("records = %#v", records)
 	}
+	if records[0].ConversationID != "conversation-2" {
+		t.Fatalf("conversation id = %q, want %q", records[0].ConversationID, "conversation-2")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLHistoryRepositoryDeleteRemovesRecord(t *testing.T) {
+	db, mock := newSQLMock(t)
+	defer db.Close()
+
+	repo := NewSQLHistoryRepository(db)
+	mock.ExpectExec(regexp.QuoteMeta(`
+		DELETE FROM plugin_generation_history
+		WHERE id = $1
+	`)).
+		WithArgs("history-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := repo.Delete(context.Background(), "history-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLHistoryRepositoryDeleteReturnsNotFound(t *testing.T) {
+	db, mock := newSQLMock(t)
+	defer db.Close()
+
+	repo := NewSQLHistoryRepository(db)
+	mock.ExpectExec(regexp.QuoteMeta(`
+		DELETE FROM plugin_generation_history
+		WHERE id = $1
+	`)).
+		WithArgs("missing").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := repo.Delete(context.Background(), "missing"); err != ErrNotFound {
+		t.Fatalf("Delete() err = %v, want ErrNotFound", err)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -142,7 +194,11 @@ func TestSQLHistoryRepositoryEnsureSchema(t *testing.T) {
 
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS plugin_generation_history").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE plugin_generation_history ADD COLUMN IF NOT EXISTS conversation_id TEXT NOT NULL DEFAULT ''").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_user_created").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_conversation").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_created").
 		WillReturnResult(sqlmock.NewResult(0, 0))

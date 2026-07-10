@@ -49,6 +49,7 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware
 	mux.HandleFunc("GET "+apiBasePath+"/creations", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListCreations))
 	mux.HandleFunc("GET "+apiBasePath+"/history", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListHistory))
 	mux.HandleFunc("GET "+apiBasePath+"/history/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetHistory))
+	mux.HandleFunc("DELETE "+apiBasePath+"/history/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.DeleteHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/retry", authMiddleware.RequirePlugin(imagemanifest.Key, handler.RetryHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/cancel", authMiddleware.RequirePlugin(imagemanifest.Key, handler.CancelHistory))
 }
@@ -135,6 +136,14 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request, principal m
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
+}
+
+func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	if err := h.history.Delete(r.Context(), principal, r.PathValue("id")); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) RetryHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {

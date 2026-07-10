@@ -25,17 +25,18 @@ func (p CurrentPrincipal) IsAdmin() bool {
 }
 
 type HistoryRecord struct {
-	ID           string         `json:"id"`
-	UserID       int64          `json:"user_id"`
-	UserEmail    string         `json:"user_email"`
-	PluginKey    string         `json:"plugin_key"`
-	Prompt       string         `json:"prompt"`
-	Status       string         `json:"status"`
-	Request      map[string]any `json:"request"`
-	Result       map[string]any `json:"result,omitempty"`
-	ErrorMessage string         `json:"error_message,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	ID             string         `json:"id"`
+	ConversationID string         `json:"conversation_id,omitempty"`
+	UserID         int64          `json:"user_id"`
+	UserEmail      string         `json:"user_email"`
+	PluginKey      string         `json:"plugin_key"`
+	Prompt         string         `json:"prompt"`
+	Status         string         `json:"status"`
+	Request        map[string]any `json:"request"`
+	Result         map[string]any `json:"result,omitempty"`
+	ErrorMessage   string         `json:"error_message,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 type PluginMetadata struct {

@@ -33,15 +33,16 @@ func NewHistoryRepository() *HistoryRepository {
 func (r *HistoryRepository) Create(_ context.Context, principal model.CurrentPrincipal, prompt string, request map[string]any) (*model.HistoryRecord, error) {
 	now := r.now().UTC()
 	record := model.HistoryRecord{
-		ID:        r.newID(),
-		UserID:    principal.UserID,
-		UserEmail: principal.Email,
-		PluginKey: principal.Plugin,
-		Prompt:    strings.TrimSpace(prompt),
-		Status:    model.HistoryStatusPending,
-		Request:   copyMap(request),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             r.newID(),
+		ConversationID: conversationIDFromRequest(request),
+		UserID:         principal.UserID,
+		UserEmail:      principal.Email,
+		PluginKey:      principal.Plugin,
+		Prompt:         strings.TrimSpace(prompt),
+		Status:         model.HistoryStatusPending,
+		Request:        copyMap(request),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if record.Request == nil {
 		record.Request = map[string]any{}
@@ -71,6 +72,16 @@ func (r *HistoryRepository) Get(_ context.Context, id string) (*model.HistoryRec
 		return nil, false, nil
 	}
 	return &record, true, nil
+}
+
+func (r *HistoryRepository) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.records[id]; !ok {
+		return ErrNotFound
+	}
+	delete(r.records, id)
+	return nil
 }
 
 func (r *HistoryRepository) ListAll(_ context.Context, query model.HistoryQuery) ([]model.HistoryRecord, error) {
@@ -137,4 +148,15 @@ func copyMap(input map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func conversationIDFromRequest(request map[string]any) string {
+	if request == nil {
+		return ""
+	}
+	value, ok := request["conversation_id"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
