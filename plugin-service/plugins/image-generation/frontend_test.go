@@ -44,6 +44,32 @@ func TestFrontendInjectsPluginAuthBridgeScript(t *testing.T) {
 	}
 }
 
+func TestFrontendContainsResponsiveAppleButtonStyles(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterFrontend(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("frontend status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	for _, needle := range []string{
+		`--image-button-primary: #0d9488`,
+		`button:focus-visible`,
+		`transform: scale(0.97)`,
+		`min-height: 44px`,
+		`backdrop-filter: blur(14px) saturate(160%)`,
+		`@media (prefers-reduced-motion: reduce)`,
+	} {
+		if !strings.Contains(rec.Body.String(), needle) {
+			t.Fatalf("frontend html missing responsive button style %q", needle)
+		}
+	}
+}
+
 func TestFrontendServesBundledImageGenerationHistoryRecordFixes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterFrontend(mux)
