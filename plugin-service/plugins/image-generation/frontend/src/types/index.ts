@@ -39,6 +39,7 @@ export interface ReferenceImageRequest {
   mime_type?: string
   data_url?: string
   remote_url?: string
+  storage_key?: string
 }
 
 export interface GenerateRequest {

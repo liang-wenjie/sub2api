@@ -3,11 +3,14 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -17,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/media"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
@@ -32,19 +36,22 @@ const (
 	defaultImageModel          = "gemini-2.5-flash-image"
 	defaultImageSize           = "1024x1024"
 	defaultImageResponseFormat = "b64_json"
+	maxPersistedImageBytes     = 25 << 20
 )
 
 type GenerationServiceOptions struct {
-	HTTPClient  *http.Client
-	BatchClient *BatchClient
+	HTTPClient   *http.Client
+	BatchClient  *BatchClient
+	MediaStorage media.Storage
 }
 
 type GenerationService struct {
-	history     *service.HistoryService
-	httpClient  *http.Client
-	batchClient *BatchClient
-	tasksMu     sync.Mutex
-	localTasks  map[string]context.CancelFunc
+	history      *service.HistoryService
+	httpClient   *http.Client
+	batchClient  *BatchClient
+	mediaStorage media.Storage
+	tasksMu      sync.Mutex
+	localTasks   map[string]context.CancelFunc
 }
 
 type UpstreamHTTPError struct {
@@ -93,10 +100,11 @@ type GenerateResponse struct {
 }
 
 type ReferenceImage struct {
-	Name      string `json:"name,omitempty"`
-	MimeType  string `json:"mime_type,omitempty"`
-	DataURL   string `json:"data_url,omitempty"`
-	RemoteURL string `json:"remote_url,omitempty"`
+	Name       string `json:"name,omitempty"`
+	MimeType   string `json:"mime_type,omitempty"`
+	DataURL    string `json:"data_url,omitempty"`
+	RemoteURL  string `json:"remote_url,omitempty"`
+	StorageKey string `json:"storage_key,omitempty"`
 }
 
 type CreationRecord struct {
@@ -125,10 +133,40 @@ func NewGenerationService(history *service.HistoryService, opts GenerationServic
 		batchClient = NewBatchClient(client)
 	}
 	return &GenerationService{
-		history:     history,
-		httpClient:  client,
-		batchClient: batchClient,
-		localTasks:  make(map[string]context.CancelFunc),
+		history:      history,
+		httpClient:   client,
+		batchClient:  batchClient,
+		mediaStorage: opts.MediaStorage,
+		localTasks:   make(map[string]context.CancelFunc),
+	}
+}
+
+func (s *GenerationService) GetMedia(ctx context.Context, key string) (*media.Object, error) {
+	if s.mediaStorage == nil || strings.TrimSpace(key) == "" {
+		return nil, media.ErrNotFound
+	}
+	return s.mediaStorage.Get(ctx, key)
+}
+
+func (s *GenerationService) DeleteMedia(ctx context.Context, record *model.HistoryRecord) {
+	if s.mediaStorage == nil || record == nil {
+		return
+	}
+	keys := make([]string, 0)
+	for _, reference := range referenceImagesValue(record.Request["reference_images"]) {
+		if reference.StorageKey != "" {
+			keys = append(keys, reference.StorageKey)
+		}
+	}
+	for _, image := range imageMapsValue(record.Result["images"]) {
+		if key := stringValue(image["object_key"]); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	for _, key := range keys {
+		if err := s.mediaStorage.Delete(ctx, key); err != nil {
+			log.Printf("[plugin-service] failed to delete media object history_id=%s err=%v", record.ID, err)
+		}
 	}
 }
 
@@ -176,6 +214,18 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 		log.Printf("[plugin-service] image generation create history failed user_id=%d err=%v", principal.UserID, err)
 		return nil, err
 	}
+	if s.mediaStorage != nil && len(req.ReferenceImages) > 0 {
+		if err := s.archiveReferenceImages(ctx, principal, record.ID, req.ReferenceImages); err != nil {
+			record.Status = model.HistoryStatusFailed
+			record.ErrorMessage = err.Error()
+			_ = s.history.Update(ctx, record)
+			return nil, err
+		}
+		record.Request = requestPayload(req)
+		if err := s.history.Update(ctx, record); err != nil {
+			return nil, err
+		}
+	}
 
 	if supportsBatchGeneration(req.Model) {
 		return s.submitBatch(ctx, record, providerBaseURL, req)
@@ -220,6 +270,9 @@ func (s *GenerationService) runLocalTask(ctx context.Context, cancel context.Can
 	}()
 
 	result, generationErr := s.generateWithProvider(ctx, providerBaseURL, req)
+	if generationErr == nil {
+		generationErr = s.archiveResultImages(ctx, historyID, result)
+	}
 	record, err := s.history.Get(context.Background(), model.CurrentPrincipal{Role: model.RoleAdmin}, historyID)
 	if err != nil || isTerminalHistoryStatus(record.Status) {
 		return
@@ -292,6 +345,9 @@ func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPr
 		ResponseFormat:  stringValue(record.Request["response_format"]),
 		ReferenceImages: referenceImagesValue(record.Request["reference_images"]),
 		Inputs:          copyMap(record.Request),
+	}
+	if err := s.restoreReferenceImages(ctx, retryReq.ReferenceImages); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(retryReq.Prompt) == "" {
 		retryReq.Prompt = record.Prompt
@@ -368,18 +424,25 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 	if err != nil {
 		return err
 	}
-	dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content)
+	image := map[string]any{
+		"url":            "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
+		"b64_json":       base64.StdEncoding.EncodeToString(content),
+		"revised_prompt": "",
+	}
+	if s.mediaStorage != nil {
+		stored, err := s.archiveImage(ctx, record.ID, 0, mimeType, content)
+		if err != nil {
+			return err
+		}
+		image = stored
+	}
 	record.Result = map[string]any{
 		"type":         "image_generation",
 		"provider":     "batch",
 		"model":        stringValue(record.Request["model"]),
 		"size":         stringValue(record.Request["size"]),
 		"batch_status": "completed",
-		"images": []map[string]any{{
-			"url":            dataURL,
-			"b64_json":       base64.StdEncoding.EncodeToString(content),
-			"revised_prompt": "",
-		}},
+		"images":       []map[string]any{image},
 	}
 	return nil
 }
@@ -630,6 +693,196 @@ func normalizeImagesResult(req GenerateRequest, payload openAIImagesResponse) ma
 	}
 }
 
+func (s *GenerationService) archiveResultImages(ctx context.Context, historyID string, result map[string]any) error {
+	if s.mediaStorage == nil {
+		return nil
+	}
+	images := imageMapsValue(result["images"])
+	archived := make([]map[string]any, 0, len(images))
+	for index, image := range images {
+		contentType := "image/png"
+		var data []byte
+		var err error
+		if encoded := stringValue(image["b64_json"]); encoded != "" {
+			data, err = base64.StdEncoding.DecodeString(encoded)
+		} else if rawURL := stringValue(image["url"]); rawURL != "" {
+			data, contentType, err = s.downloadImage(ctx, rawURL)
+		} else {
+			err = errors.New("generated image has no data")
+		}
+		if err != nil {
+			return err
+		}
+		stored, err := s.archiveImage(ctx, historyID, index, contentType, data)
+		if err != nil {
+			return err
+		}
+		stored["revised_prompt"] = stringValue(image["revised_prompt"])
+		archived = append(archived, stored)
+	}
+	result["images"] = archived
+	return nil
+}
+
+func (s *GenerationService) downloadImage(ctx context.Context, rawURL string) ([]byte, string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, "", errors.New("generated image URL must use HTTP or HTTPS")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", errors.New("failed to download generated image")
+	}
+	limited := io.LimitReader(resp.Body, maxPersistedImageBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) == 0 || len(data) > maxPersistedImageBytes {
+		return nil, "", errors.New("generated image has invalid size")
+	}
+	contentType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
+	if !strings.HasPrefix(contentType, "image/") {
+		contentType = http.DetectContentType(data)
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		return nil, "", errors.New("generated result is not an image")
+	}
+	return data, contentType, nil
+}
+
+func (s *GenerationService) archiveImage(ctx context.Context, historyID string, index int, contentType string, data []byte) (map[string]any, error) {
+	digest := sha256.Sum256(data)
+	extension := ".img"
+	if extensions, _ := mime.ExtensionsByType(contentType); len(extensions) > 0 {
+		extension = extensions[0]
+	}
+	key := "image-generation/" + historyID + "/result/" + strconv.Itoa(index) + "-" + hex.EncodeToString(digest[:]) + extension
+	if err := s.mediaStorage.Put(ctx, key, contentType, bytes.NewReader(data), int64(len(data))); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"url":          apiBasePath + "/assets/" + historyID + "/result/" + strconv.Itoa(index),
+		"object_key":   key,
+		"content_type": contentType,
+		"byte_size":    len(data),
+	}, nil
+}
+
+func (s *GenerationService) archiveReferenceImages(ctx context.Context, principal model.CurrentPrincipal, historyID string, images []ReferenceImage) error {
+	for index := range images {
+		name, contentType, data, err := s.referenceImageBytes(ctx, principal, images[index])
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(data)
+		extension := ".img"
+		if extensions, _ := mime.ExtensionsByType(contentType); len(extensions) > 0 {
+			extension = extensions[0]
+		}
+		key := "image-generation/" + historyID + "/reference/" + strconv.Itoa(index) + "-" + hex.EncodeToString(digest[:]) + extension
+		if err := s.mediaStorage.Put(ctx, key, contentType, bytes.NewReader(data), int64(len(data))); err != nil {
+			return err
+		}
+		images[index].Name = name
+		images[index].MimeType = contentType
+		images[index].StorageKey = key
+		images[index].DataURL = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+	}
+	return nil
+}
+
+func (s *GenerationService) referenceImageBytes(ctx context.Context, principal model.CurrentPrincipal, image ReferenceImage) (string, string, []byte, error) {
+	if strings.HasPrefix(strings.TrimSpace(image.DataURL), "data:") {
+		return decodeDataURLImage(image.DataURL, image.Name, image.MimeType)
+	}
+	rawURL := strings.TrimSpace(image.DataURL)
+	if rawURL == "" {
+		rawURL = strings.TrimSpace(image.RemoteURL)
+	}
+	prefix := apiBasePath + "/assets/"
+	parsedURL, parseErr := url.Parse(rawURL)
+	storedPath := rawURL
+	if parseErr == nil {
+		storedPath = parsedURL.Path
+	}
+	if strings.HasPrefix(storedPath, prefix) {
+		parts := strings.Split(strings.TrimPrefix(storedPath, prefix), "/")
+		if len(parts) != 3 || (parts[1] != "result" && parts[1] != "reference") {
+			return "", "", nil, errors.New("invalid stored image URL")
+		}
+		index, err := strconv.Atoi(parts[2])
+		if err != nil || index < 0 {
+			return "", "", nil, errors.New("invalid stored image index")
+		}
+		record, err := s.history.Get(ctx, principal, parts[0])
+		if err != nil {
+			return "", "", nil, err
+		}
+		var objectKey string
+		if parts[1] == "result" {
+			results := imageMapsValue(record.Result["images"])
+			if index < len(results) {
+				objectKey = stringValue(results[index]["object_key"])
+			}
+		} else {
+			references := referenceImagesValue(record.Request["reference_images"])
+			if index < len(references) {
+				objectKey = references[index].StorageKey
+			}
+		}
+		if objectKey == "" {
+			return "", "", nil, media.ErrNotFound
+		}
+		object, err := s.mediaStorage.Get(ctx, objectKey)
+		if err != nil {
+			return "", "", nil, err
+		}
+		defer object.Body.Close()
+		data, err := io.ReadAll(io.LimitReader(object.Body, maxPersistedImageBytes+1))
+		if err != nil || len(data) > maxPersistedImageBytes {
+			return "", "", nil, errors.New("failed to read stored reference image")
+		}
+		return image.Name, object.ContentType, data, nil
+	}
+	data, contentType, err := s.downloadImage(ctx, rawURL)
+	return image.Name, contentType, data, err
+}
+
+func (s *GenerationService) restoreReferenceImages(ctx context.Context, images []ReferenceImage) error {
+	if s.mediaStorage == nil {
+		return nil
+	}
+	for index := range images {
+		if images[index].DataURL != "" || images[index].StorageKey == "" {
+			continue
+		}
+		object, err := s.mediaStorage.Get(ctx, images[index].StorageKey)
+		if err != nil {
+			return err
+		}
+		data, err := io.ReadAll(io.LimitReader(object.Body, maxPersistedImageBytes+1))
+		_ = object.Body.Close()
+		if err != nil {
+			return err
+		}
+		if len(data) > maxPersistedImageBytes {
+			return errors.New("stored reference image is too large")
+		}
+		images[index].MimeType = object.ContentType
+		images[index].DataURL = "data:" + object.ContentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+	}
+	return nil
+}
+
 func joinProviderPath(baseURL, endpoint string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
@@ -748,12 +1001,16 @@ func requestPayload(req GenerateRequest) map[string]any {
 	if len(req.ReferenceImages) > 0 {
 		references := make([]map[string]any, 0, len(req.ReferenceImages))
 		for _, reference := range req.ReferenceImages {
-			references = append(references, map[string]any{
-				"name":       reference.Name,
-				"mime_type":  reference.MimeType,
-				"data_url":   reference.DataURL,
-				"remote_url": reference.RemoteURL,
-			})
+			stored := map[string]any{
+				"name":        reference.Name,
+				"mime_type":   reference.MimeType,
+				"remote_url":  reference.RemoteURL,
+				"storage_key": reference.StorageKey,
+			}
+			if reference.StorageKey == "" {
+				stored["data_url"] = reference.DataURL
+			}
+			references = append(references, stored)
 		}
 		payload["reference_images"] = references
 	}
@@ -778,10 +1035,11 @@ func referenceImagesValue(value any) []ReferenceImage {
 	references := make([]ReferenceImage, 0, len(items))
 	for _, item := range items {
 		references = append(references, ReferenceImage{
-			Name:      stringValue(item["name"]),
-			MimeType:  stringValue(item["mime_type"]),
-			DataURL:   stringValue(item["data_url"]),
-			RemoteURL: stringValue(item["remote_url"]),
+			Name:       stringValue(item["name"]),
+			MimeType:   stringValue(item["mime_type"]),
+			DataURL:    stringValue(item["data_url"]),
+			RemoteURL:  stringValue(item["remote_url"]),
+			StorageKey: stringValue(item["storage_key"]),
 		})
 	}
 	return references

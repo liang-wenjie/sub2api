@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createPluginApi } from './client'
+import { authenticatedMediaUrl, createPluginApi } from './client'
 import type { GenerateRequest } from '../types'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -10,6 +10,13 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('plugin api client', () => {
+	it('adds the login token to media URLs used by image elements', () => {
+		window.localStorage.setItem('auth_token', 'media-token')
+		expect(authenticatedMediaUrl('/plugins/image-generation/api/assets/h1/reference/0'))
+			.toBe('/plugins/image-generation/api/assets/h1/reference/0?token=media-token')
+		expect(authenticatedMediaUrl('data:image/png;base64,abc')).toBe('data:image/png;base64,abc')
+		window.localStorage.removeItem('auth_token')
+	})
   it('submits generation through the configured plugin base', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ job_id: 'job-1', status: 'pending' }, 201))
     const client = createPluginApi('/plugins/image-generation/api/', fetchSpy)

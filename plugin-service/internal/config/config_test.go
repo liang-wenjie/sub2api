@@ -83,7 +83,7 @@ func TestMustLoadPrefersProcessEnvOverDotEnv(t *testing.T) {
 }
 
 func TestMustLoadUsesDefaultPortWhenUnset(t *testing.T) {
-	unsetEnv(t, "PLUGIN_SERVER_PORT", "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE")
+	unsetEnv(t, "PLUGIN_SERVER_PORT", "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_DBNAME", "DATABASE_SSLMODE", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET", "MINIO_USE_SSL")
 
 	cfg := MustLoad()
 	if cfg.ListenAddr != ":8091" {
@@ -92,6 +92,45 @@ func TestMustLoadUsesDefaultPortWhenUnset(t *testing.T) {
 	if cfg.Database.Enabled {
 		t.Fatal("database should be disabled when shared database env is unset")
 	}
+}
+
+func TestMustLoadEnablesMinIOWhenFullyConfigured(t *testing.T) {
+	unsetEnv(t, "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET", "MINIO_USE_SSL")
+	t.Setenv("MINIO_ENDPOINT", "minio:9000")
+	t.Setenv("MINIO_ACCESS_KEY", "plugin")
+	t.Setenv("MINIO_SECRET_KEY", "plugin-secret")
+	t.Setenv("MINIO_BUCKET", "plugin-media")
+	t.Setenv("MINIO_USE_SSL", "true")
+
+	cfg := MustLoad()
+	if !cfg.MinIO.Enabled || cfg.MinIO.Endpoint != "minio:9000" || cfg.MinIO.Bucket != "plugin-media" || !cfg.MinIO.UseSSL {
+		t.Fatalf("minio config = %#v", cfg.MinIO)
+	}
+}
+
+func TestMustLoadUsesMinIORootCredentialsForSourceRun(t *testing.T) {
+	unsetEnv(t, "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "MINIO_BUCKET", "MINIO_USE_SSL")
+	t.Setenv("MINIO_ENDPOINT", "127.0.0.1:9000")
+	t.Setenv("MINIO_ROOT_USER", "plugin-root")
+	t.Setenv("MINIO_ROOT_PASSWORD", "plugin-root-secret")
+	t.Setenv("MINIO_BUCKET", "plugin-media")
+
+	cfg := MustLoad()
+	if !cfg.MinIO.Enabled || cfg.MinIO.AccessKey != "plugin-root" || cfg.MinIO.SecretKey != "plugin-root-secret" {
+		t.Fatalf("minio config = %#v", cfg.MinIO)
+	}
+}
+
+func TestMustLoadRejectsPartialMinIOConfiguration(t *testing.T) {
+	unsetEnv(t, "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET", "MINIO_USE_SSL")
+	t.Setenv("MINIO_ENDPOINT", "minio:9000")
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MustLoad() did not reject partial MinIO configuration")
+		}
+	}()
+	_ = MustLoad()
 }
 
 func TestMustLoadIgnoresLegacyPluginServiceEnvNames(t *testing.T) {

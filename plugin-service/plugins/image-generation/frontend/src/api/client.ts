@@ -68,6 +68,17 @@ export function pluginApiBase(): string {
   return root?.dataset.pluginApiBase?.replace(/\/+$/, '') || '/plugins/image-generation/api'
 }
 
+export function authenticatedMediaUrl(rawUrl: string): string {
+  if (!rawUrl || rawUrl.startsWith('data:') || rawUrl.startsWith('blob:')) return rawUrl
+  const params = new URLSearchParams(window.location.search)
+  let token = params.get('token') || params.get('session') || ''
+  try { token ||= window.localStorage.getItem('auth_token') || '' } catch { token = token || '' }
+  if (!token) return rawUrl
+  const url = new URL(rawUrl, window.location.origin)
+  if (!url.searchParams.has('token') && !url.searchParams.has('session')) url.searchParams.set('token', token)
+  return url.origin === window.location.origin ? `${url.pathname}${url.search}${url.hash}` : url.toString()
+}
+
 export async function loadImageKeys(fetcher: typeof fetch = window.fetch.bind(window)): Promise<ImageApiKey[]> {
   let token = ''
   try { token = window.localStorage.getItem('auth_token') || '' } catch { token = '' }

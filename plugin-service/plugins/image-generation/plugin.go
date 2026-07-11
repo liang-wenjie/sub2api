@@ -21,7 +21,7 @@ func (Plugin) Metadata() pluginregistry.Metadata {
 func (Plugin) RegisterRoutes(mux *http.ServeMux, deps pluginregistry.RouteDeps) {
 	RegisterFrontend(mux)
 
-	generation := backend.NewGenerationService(deps.History, backend.GenerationServiceOptions{})
+	generation := backend.NewGenerationService(deps.History, backend.GenerationServiceOptions{MediaStorage: deps.Media})
 	handler := backend.NewHandler(backend.HandlerDeps{
 		PluginKey:  manifest.Key,
 		History:    deps.History,

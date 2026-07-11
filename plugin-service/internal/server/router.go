@@ -10,6 +10,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/handler"
 	hostprincipal "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/media"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/pluginregistry"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/repository"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
@@ -20,6 +21,7 @@ import (
 
 func NewRouter(cfg config.Config) http.Handler {
 	history := newHistoryService(cfg)
+	storage := newMediaStorage(cfg)
 	registry := pluginregistry.New()
 	if err := plugins.RegisterAll(registry); err != nil {
 		panic(err)
@@ -36,8 +38,24 @@ func NewRouter(cfg config.Config) http.Handler {
 		Config:  cfg,
 		Auth:    principalMiddleware,
 		History: history,
+		Media:   storage,
 	})
 	return app.WithCommonHeaders(mux)
+}
+
+func newMediaStorage(cfg config.Config) media.Storage {
+	if !cfg.MinIO.Enabled {
+		log.Print("[plugin-service] MinIO is not configured; image media remains inline")
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	storage, err := media.NewMinIOStorage(ctx, cfg.MinIO)
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("[plugin-service] using MinIO bucket %s for image media", cfg.MinIO.Bucket)
+	return storage
 }
 
 func newHistoryService(cfg config.Config) *service.HistoryService {

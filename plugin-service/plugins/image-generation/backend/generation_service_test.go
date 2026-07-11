@@ -1,21 +1,92 @@
 package backend
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/media"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/repository"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
+
+type memoryMediaStorage struct {
+	objects map[string][]byte
+	types   map[string]string
+}
+
+func newMemoryMediaStorage() *memoryMediaStorage {
+	return &memoryMediaStorage{objects: map[string][]byte{}, types: map[string]string{}}
+}
+
+func (s *memoryMediaStorage) Put(_ context.Context, key, contentType string, body io.Reader, _ int64) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	s.objects[key] = data
+	s.types[key] = contentType
+	return nil
+}
+
+func (s *memoryMediaStorage) Get(_ context.Context, key string) (*media.Object, error) {
+	data, ok := s.objects[key]
+	if !ok {
+		return nil, media.ErrNotFound
+	}
+	return &media.Object{Body: io.NopCloser(bytes.NewReader(data)), ContentType: s.types[key], Size: int64(len(data))}, nil
+}
+
+func (s *memoryMediaStorage) Delete(_ context.Context, key string) error {
+	delete(s.objects, key)
+	return nil
+}
+
+func (s *memoryMediaStorage) PresignGet(_ context.Context, key string, _ time.Duration) (*url.URL, error) {
+	return url.Parse("https://minio.example/" + key)
+}
+
+func TestGenerationService_ArchivesBase64Result(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"cG5nLWJ5dGVz"}]}`))
+	}))
+	defer upstream.Close()
+
+	storage := newMemoryMediaStorage()
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), MediaStorage: storage})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
+		Prompt: "cat", ProviderAPIKey: "key", Model: "gpt-image-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := waitForHistoryStatus(t, history, principal, created.JobID, model.HistoryStatusSucceeded)
+	images := imageMapsValue(record.Result["images"])
+	if len(images) != 1 || images[0]["object_key"] == "" {
+		t.Fatalf("images = %#v", images)
+	}
+	if images[0]["b64_json"] != nil && images[0]["b64_json"] != "" {
+		t.Fatalf("base64 persisted in history: %#v", images[0])
+	}
+	key := stringValue(images[0]["object_key"])
+	if string(storage.objects[key]) != "png-bytes" {
+		t.Fatalf("stored bytes = %q", storage.objects[key])
+	}
+}
 
 func TestGenerationService_GPTCreatesLocalTaskAndReturnsResultFromStatus(t *testing.T) {
 	started := make(chan struct{})
@@ -151,6 +222,39 @@ func TestGenerationService_GenerateReferenceImageSubmitsBatch(t *testing.T) {
 	}
 }
 
+func TestGenerationService_PersistsReferenceWithoutBase64(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"imgbatch_reference","status":"queued"}`))
+	}))
+	defer upstream.Close()
+
+	storage := newMemoryMediaStorage()
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), MediaStorage: storage})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
+		Prompt: "reference", ProviderAPIKey: "key", Model: "gemini-2.5-flash-image",
+		ReferenceImages: []ReferenceImage{{Name: "reference.png", MimeType: "image/png", DataURL: "data:image/png;base64,cG5nLWJ5dGVz"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := history.Get(context.Background(), principal, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := referenceImagesValue(record.Request["reference_images"])
+	if len(references) != 1 || references[0].StorageKey == "" {
+		t.Fatalf("references = %#v", references)
+	}
+	if references[0].DataURL != "" {
+		t.Fatal("reference data URL persisted in history")
+	}
+	if string(storage.objects[references[0].StorageKey]) != "png-bytes" {
+		t.Fatalf("stored reference = %q", storage.objects[references[0].StorageKey])
+	}
+}
+
 func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *testing.T) {
 	history := service.NewHistoryService(repository.NewHistoryRepository())
 	svc := NewGenerationService(history, GenerationServiceOptions{})
@@ -178,6 +282,89 @@ func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *test
 	if len(payload.Images) != 1 || payload.Images[0].URL != "https://cdn.example.com/reference.png" {
 		t.Fatalf("images = %#v", payload.Images)
 	}
+}
+
+func TestGenerationService_StoredResultReferenceBecomesMultipartUpload(t *testing.T) {
+	storage := newMemoryMediaStorage()
+	storage.objects["result-key"] = []byte("stored-png")
+	storage.types["result-key"] = "image/png"
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	record, err := history.Create(context.Background(), principal, "source", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Status = model.HistoryStatusSucceeded
+	record.Result = map[string]any{"type": "image_generation", "images": []map[string]any{{"object_key": "result-key"}}}
+	if err := history.Update(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewGenerationService(history, GenerationServiceOptions{MediaStorage: storage})
+	image := ReferenceImage{
+		Name: "generated.png", MimeType: "image/png",
+		DataURL: apiBasePath + "/assets/" + record.ID + "/result/0?token=secret",
+	}
+	name, contentType, data, err := svc.referenceImageBytes(context.Background(), principal, image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := svc.newEditRequest(context.Background(), "https://provider.example", GenerateRequest{
+		Prompt: "edit", Model: "gpt-image-1", Size: "1024x1024", ResponseFormat: "b64_json",
+		ReferenceImages: []ReferenceImage{{Name: name, MimeType: contentType, DataURL: "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(request.Header.Get("Content-Type"), "multipart/form-data;") {
+		t.Fatalf("content type = %q", request.Header.Get("Content-Type"))
+	}
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte("stored-png")) {
+		t.Fatalf("multipart body does not contain stored image bytes")
+	}
+}
+
+func TestGenerationService_GenerateWithStoredResultReferenceUploadsMultipart(t *testing.T) {
+	storage := newMemoryMediaStorage()
+	storage.objects["result-key"] = []byte("stored-png")
+	storage.types["result-key"] = "image/png"
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	source, err := history.Create(context.Background(), principal, "source", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Status = model.HistoryStatusSucceeded
+	source.Result = map[string]any{"type": "image_generation", "images": []map[string]any{{"object_key": "result-key"}}}
+	if err := history.Update(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data;") {
+			t.Fatalf("content type = %q", r.Header.Get("Content-Type"))
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !bytes.Contains(body, []byte("stored-png")) {
+			t.Fatal("multipart body does not contain stored image")
+		}
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"bmV3LWltYWdl"}]}`))
+	}))
+	defer upstream.Close()
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), MediaStorage: storage})
+	created, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
+		Prompt: "edit", ProviderAPIKey: "key", Model: "gpt-image-1",
+		ReferenceImages: []ReferenceImage{{
+			Name: "generated.png", MimeType: "image/png",
+			DataURL: apiBasePath + "/assets/" + source.ID + "/result/0?token=secret",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForHistoryStatus(t, history, principal, created.JobID, model.HistoryStatusSucceeded)
 }
 
 func TestGenerationService_GenerateSubmitsSingleBatch(t *testing.T) {

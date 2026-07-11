@@ -5,6 +5,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/config"
 	hostprincipal "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
+	"github.com/Wei-Shaw/sub2api/plugin-service/internal/media"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/service"
 )
 
@@ -33,6 +34,7 @@ type RouteDeps struct {
 	Config  config.Config
 	Auth    *hostprincipal.Middleware
 	History *service.HistoryService
+	Media   media.Storage
 }
 
 type RoutablePlugin interface {

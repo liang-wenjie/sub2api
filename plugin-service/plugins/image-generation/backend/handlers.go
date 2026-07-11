@@ -3,9 +3,11 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
@@ -53,6 +55,54 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/retry", authMiddleware.RequirePlugin(imagemanifest.Key, handler.RetryHistory))
 	mux.HandleFunc("GET "+apiBasePath+"/history/{id}/status", authMiddleware.RequirePlugin(imagemanifest.Key, handler.StatusHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/cancel", authMiddleware.RequirePlugin(imagemanifest.Key, handler.CancelHistory))
+	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{index}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
+	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{kind}/{index}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
+}
+
+func (h *Handler) GetAsset(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	record, err := h.history.Get(r.Context(), principal, r.PathValue("history_id"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	index, err := strconv.Atoi(r.PathValue("index"))
+	if err != nil || index < 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid image index")
+		return
+	}
+	kind := r.PathValue("kind")
+	var key string
+	switch kind {
+	case "", "result":
+		images := imageMapsValue(record.Result["images"])
+		if index < len(images) {
+			key = stringValue(images[index]["object_key"])
+		}
+	case "reference":
+		references := referenceImagesValue(record.Request["reference_images"])
+		if index < len(references) {
+			key = references[index].StorageKey
+		}
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "invalid image asset kind")
+		return
+	}
+	if key == "" {
+		httpx.WriteError(w, http.StatusNotFound, "image asset not found")
+		return
+	}
+	object, err := h.generation.GetMedia(r.Context(), key)
+	if err != nil {
+		httpx.WriteError(w, http.StatusServiceUnavailable, "image storage unavailable")
+		return
+	}
+	defer object.Body.Close()
+	w.Header().Set("Content-Type", object.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, object.Body)
 }
 
 func (h *Handler) Config(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
@@ -140,10 +190,16 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request, principal m
 }
 
 func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	if err := h.history.Delete(r.Context(), principal, r.PathValue("id")); err != nil {
+	record, err := h.history.Get(r.Context(), principal, r.PathValue("id"))
+	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
+	if err := h.history.Delete(r.Context(), principal, record.ID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	h.generation.DeleteMedia(r.Context(), record)
 	w.WriteHeader(http.StatusNoContent)
 }
 

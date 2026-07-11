@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import type { PluginApi } from '../api/client'
+import { authenticatedMediaUrl, type PluginApi } from '../api/client'
 import { projectHistory } from './history'
 import type {
   ChatMessage,
@@ -36,7 +36,7 @@ function supportsImageGeneration(key: ImageApiKey): boolean {
 }
 
 function sourceOf(image: GeneratedImagePayload): string {
-  if (image.url) return image.url
+	if (image.url) return authenticatedMediaUrl(image.url)
   return image.b64_json ? `data:image/png;base64,${image.b64_json}` : ''
 }
 

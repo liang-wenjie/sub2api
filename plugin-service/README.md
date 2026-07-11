@@ -45,6 +45,21 @@ If `DATABASE_URL` or the shared `DATABASE_*` environment variables are present,
 image generation history is persisted into `plugin_generation_history`;
 otherwise it falls back to in-memory history for local-only runs.
 
+Image media can be persisted in a private MinIO bucket. Configure
+`MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET`, and
+optionally `MINIO_USE_SSL`. When all required values are present, uploaded
+reference images and generated results are stored as MinIO objects while
+history keeps stable authenticated plugin URLs. Partial MinIO configuration is
+rejected at startup. The maintained Docker Compose files include MinIO and a
+persistent data volume; replace the example root credentials before production
+deployment and include the MinIO volume in backups.
+
+For a plugin service started directly on the Docker host, set
+`MINIO_ENDPOINT=127.0.0.1:9000`. Compose publishes the MinIO API on
+`${MINIO_API_PORT:-9000}` and its console on `${MINIO_CONSOLE_PORT:-9001}`,
+both bound to loopback by default. A plugin service running in Compose must
+continue to use the internal endpoint `minio:9000`.
+
 ## Auth Model
 
 The plugin host fully reuses the main Sub2API login state. It does not create

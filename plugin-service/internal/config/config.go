@@ -12,6 +12,16 @@ import (
 type Config struct {
 	ListenAddr string
 	Database   DatabaseConfig
+	MinIO      MinIOConfig
+}
+
+type MinIOConfig struct {
+	Enabled   bool
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	UseSSL    bool
 }
 
 type DatabaseConfig struct {
@@ -31,7 +41,36 @@ func MustLoad() Config {
 	return Config{
 		ListenAddr: ":" + strconv.Itoa(port),
 		Database:   loadDatabaseConfig(),
+		MinIO:      loadMinIOConfig(),
 	}
+}
+
+func loadMinIOConfig() MinIOConfig {
+	config := MinIOConfig{
+		Endpoint:  strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")),
+		AccessKey: firstNonEmptyEnv("MINIO_ACCESS_KEY", "MINIO_ROOT_USER"),
+		SecretKey: firstNonEmptyEnv("MINIO_SECRET_KEY", "MINIO_ROOT_PASSWORD"),
+		Bucket:    strings.TrimSpace(os.Getenv("MINIO_BUCKET")),
+	}
+	configured := 0
+	for _, value := range []string{config.Endpoint, config.AccessKey, config.SecretKey, config.Bucket} {
+		if value != "" {
+			configured++
+		}
+	}
+	if configured == 0 {
+		return config
+	}
+	if configured != 4 {
+		panic("incomplete MinIO configuration: endpoint, access key, secret key, and bucket are required")
+	}
+	useSSL, err := strconv.ParseBool(envString("MINIO_USE_SSL", "false"))
+	if err != nil {
+		panic("invalid MINIO_USE_SSL value")
+	}
+	config.Enabled = true
+	config.UseSSL = useSSL
+	return config
 }
 
 func (d DatabaseConfig) DSN() string {
