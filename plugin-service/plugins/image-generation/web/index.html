@@ -38,6 +38,7 @@
         remoteHistoryKeys = Array.from(groups.values()).map(function (ids) {
           return "history-remote-" + ids.join(",");
         });
+		restoreBatchTrackers(payload.items);
       }
 
       function installHistoryDeleteFetchObserver() {
@@ -678,7 +679,164 @@
         }, 100);
       }
 
+      var batchTrackers = new Map();
+
+      function batchActionUrl(jobId, action) {
+        return "/plugins/image-generation/api/history/" + encodeURIComponent(jobId) + "/" + action;
+      }
+
+      function removeBatchControls(tracker) {
+        window.clearTimeout(tracker.timer);
+        tracker.timer = null;
+		if (tracker.sendButton) {
+		  tracker.sendButton.classList.remove("image-generation-send-button-replaced");
+		  tracker.sendButton = null;
+		}
+        if (tracker.controls && tracker.controls.parentNode) {
+          tracker.controls.parentNode.removeChild(tracker.controls);
+        }
+      }
+
+      function ensureBatchControls(tracker) {
+        if (tracker.controls && tracker.controls.isConnected) {
+          return tracker.controls;
+        }
+        var controls = document.createElement("div");
+        controls.className = "image-generation-batch-controls";
+        controls.setAttribute("role", "group");
+        controls.setAttribute("aria-label", "图片生成任务控制");
+
+        function addButton(testId, label, symbol, action) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.setAttribute("data-testid", testId);
+          button.setAttribute("aria-label", label);
+          button.title = label;
+          button.textContent = symbol;
+          button.addEventListener("click", action);
+          controls.appendChild(button);
+          return button;
+        }
+
+        tracker.cancelButton = addButton("image-generation-stop", "停止生成", "", function () {
+          setBatchActionPending(tracker, true);
+          window.fetch(batchActionUrl(tracker.jobId, "cancel"), { method: "POST" }).then(parseBatchRecord).then(function (record) {
+            finishBatchTracker(tracker, record);
+          }).catch(function (error) {
+            setBatchActionPending(tracker, false);
+            window.alert(error.message || "暂停失败");
+          });
+        });
+		tracker.cancelButton.classList.add("image-generation-stop-button");
+        tracker.controls = controls;
+		var sendButton = document.querySelector('[data-testid="image-send-button"]');
+		if (sendButton instanceof HTMLElement && sendButton.parentNode) {
+		  tracker.sendButton = sendButton;
+		  sendButton.classList.add("image-generation-send-button-replaced");
+		  sendButton.parentNode.insertBefore(controls, sendButton);
+		} else {
+		  (document.querySelector('[data-testid="image-chat-thread"]') || document.body).appendChild(controls);
+		}
+		setBatchActionPending(tracker, false);
+        return controls;
+      }
+
+      function setBatchActionPending(tracker, pending) {
+        if (tracker.cancelButton) tracker.cancelButton.disabled = pending;
+      }
+
+      function parseBatchRecord(response) {
+        return response.json().then(function (payload) {
+          if (!response.ok) {
+            throw new Error((payload && payload.error) || "任务请求失败");
+          }
+          return payload;
+        });
+      }
+
+      function finishBatchTracker(tracker, record) {
+        batchTrackers.delete(tracker.jobId);
+        removeBatchControls(tracker);
+        if (record.status === "succeeded") {
+          tracker.resolve(new Response(JSON.stringify({ job_id: tracker.jobId, status: record.status, result: record.result || {} }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }));
+          return;
+        }
+        tracker.reject(new Error(record.error_message || (record.status === "canceled" ? "图片生成已暂停" : "图片生成失败")));
+      }
+
+      function handleBatchRecord(tracker, record) {
+        if (record.status === "succeeded" || record.status === "failed" || record.status === "canceled") {
+          finishBatchTracker(tracker, record);
+          return;
+        }
+		setBatchActionPending(tracker, false);
+        window.clearTimeout(tracker.timer);
+        tracker.timer = window.setTimeout(function () { pollBatchTracker(tracker); }, 2000);
+      }
+
+      function pollBatchTracker(tracker) {
+        window.fetch(batchActionUrl(tracker.jobId, "status")).then(parseBatchRecord).then(function (record) {
+          handleBatchRecord(tracker, record);
+        }).catch(function () {
+          window.clearTimeout(tracker.timer);
+          tracker.timer = window.setTimeout(function () { pollBatchTracker(tracker); }, 4000);
+        });
+      }
+
+      function waitForBatchResult(payload) {
+        return new Promise(function (resolve, reject) {
+          var tracker = { jobId: String(payload.job_id), timer: null, controls: null, resolve: resolve, reject: reject };
+          batchTrackers.set(tracker.jobId, tracker);
+          ensureBatchControls(tracker);
+          pollBatchTracker(tracker);
+        });
+      }
+
+	  function restoreBatchTrackers(records) {
+		records.forEach(function (record) {
+		  if (!record || !record.id || !record.request || (!record.request.batch_id && !record.request.local_task)) return;
+		  if (record.status !== "pending") return;
+		  var jobId = String(record.id);
+		  if (batchTrackers.has(jobId)) return;
+		  var tracker = {
+			jobId: jobId,
+			timer: null,
+			controls: null,
+			resolve: function () { window.location.reload(); },
+			reject: function (error) {
+			  if (error && error.message) window.alert(error.message);
+			  window.location.reload();
+			},
+		  };
+		  batchTrackers.set(jobId, tracker);
+		  ensureBatchControls(tracker);
+		  pollBatchTracker(tracker);
+		});
+	  }
+
+      function installBatchTrackingFetchBridge() {
+        if (window.__imageGenerationBatchTrackingInstalled) return;
+        window.__imageGenerationBatchTrackingInstalled = true;
+        var originalFetch = window.fetch;
+        window.fetch = function () {
+          var args = arguments;
+          var input = args[0];
+          var requestUrl = typeof input === "string" ? input : (input && input.url) || "";
+          return originalFetch.apply(this, args).then(function (response) {
+            if (!/\/plugins\/image-generation\/api\/generate(?:\?|$)/.test(requestUrl) || !response.ok) return response;
+            return response.clone().json().then(function (payload) {
+              if (!payload || payload.status !== "pending" || !payload.job_id) return response;
+              return waitForBatchResult(payload);
+            }, function () { return response; });
+          });
+        };
+      }
+
       installHistoryDeleteFetchObserver();
+	  installBatchTrackingFetchBridge();
 
       document.addEventListener("DOMContentLoaded", function () {
         ensureEmptyKeyOption();
@@ -709,6 +867,60 @@
     })();
   </script>
   <style>
+	.image-generation-batch-controls {
+      display: flex;
+	  width: 44px;
+	  height: 44px;
+	  flex: 0 0 44px;
+    }
+
+	.image-generation-send-button-replaced {
+	  display: none !important;
+	}
+
+    .image-generation-batch-controls button {
+	  width: 44px;
+	  height: 44px;
+	  border: 0;
+	  border-radius: 999px;
+	  background: #0f172a;
+	  color: #fff;
+	  display: grid;
+	  place-items: center;
+	  cursor: pointer;
+	  transition: transform 100ms ease-out, background-color 150ms ease, opacity 150ms ease;
+	  will-change: transform;
+	}
+
+	.image-generation-stop-button::after {
+	  content: "";
+	  width: 12px;
+	  height: 12px;
+	  border-radius: 3px;
+	  background: currentColor;
+	}
+
+	.image-generation-batch-controls button:active:not(:disabled) {
+	  transform: scale(0.94);
+	}
+
+    .image-generation-batch-controls button:hover:not(:disabled),
+    .image-generation-batch-controls button:focus-visible {
+	  background: #1e293b;
+      outline: none;
+    }
+
+    .image-generation-batch-controls button:disabled {
+      cursor: wait;
+      opacity: 0.5;
+    }
+
+	@media (prefers-reduced-motion: reduce) {
+	  .image-generation-batch-controls button {
+		transition: opacity 100ms ease, background-color 100ms ease;
+	  }
+	}
+
     html,
     body,
     #app {

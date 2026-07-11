@@ -76,14 +76,14 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 			t.Fatalf("provider authorization = %q, want %q", got, "Bearer provider-secret")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/generated.png","revised_prompt":"make a poster"}]}`))
+		_, _ = w.Write([]byte(`{"id":"imgbatch_history","status":"queued","model":"gemini-2.5-flash-image"}`))
 	}))
 	defer upstream.Close()
 
 	restoreMainSiteResolver(t, mainSite.URL)
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
-	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
+	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gemini-2.5-flash-image","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
 	generateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
 	generateReq.Header.Set("Authorization", "Bearer launch-token")
 	addForwardedProviderOrigin(generateReq, upstream.URL)
@@ -92,7 +92,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	if generateRec.Code != http.StatusCreated {
 		t.Fatalf("generate status = %d, want %d; body=%s", generateRec.Code, http.StatusCreated, generateRec.Body.String())
 	}
-	secondBody := bytes.NewBufferString(`{"prompt":"make another poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
+	secondBody := bytes.NewBufferString(`{"prompt":"make another poster","provider_api_key":"provider-secret","model":"gemini-2.5-flash-image","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
 	secondGenerateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", secondBody)
 	secondGenerateReq.Header.Set("Authorization", "Bearer launch-token")
 	addForwardedProviderOrigin(secondGenerateReq, upstream.URL)
@@ -160,14 +160,14 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 
 func TestRouterGenerateUsesConfiguredMainServiceBaseURL(t *testing.T) {
 	mainSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/images/generations" {
-			t.Fatalf("main service path = %s, want /v1/images/generations", r.URL.Path)
+		if r.URL.Path != "/v1/images/batches" {
+			t.Fatalf("main service path = %s, want /v1/images/batches", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer provider-secret" {
 			t.Fatalf("provider authorization = %q, want %q", got, "Bearer provider-secret")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/generated.png"}]}`))
+		_, _ = w.Write([]byte(`{"id":"imgbatch_configured","status":"queued","model":"gemini-2.5-flash-image"}`))
 	}))
 	defer mainSite.Close()
 
@@ -175,7 +175,7 @@ func TestRouterGenerateUsesConfiguredMainServiceBaseURL(t *testing.T) {
 	t.Setenv("PLUGIN_MAIN_SERVICE_BASE_URL", mainSite.URL)
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
-	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gpt-image-1","size":"1024x1024"}`)
+	body := bytes.NewBufferString(`{"prompt":"make a poster","provider_api_key":"provider-secret","model":"gemini-2.5-flash-image","size":"1024x1024"}`)
 	req := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
 	req.Header.Set("X-Sub2api-User-Id", "42")
 	req.Header.Set("X-Sub2api-User-Role", "user")
@@ -187,6 +187,93 @@ func TestRouterGenerateUsesConfiguredMainServiceBaseURL(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("generate status = %d, want %d; body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestRouterImageTaskStatusAndCancel(t *testing.T) {
+	customID := ""
+	batchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer batch-api-key" {
+			t.Fatalf("batch authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches":
+			var payload struct {
+				Items []struct {
+					CustomID string `json:"custom_id"`
+				} `json:"items"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			customID = payload.Items[0].CustomID
+			_, _ = w.Write([]byte(`{"id":"imgbatch_router","status":"queued","model":"gemini-2.5-flash-image"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_router":
+			_, _ = w.Write([]byte(`{"id":"imgbatch_router","status":"running","model":"gemini-2.5-flash-image"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches/imgbatch_router/cancel":
+			_, _ = w.Write([]byte(`{"id":"imgbatch_router","status":"cancelled","model":"gemini-2.5-flash-image"}`))
+		default:
+			t.Fatalf("unexpected batch request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer batchServer.Close()
+
+	t.Setenv("PLUGIN_MAIN_SERVICE_BASE_URL", batchServer.URL)
+	router := NewRouter(config.Config{ListenAddr: ":0"})
+	body := bytes.NewBufferString(`{"prompt":"draw a cat","provider_api_key":"batch-api-key","model":"gemini-2.5-flash-image"}`)
+	generateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
+	generateReq.Header.Set("X-Sub2api-User-Id", "42")
+	generateReq.Header.Set("X-Sub2api-User-Role", "user")
+	generateRec := httptest.NewRecorder()
+	router.ServeHTTP(generateRec, generateReq)
+	if generateRec.Code != http.StatusCreated {
+		t.Fatalf("generate status = %d; body=%s", generateRec.Code, generateRec.Body.String())
+	}
+	var generated struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(generateRec.Body).Decode(&generated); err != nil {
+		t.Fatal(err)
+	}
+	if generated.Status != model.HistoryStatusPending || customID != "plugin-image-"+generated.JobID {
+		t.Fatalf("generated = %#v, custom_id=%q", generated, customID)
+	}
+
+	callHistoryAction := func(method, action string) model.HistoryRecord {
+		t.Helper()
+		req := httptest.NewRequest(method, "/plugins/image-generation/api/history/"+generated.JobID+"/"+action, nil)
+		req.Header.Set("X-Sub2api-User-Id", "42")
+		req.Header.Set("X-Sub2api-User-Role", "user")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d; body=%s", action, rec.Code, rec.Body.String())
+		}
+		var record model.HistoryRecord
+		if err := json.NewDecoder(rec.Body).Decode(&record); err != nil {
+			t.Fatal(err)
+		}
+		if _, exposed := record.Request["provider_api_key"]; exposed {
+			t.Fatal("route exposed provider_api_key")
+		}
+		return record
+	}
+	if status := callHistoryAction(http.MethodGet, "status"); status.Status != model.HistoryStatusPending || status.Result["batch_status"] != "running" {
+		t.Fatalf("status record = %#v", status)
+	}
+	if canceled := callHistoryAction(http.MethodPost, "cancel"); canceled.Status != model.HistoryStatusCanceled {
+		t.Fatalf("cancel record = %#v", canceled)
+	}
+	for _, action := range []string{"pause", "resume"} {
+		req := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/history/"+generated.JobID+"/"+action, nil)
+		req.Header.Set("X-Sub2api-User-Id", "42")
+		req.Header.Set("X-Sub2api-User-Role", "user")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("removed %s route status = %d, want 404", action, rec.Code)
+		}
 	}
 }
 

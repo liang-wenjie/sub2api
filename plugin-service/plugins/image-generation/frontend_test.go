@@ -102,6 +102,50 @@ func TestFrontendContainsDirectionalHistoryControls(t *testing.T) {
 	}
 }
 
+func TestFrontendContainsBatchTracking(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterFrontend(mux)
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("frontend status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`installBatchTrackingFetchBridge`,
+		`batchActionUrl(tracker.jobId, "status")`,
+		`batchActionUrl(tracker.jobId, "cancel")`,
+		`addButton("image-generation-stop", "停止生成", ""`,
+		`tracker.cancelButton.classList.add("image-generation-stop-button")`,
+		`document.querySelector('[data-testid="image-send-button"]')`,
+		`sendButton.classList.add("image-generation-send-button-replaced")`,
+		`sendButton.parentNode.insertBefore(controls, sendButton)`,
+		`tracker.sendButton.classList.remove("image-generation-send-button-replaced")`,
+		`.image-generation-send-button-replaced {`,
+		`display: none !important;`,
+		`@media (prefers-reduced-motion: reduce)`,
+		`window.clearTimeout(tracker.timer)`,
+		`restoreBatchTrackers(payload.items)`,
+		`record.request.batch_id`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("frontend html missing batch tracking marker %q", needle)
+		}
+	}
+	for _, forbidden := range []string{
+		`batchActionUrl(tracker.jobId, "pause")`,
+		`batchActionUrl(tracker.jobId, "resume")`,
+		`image-generation-resume`,
+		`image-generation-cancel`,
+		`record.status === "paused"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("frontend html still contains removed pause/resume marker %q", forbidden)
+		}
+	}
+}
+
 func TestFrontendServesBundledImageGenerationHistoryRecordFixes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterFrontend(mux)
@@ -124,6 +168,21 @@ func TestBundledFrontendAssetContainsHistoryRecordFixes(t *testing.T) {
 	}
 
 	assertBundledHistoryBehavior(t, string(bodyBytes))
+}
+
+func TestBundledFrontendOffersTaskCapableModels(t *testing.T) {
+	bodyBytes, err := os.ReadFile(filepath.Join(webRoot(), "assets", "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(bodyBytes)
+	if !strings.Contains(body, `{value:"gpt-image-2",label:"GPT Image 2"}`) ||
+		!strings.Contains(body, `{value:"gemini-2.5-flash-image",label:"Gemini 2.5 Flash Image"}`) {
+		t.Fatal("frontend asset is missing a supported GPT or Gemini task model")
+	}
+	if !strings.Contains(body, `p.startsWith("gpt-image-")||p.startsWith("gemini-")&&p.includes("image")`) {
+		t.Fatal("frontend asset does not recognize both GPT and Gemini task models")
+	}
 }
 
 func assertBundledHistoryBehavior(t *testing.T, body string) {

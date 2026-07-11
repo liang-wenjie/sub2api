@@ -51,6 +51,7 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware
 	mux.HandleFunc("GET "+apiBasePath+"/history/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetHistory))
 	mux.HandleFunc("DELETE "+apiBasePath+"/history/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.DeleteHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/retry", authMiddleware.RequirePlugin(imagemanifest.Key, handler.RetryHistory))
+	mux.HandleFunc("GET "+apiBasePath+"/history/{id}/status", authMiddleware.RequirePlugin(imagemanifest.Key, handler.StatusHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/cancel", authMiddleware.RequirePlugin(imagemanifest.Key, handler.CancelHistory))
 }
 
@@ -86,7 +87,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 
 	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r), req)
 	if err != nil {
-		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) {
+		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrImageModelUnsupported) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -157,12 +158,21 @@ func (h *Handler) RetryHistory(w http.ResponseWriter, r *http.Request, principal
 }
 
 func (h *Handler) CancelHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	record, err := h.generation.Cancel(r.Context(), principal, r.PathValue("id"))
+	record, err := h.generation.Cancel(r.Context(), principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 
+	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
+}
+
+func (h *Handler) StatusHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	record, err := h.generation.Status(r.Context(), principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
 }
 

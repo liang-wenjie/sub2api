@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
@@ -21,29 +22,45 @@ import (
 )
 
 var (
-	ErrPromptRequired      = errors.New("prompt is required")
-	ErrProviderKeyRequired = errors.New("provider api key is required")
-	ErrProviderBaseURL     = errors.New("provider base url is required")
+	ErrPromptRequired        = errors.New("prompt is required")
+	ErrProviderKeyRequired   = errors.New("provider api key is required")
+	ErrProviderBaseURL       = errors.New("provider base url is required")
+	ErrImageModelUnsupported = errors.New("image generation model is not supported")
 )
 
 const (
-	defaultImageModel          = "gpt-image-1"
+	defaultImageModel          = "gemini-2.5-flash-image"
 	defaultImageSize           = "1024x1024"
 	defaultImageResponseFormat = "b64_json"
 )
 
 type GenerationServiceOptions struct {
-	HTTPClient *http.Client
+	HTTPClient  *http.Client
+	BatchClient *BatchClient
 }
 
 type GenerationService struct {
-	history    *service.HistoryService
-	httpClient *http.Client
+	history     *service.HistoryService
+	httpClient  *http.Client
+	batchClient *BatchClient
+	tasksMu     sync.Mutex
+	localTasks  map[string]context.CancelFunc
 }
 
 type UpstreamHTTPError struct {
 	StatusCode int
 	Message    string
+}
+
+type openAIImagesResponse struct {
+	Created int64                     `json:"created"`
+	Data    []openAIImageResponseItem `json:"data"`
+}
+
+type openAIImageResponseItem struct {
+	B64JSON       string `json:"b64_json"`
+	URL           string `json:"url"`
+	RevisedPrompt string `json:"revised_prompt"`
 }
 
 func (e *UpstreamHTTPError) Error() string {
@@ -57,17 +74,6 @@ func (e *UpstreamHTTPError) Error() string {
 		return "upstream request failed with status " + strconv.Itoa(e.StatusCode)
 	}
 	return "upstream request failed"
-}
-
-type openAIImagesResponse struct {
-	Created int64                     `json:"created"`
-	Data    []openAIImageResponseItem `json:"data"`
-}
-
-type openAIImageResponseItem struct {
-	B64JSON       string `json:"b64_json"`
-	URL           string `json:"url"`
-	RevisedPrompt string `json:"revised_prompt"`
 }
 
 type GenerateRequest struct {
@@ -114,9 +120,15 @@ func NewGenerationService(history *service.HistoryService, opts GenerationServic
 	if client == nil {
 		client = http.DefaultClient
 	}
+	batchClient := opts.BatchClient
+	if batchClient == nil {
+		batchClient = NewBatchClient(client)
+	}
 	return &GenerationService{
-		history:    history,
-		httpClient: client,
+		history:     history,
+		httpClient:  client,
+		batchClient: batchClient,
+		localTasks:  make(map[string]context.CancelFunc),
 	}
 }
 
@@ -133,6 +145,9 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 	if req.Model == "" {
 		req.Model = defaultImageModel
 	}
+	if !supportsBatchGeneration(req.Model) && !supportsSynchronousGPTGeneration(req.Model) {
+		return nil, ErrImageModelUnsupported
+	}
 	req.Size = strings.TrimSpace(req.Size)
 	if req.Size == "" {
 		req.Size = defaultImageSize
@@ -140,6 +155,9 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 	req.ResponseFormat = strings.TrimSpace(req.ResponseFormat)
 	if req.ResponseFormat == "" {
 		req.ResponseFormat = defaultImageResponseFormat
+	}
+	if strings.TrimSpace(providerBaseURL) == "" {
+		return nil, ErrProviderBaseURL
 	}
 
 	log.Printf(
@@ -159,30 +177,106 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 		return nil, err
 	}
 
-	result, err := s.generateWithProvider(ctx, providerBaseURL, req)
+	if supportsBatchGeneration(req.Model) {
+		return s.submitBatch(ctx, record, providerBaseURL, req)
+	}
+
+	return s.submitLocalTask(record, providerBaseURL, req), nil
+}
+
+func supportsBatchGeneration(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(modelName, "gemini-") && strings.Contains(modelName, "image")
+}
+
+func supportsSynchronousGPTGeneration(modelName string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "gpt-image-")
+}
+
+func (s *GenerationService) submitLocalTask(record *model.HistoryRecord, providerBaseURL string, req GenerateRequest) *GenerateResponse {
+	record.Request["local_task"] = true
+	record.Result = map[string]any{
+		"type":     "image_generation",
+		"provider": "openai-compatible",
+		"model":    req.Model,
+		"size":     req.Size,
+	}
+	_ = s.history.Update(context.Background(), record)
+
+	taskCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	s.tasksMu.Lock()
+	s.localTasks[record.ID] = cancel
+	s.tasksMu.Unlock()
+	go s.runLocalTask(taskCtx, cancel, record.ID, providerBaseURL, req)
+	return &GenerateResponse{JobID: record.ID, Status: model.HistoryStatusPending, Result: record.Result}
+}
+
+func (s *GenerationService) runLocalTask(ctx context.Context, cancel context.CancelFunc, historyID, providerBaseURL string, req GenerateRequest) {
+	defer func() {
+		cancel()
+		s.tasksMu.Lock()
+		delete(s.localTasks, historyID)
+		s.tasksMu.Unlock()
+	}()
+
+	result, generationErr := s.generateWithProvider(ctx, providerBaseURL, req)
+	record, err := s.history.Get(context.Background(), model.CurrentPrincipal{Role: model.RoleAdmin}, historyID)
+	if err != nil || isTerminalHistoryStatus(record.Status) {
+		return
+	}
+	if generationErr != nil {
+		record.Status = model.HistoryStatusFailed
+		record.ErrorMessage = generationErr.Error()
+	} else {
+		record.Status = model.HistoryStatusSucceeded
+		record.Result = result
+		record.ErrorMessage = ""
+	}
+	_ = s.history.Update(context.Background(), record)
+}
+
+func (s *GenerationService) submitBatch(ctx context.Context, record *model.HistoryRecord, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
+	customID := "plugin-image-" + record.ID
+	references, err := batchReferenceInputs(req.ReferenceImages)
 	if err != nil {
 		record.Status = model.HistoryStatusFailed
 		record.ErrorMessage = err.Error()
 		_ = s.history.Update(ctx, record)
-		log.Printf("[plugin-service] image generation failed user_id=%d history_id=%s err=%v", principal.UserID, record.ID, err)
 		return nil, err
 	}
-
-	record.Status = model.HistoryStatusSucceeded
-	record.Result = result
-	record.ErrorMessage = ""
+	payload := batchSubmitRequest{
+		Model:            req.Model,
+		TaskName:         "plugin-image-" + record.ID,
+		ResponseMimeType: "image/png",
+		Items: []batchSubmitItem{{
+			CustomID:        customID,
+			Prompt:          req.Prompt,
+			OutputCount:     1,
+			ReferenceImages: references,
+		}},
+		Metadata: map[string]string{"plugin_history_id": record.ID},
+	}
+	payload.AspectRatio, payload.ImageSize = batchDimensions(req.Size)
+	job, err := s.batchClient.Submit(ctx, providerBaseURL, req.ProviderAPIKey, customID, payload)
+	if err != nil {
+		record.Status = model.HistoryStatusFailed
+		record.ErrorMessage = err.Error()
+		_ = s.history.Update(ctx, record)
+		return nil, err
+	}
+	record.Request["batch_id"] = job.ID
+	record.Request["batch_custom_id"] = customID
+	record.Result = map[string]any{
+		"type":         "image_generation",
+		"provider":     "batch",
+		"model":        req.Model,
+		"size":         req.Size,
+		"batch_status": job.Status,
+	}
 	if err := s.history.Update(ctx, record); err != nil {
-		log.Printf("[plugin-service] image generation update history failed user_id=%d history_id=%s err=%v", principal.UserID, record.ID, err)
 		return nil, err
 	}
-
-	log.Printf("[plugin-service] image generation succeeded user_id=%d history_id=%s", principal.UserID, record.ID)
-
-	return &GenerateResponse{
-		JobID:  record.ID,
-		Status: record.Status,
-		Result: record.Result,
-	}, nil
+	return &GenerateResponse{JobID: record.ID, Status: record.Status, Result: record.Result}, nil
 }
 
 func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
@@ -205,13 +299,120 @@ func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPr
 	return s.Generate(ctx, principal, providerBaseURL, retryReq)
 }
 
-func (s *GenerationService) Cancel(ctx context.Context, principal model.CurrentPrincipal, id string) (*model.HistoryRecord, error) {
+func (s *GenerationService) Status(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
+	record, err := s.history.Get(ctx, principal, id)
+	if err != nil {
+		return nil, err
+	}
+	if isTerminalHistoryStatus(record.Status) {
+		return record, nil
+	}
+	if boolValue(record.Request["local_task"]) {
+		return record, nil
+	}
+	return s.reconcileBatch(ctx, record, providerBaseURL)
+}
+
+func (s *GenerationService) reconcileBatch(ctx context.Context, record *model.HistoryRecord, providerBaseURL string) (*model.HistoryRecord, error) {
+	batchID := stringValue(record.Request["batch_id"])
+	apiKey := stringValue(record.Request["provider_api_key"])
+	if batchID == "" || apiKey == "" {
+		return nil, errors.New("batch tracking data is missing")
+	}
+	job, err := s.batchClient.Get(ctx, providerBaseURL, apiKey, batchID)
+	if err != nil {
+		return nil, err
+	}
+	if record.Result == nil {
+		record.Result = map[string]any{}
+	}
+	record.Result["batch_status"] = job.Status
+	switch strings.ToLower(job.Status) {
+	case "completed":
+		if err := s.completeBatchResult(ctx, record, providerBaseURL, apiKey, batchID); err != nil {
+			return nil, err
+		}
+		record.Status = model.HistoryStatusSucceeded
+		record.ErrorMessage = ""
+	case "failed", "output_deleted":
+		record.Status = model.HistoryStatusFailed
+		record.ErrorMessage = "batch image generation failed"
+	case "cancelled", "canceled":
+		record.Status = model.HistoryStatusCanceled
+	default:
+		record.Status = model.HistoryStatusPending
+	}
+	if err := s.history.Update(ctx, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func (s *GenerationService) completeBatchResult(ctx context.Context, record *model.HistoryRecord, providerBaseURL, apiKey, batchID string) error {
+	items, err := s.batchClient.ListItems(ctx, providerBaseURL, apiKey, batchID)
+	if err != nil {
+		return err
+	}
+	customID := stringValue(record.Request["batch_custom_id"])
+	var found *batchItem
+	for index := range items.Data {
+		if items.Data[index].CustomID == customID {
+			found = &items.Data[index]
+			break
+		}
+	}
+	if found == nil || found.Status != "completed" || found.ImageCount < 1 {
+		return errors.New("completed batch image item is missing")
+	}
+	content, mimeType, err := s.batchClient.GetItemContent(ctx, providerBaseURL, apiKey, batchID, customID, 0)
+	if err != nil {
+		return err
+	}
+	dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content)
+	record.Result = map[string]any{
+		"type":         "image_generation",
+		"provider":     "batch",
+		"model":        stringValue(record.Request["model"]),
+		"size":         stringValue(record.Request["size"]),
+		"batch_status": "completed",
+		"images": []map[string]any{{
+			"url":            dataURL,
+			"b64_json":       base64.StdEncoding.EncodeToString(content),
+			"revised_prompt": "",
+		}},
+	}
+	return nil
+}
+
+func isTerminalHistoryStatus(status string) bool {
+	return status == model.HistoryStatusSucceeded || status == model.HistoryStatusFailed || status == model.HistoryStatusCanceled
+}
+
+func (s *GenerationService) Cancel(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
 	record, err := s.history.Get(ctx, principal, id)
 	if err != nil {
 		return nil, err
 	}
 	if record.Status != model.HistoryStatusPending {
 		return nil, errors.New("only pending jobs can be canceled")
+	}
+	if boolValue(record.Request["local_task"]) {
+		s.tasksMu.Lock()
+		cancel := s.localTasks[id]
+		s.tasksMu.Unlock()
+		record.Status = model.HistoryStatusCanceled
+		if err := s.history.Update(ctx, record); err != nil {
+			return nil, err
+		}
+		if cancel != nil {
+			cancel()
+		}
+		return record, nil
+	}
+	if batchID := stringValue(record.Request["batch_id"]); batchID != "" {
+		if _, err := s.batchClient.Cancel(ctx, providerBaseURL, stringValue(record.Request["provider_api_key"]), batchID); err != nil {
+			return nil, err
+		}
 	}
 	record.Status = model.HistoryStatusCanceled
 	if err := s.history.Update(ctx, record); err != nil {
@@ -284,7 +485,6 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -292,18 +492,10 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		message := extractUpstreamErrorMessage(body)
 		if message == "" {
-			message = strings.TrimSpace(string(body))
+			message = "upstream image request failed"
 		}
-		if message == "" {
-			message = "upstream request failed"
-		}
-		log.Printf("[plugin-service] upstream image request failed status=%d message=%s", resp.StatusCode, message)
-		return nil, &UpstreamHTTPError{
-			StatusCode: resp.StatusCode,
-			Message:    message,
-		}
+		return nil, &UpstreamHTTPError{StatusCode: resp.StatusCode, Message: message}
 	}
-
 	var payload openAIImagesResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
@@ -313,11 +505,7 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 
 func (s *GenerationService) newGenerationRequest(ctx context.Context, baseURL string, req GenerateRequest) (*http.Request, error) {
 	payload := map[string]any{
-		"model":           req.Model,
-		"prompt":          req.Prompt,
-		"response_format": req.ResponseFormat,
-		"size":            req.Size,
-		"n":               1,
+		"model": req.Model, "prompt": req.Prompt, "response_format": req.ResponseFormat, "size": req.Size, "n": 1,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -336,6 +524,10 @@ func (s *GenerationService) newGenerationRequest(ctx context.Context, baseURL st
 }
 
 func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, req GenerateRequest) (*http.Request, error) {
+	requestURL, err := joinProviderPath(baseURL, "/v1/images/edits")
+	if err != nil {
+		return nil, err
+	}
 	hasRemoteOnly := true
 	for _, image := range req.ReferenceImages {
 		if strings.TrimSpace(image.DataURL) != "" {
@@ -343,18 +535,10 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 			break
 		}
 	}
-
-	requestURL, err := joinProviderPath(baseURL, "/v1/images/edits")
-	if err != nil {
-		return nil, err
-	}
 	if hasRemoteOnly {
 		images := make([]map[string]string, 0, len(req.ReferenceImages))
 		for _, image := range req.ReferenceImages {
 			remoteURL := strings.TrimSpace(image.RemoteURL)
-			if remoteURL == "" {
-				remoteURL = strings.TrimSpace(image.DataURL)
-			}
 			if remoteURL == "" {
 				continue
 			}
@@ -380,7 +564,6 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 		httpReq.Header.Set("Content-Type", "application/json")
 		return httpReq, nil
 	}
-
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	_ = writer.WriteField("model", req.Model)
@@ -389,13 +572,11 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 	_ = writer.WriteField("n", "1")
 	_ = writer.WriteField("response_format", req.ResponseFormat)
 	_ = writer.WriteField("input_fidelity", "high")
-
 	for index, image := range req.ReferenceImages {
-		dataURL := strings.TrimSpace(image.DataURL)
-		if dataURL == "" {
+		if strings.TrimSpace(image.DataURL) == "" {
 			continue
 		}
-		fileName, mimeType, fileBytes, err := decodeDataURLImage(dataURL, image.Name, image.MimeType)
+		fileName, mimeType, fileBytes, err := decodeDataURLImage(image.DataURL, image.Name, image.MimeType)
 		if err != nil {
 			return nil, err
 		}
@@ -422,7 +603,7 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 	return httpReq, nil
 }
 
-func createImageFormFile(writer *multipart.Writer, fieldName string, fileName string, mimeType string) (io.Writer, error) {
+func createImageFormFile(writer *multipart.Writer, fieldName, fileName, mimeType string) (io.Writer, error) {
 	if strings.TrimSpace(mimeType) == "" {
 		mimeType = "image/png"
 	}
@@ -440,23 +621,16 @@ func normalizeImagesResult(req GenerateRequest, payload openAIImagesResponse) ma
 	images := make([]map[string]any, 0, len(payload.Data))
 	for _, item := range payload.Data {
 		images = append(images, map[string]any{
-			"url":            item.URL,
-			"b64_json":       item.B64JSON,
-			"revised_prompt": item.RevisedPrompt,
+			"url": item.URL, "b64_json": item.B64JSON, "revised_prompt": item.RevisedPrompt,
 		})
 	}
 	return map[string]any{
-		"type":            "image_generation",
-		"provider":        "openai-compatible",
-		"model":           req.Model,
-		"size":            req.Size,
-		"response_format": req.ResponseFormat,
-		"created":         payload.Created,
-		"images":          images,
+		"type": "image_generation", "provider": "openai-compatible", "model": req.Model,
+		"size": req.Size, "response_format": req.ResponseFormat, "created": payload.Created, "images": images,
 	}
 }
 
-func joinProviderPath(baseURL string, endpoint string) (string, error) {
+func joinProviderPath(baseURL, endpoint string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return "", err
@@ -465,6 +639,47 @@ func joinProviderPath(baseURL string, endpoint string) (string, error) {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String(), nil
+}
+
+func batchReferenceInputs(images []ReferenceImage) ([]batchReferenceInput, error) {
+	references := make([]batchReferenceInput, 0, len(images))
+	for index, image := range images {
+		mimeType := strings.TrimSpace(image.MimeType)
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		reference := batchReferenceInput{
+			ID:       strings.TrimSpace(image.Name),
+			MimeType: mimeType,
+		}
+		if dataURL := strings.TrimSpace(image.DataURL); dataURL != "" {
+			_, decodedMimeType, data, err := decodeDataURLImage(dataURL, image.Name, mimeType)
+			if err != nil {
+				return nil, err
+			}
+			reference.MimeType = decodedMimeType
+			reference.Data = data
+		} else if remoteURL := strings.TrimSpace(image.RemoteURL); remoteURL != "" {
+			reference.FileURI = remoteURL
+		} else {
+			return nil, errors.New("reference image " + strconv.Itoa(index+1) + " has no data or file URI")
+		}
+		references = append(references, reference)
+	}
+	return references, nil
+}
+
+func batchDimensions(size string) (string, string) {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "1024x1024", "1:1":
+		return "1:1", "1K"
+	case "1536x1024", "3:2":
+		return "3:2", "1K"
+	case "1024x1536", "2:3":
+		return "2:3", "1K"
+	default:
+		return "", ""
+	}
 }
 
 func decodeDataURLImage(dataURL string, fileName string, fallbackMimeType string) (string, string, []byte, error) {
@@ -494,6 +709,11 @@ func stringValue(value any) string {
 		return text
 	}
 	return ""
+}
+
+func boolValue(value any) bool {
+	result, _ := value.(bool)
+	return result
 }
 
 func copyMap(input map[string]any) map[string]any {
