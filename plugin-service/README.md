@@ -88,6 +88,28 @@ The standalone host enforces role-aware history access:
   - `POST /plugins/image-generation/api/history/{id}/retry`
   - `POST /plugins/image-generation/api/history/{id}/cancel`
 
+## Image Generation Frontend Development
+
+The image-generation UI is maintained as an independent Vue and TypeScript project:
+
+```text
+plugins/image-generation/frontend/
+```
+
+Edit application behavior only under `frontend/src`. The files in `web/assets` are committed build outputs used by the Go host and must not be edited directly.
+
+From `plugin-service/plugins/image-generation/frontend`, run:
+
+```bash
+npm install
+npm test
+npm run typecheck
+npm run build
+npm run verify:generated
+```
+
+The production build writes deterministic `app.js` and `app.css` files to `../web/assets` while preserving the hosted URLs under `/plugins/image-generation/assets/`.
+
 `POST /plugins/image-generation/api/generate` proxies image generation requests to the main Sub2API gateway resolved from the same-origin request headers. The request must include `provider_api_key`, and the plugin service persists structured history plus a flattened creations list for gallery-style views.
 
 ## Adding a New Plugin
