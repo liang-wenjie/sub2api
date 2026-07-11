@@ -1,21 +1,6 @@
 export type HistoryStatus = 'pending' | 'succeeded' | 'failed' | 'canceled'
 export type MessageStatus = 'pending' | 'failed' | 'canceled'
 
-export interface Principal {
-  user_id: number
-  role: 'admin' | 'user'
-  email: string
-  username: string
-  plugin: string
-}
-
-export interface PluginConfig {
-  plugin_key: string
-  history_enabled: boolean
-  user_id: number
-  role: string
-}
-
 export interface ModelsListConfig {
   enabled?: boolean
   models?: string[]
@@ -40,6 +25,7 @@ export interface ReferenceImageRequest {
   data_url?: string
   remote_url?: string
   storage_key?: string
+  preview_url?: string
 }
 
 export interface GenerateRequest {
@@ -54,7 +40,7 @@ export interface GenerateRequest {
 
 export interface GeneratedImagePayload {
   url?: string
-  b64_json?: string
+  preview_url?: string
   revised_prompt?: string
 }
 
@@ -86,13 +72,29 @@ export interface HistoryRecord {
   updated_at: string
 }
 
-export interface HistoryList {
+export interface ConversationSummary {
+  id: string
+  title: string
+  preview: string
+  status: HistoryStatus
+  updated_at: string
+}
+
+export interface ConversationList {
+  items: ConversationSummary[]
+  next_cursor?: string
+}
+
+export interface ConversationMessages {
   items: HistoryRecord[]
+  next_cursor?: string
 }
 
 export interface ImageReference {
   id: string
   dataUrl: string
+  originalDataUrl?: string
+  uploadDataUrl?: string
   fileName: string
   mimeType: string
 }
@@ -100,6 +102,7 @@ export interface ImageReference {
 export interface GeneratedImage {
   id: string
   src: string
+  originalSrc?: string
   revisedPrompt: string
   createdAt: string
 }

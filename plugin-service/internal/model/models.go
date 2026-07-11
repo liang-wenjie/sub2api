@@ -53,3 +53,17 @@ type HistoryQuery struct {
 	Page     int
 	PageSize int
 }
+
+type CursorQuery struct {
+	Limit      int
+	BeforeTime time.Time
+	BeforeID   string
+}
+
+type ConversationSummary struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Preview   string    `json:"preview"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

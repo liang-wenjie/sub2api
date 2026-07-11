@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onBeforeUnmount } from 'vue'
 import type { ImageReference } from '../types'
 
 const props = defineProps<{
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   stop: []
   reference: [value?: ImageReference]
 }>()
+const localPreviewUrls = new Set<string>()
 
 function keydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.shiftKey) return
@@ -30,15 +32,26 @@ function readReference(event: Event) {
   const file = input.files?.[0]
   if (!file) return
   const reader = new FileReader()
-  reader.onload = () => emit('reference', {
-    id: `${file.name}-${Date.now()}`,
-    dataUrl: String(reader.result || ''),
-    fileName: file.name,
-    mimeType: file.type || 'image/png',
-  })
+  reader.onload = () => {
+    const previewUrl = URL.createObjectURL(file)
+    localPreviewUrls.add(previewUrl)
+    emit('reference', {
+      id: `${file.name}-${Date.now()}`,
+      dataUrl: previewUrl,
+      originalDataUrl: previewUrl,
+      uploadDataUrl: String(reader.result || ''),
+      fileName: file.name,
+      mimeType: file.type || 'image/png',
+    })
+  }
   reader.readAsDataURL(file)
   input.value = ''
 }
+
+onBeforeUnmount(() => {
+  for (const url of localPreviewUrls) URL.revokeObjectURL(url)
+  localPreviewUrls.clear()
+})
 </script>
 
 <template>

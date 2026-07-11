@@ -14,24 +14,53 @@ function completedResponse(): GenerateResponse {
   return {
     job_id: 'job-1',
     status: 'succeeded',
-    result: { images: [{ b64_json: 'abc', revised_prompt: 'A blue lamp' }] },
+    result: { images: [{ url: '/plugins/image-generation/api/assets/job-1/result/0', preview_url: '/plugins/image-generation/api/assets/job-1/result/0/preview', revised_prompt: 'A blue lamp' }] },
   }
 }
 
 function createApi(generateResult: GenerateResponse = completedResponse()) {
   return {
-    getMe: vi.fn().mockResolvedValue({ user_id: 1, role: 'user', email: '', username: '', plugin: 'image-generation' }),
-    getConfig: vi.fn().mockResolvedValue({ plugin_key: 'image-generation', history_enabled: true, user_id: 1, role: 'user' }),
-    listHistory: vi.fn().mockResolvedValue({ items: [] }),
+    listConversations: vi.fn().mockResolvedValue({ items: [] }),
+    listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
     generate: vi.fn().mockResolvedValue(generateResult),
     retryHistory: vi.fn(),
     getStatus: vi.fn(),
     cancel: vi.fn(),
-    deleteHistory: vi.fn(),
+    deleteConversation: vi.fn(),
   }
 }
 
 describe('useImageGeneration', () => {
+  it('loads summaries before the selected conversation details', async () => {
+    const api = createApi()
+    api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })
+    api.listConversationMessages.mockResolvedValue({ items: [{
+      id: 'history-1', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create a lamp', status: 'succeeded',
+      request: { model: 'gpt-image-2', size: '1024x1024' }, result: { images: [{ url: '/original.png', preview_url: '/preview.jpg' }] },
+      created_at: '2026-07-11T09:59:00Z', updated_at: '2026-07-11T10:00:00Z',
+    }] })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    await state.initialize()
+
+    expect(api.listConversationMessages).toHaveBeenCalledWith('conversation-1', '')
+    expect(state.conversations.value[0].messages).toHaveLength(2)
+    expect(state.conversations.value[0].messages[1].images?.[0].src).toContain('/preview.jpg')
+  })
+
+  it('creates a renderable conversation before initialization requests finish', async () => {
+    let resolveHistory!: (value: { items: [] }) => void
+    const api = createApi()
+    api.listConversations.mockReturnValue(new Promise(resolve => { resolveHistory = resolve }))
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    const initialization = state.initialize()
+
+    expect(state.activeConversation.value).not.toBeNull()
+    resolveHistory({ items: [] })
+    await initialization
+  })
+
   it('replaces the optimistic assistant message with generated images', async () => {
     const api = createApi()
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
@@ -41,14 +70,14 @@ describe('useImageGeneration', () => {
     await state.submit()
 
     expect(state.activeConversation.value?.messages.map(message => message.role)).toEqual(['user', 'assistant'])
-    expect(state.activeConversation.value?.messages[1].images?.[0].src).toBe('data:image/png;base64,abc')
+    expect(state.activeConversation.value?.messages[1].images?.[0].src).toContain('/preview')
   })
 
   it('uses the display prompt when the provider omits revised_prompt', async () => {
     const api = createApi({
       job_id: 'job-1',
       status: 'succeeded',
-      result: { images: [{ b64_json: 'abc', revised_prompt: '' }] },
+      result: { images: [{ url: '/plugins/image-generation/api/assets/job-1/result/0', revised_prompt: '' }] },
     })
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
     await state.initialize()
@@ -98,7 +127,7 @@ describe('useImageGeneration', () => {
     await state.repeatFromImage(image, 'Try another')
 
     expect(api.generate).toHaveBeenLastCalledWith(expect.objectContaining({
-      reference_images: [expect.objectContaining({ data_url: image.src })],
+      reference_images: [expect.objectContaining({ data_url: image.originalSrc })],
     }))
   })
 

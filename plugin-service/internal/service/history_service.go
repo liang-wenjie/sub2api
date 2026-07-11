@@ -21,6 +21,22 @@ type HistoryRepository interface {
 	Delete(ctx context.Context, id string) error
 	ListAll(ctx context.Context, query model.HistoryQuery) ([]model.HistoryRecord, error)
 	ListByUser(ctx context.Context, userID int64, query model.HistoryQuery) ([]model.HistoryRecord, error)
+	ListConversations(ctx context.Context, userID *int64, query model.CursorQuery) ([]model.ConversationSummary, error)
+	ListConversationMessages(ctx context.Context, userID *int64, conversationID string, query model.CursorQuery) ([]model.HistoryRecord, error)
+}
+
+func (s *HistoryService) ListConversations(ctx context.Context, principal model.CurrentPrincipal, query model.CursorQuery) ([]model.ConversationSummary, error) {
+	if principal.IsAdmin() {
+		return s.repo.ListConversations(ctx, nil, query)
+	}
+	return s.repo.ListConversations(ctx, &principal.UserID, query)
+}
+
+func (s *HistoryService) ListConversationMessages(ctx context.Context, principal model.CurrentPrincipal, conversationID string, query model.CursorQuery) ([]model.HistoryRecord, error) {
+	if principal.IsAdmin() {
+		return s.repo.ListConversationMessages(ctx, nil, conversationID, query)
+	}
+	return s.repo.ListConversationMessages(ctx, &principal.UserID, conversationID, query)
 }
 
 func NewHistoryService(repo HistoryRepository) *HistoryService {

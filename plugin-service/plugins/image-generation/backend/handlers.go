@@ -3,8 +3,10 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"strconv"
@@ -49,7 +51,9 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware
 	mux.HandleFunc("GET "+apiBasePath+"/config", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Config))
 	mux.HandleFunc("POST "+apiBasePath+"/generate", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Generate))
 	mux.HandleFunc("GET "+apiBasePath+"/creations", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListCreations))
-	mux.HandleFunc("GET "+apiBasePath+"/history", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListHistory))
+	mux.HandleFunc("GET "+apiBasePath+"/conversations", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListConversations))
+	mux.HandleFunc("GET "+apiBasePath+"/conversations/{id}/messages", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListConversationMessages))
+	mux.HandleFunc("DELETE "+apiBasePath+"/conversations/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.DeleteConversation))
 	mux.HandleFunc("GET "+apiBasePath+"/history/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetHistory))
 	mux.HandleFunc("DELETE "+apiBasePath+"/history/{id}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.DeleteHistory))
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/retry", authMiddleware.RequirePlugin(imagemanifest.Key, handler.RetryHistory))
@@ -57,6 +61,7 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware
 	mux.HandleFunc("POST "+apiBasePath+"/history/{id}/cancel", authMiddleware.RequirePlugin(imagemanifest.Key, handler.CancelHistory))
 	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{index}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
 	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{kind}/{index}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
+	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{kind}/{index}/{variant}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
 }
 
 func (h *Handler) GetAsset(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
@@ -71,17 +76,25 @@ func (h *Handler) GetAsset(w http.ResponseWriter, r *http.Request, principal mod
 		return
 	}
 	kind := r.PathValue("kind")
+	preview := r.PathValue("variant") == "preview"
 	var key string
 	switch kind {
 	case "", "result":
 		images := imageMapsValue(record.Result["images"])
 		if index < len(images) {
-			key = stringValue(images[index]["object_key"])
+			field := "object_key"
+			if preview {
+				field = "preview_object_key"
+			}
+			key = stringValue(images[index][field])
 		}
 	case "reference":
 		references := referenceImagesValue(record.Request["reference_images"])
 		if index < len(references) {
 			key = references[index].StorageKey
+			if preview {
+				key = references[index].PreviewStorageKey
+			}
 		}
 	default:
 		httpx.WriteError(w, http.StatusBadRequest, "invalid image asset kind")
@@ -101,6 +114,13 @@ func (h *Handler) GetAsset(w http.ResponseWriter, r *http.Request, principal mod
 	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Query().Get("download") == "1" && !preview {
+		extension := ".img"
+		if values, _ := mime.ExtensionsByType(object.ContentType); len(values) > 0 {
+			extension = values[0]
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="generated-image-%d%s"`, index+1, extension))
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, object.Body)
 }
@@ -167,16 +187,69 @@ func (h *Handler) ListCreations(w http.ResponseWriter, r *http.Request, principa
 	})
 }
 
-func (h *Handler) ListHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	records, err := h.history.List(r.Context(), principal, parseHistoryQuery(r.URL.Query()))
+func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	query, err := parseCursorQuery(r.URL.Query(), "cursor")
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "failed to list history")
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	items, err := h.history.ListConversations(r.Context(), principal, query)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to list conversations")
+		return
+	}
+	next := ""
+	if len(items) == query.Limit {
+		last := items[len(items)-1]
+		next = encodeCursor(last.UpdatedAt, last.ID)
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
+}
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"items": sanitizeHistoryRecords(records),
-	})
+func (h *Handler) ListConversationMessages(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	query, err := parseCursorQuery(r.URL.Query(), "before")
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	items, err := h.history.ListConversationMessages(r.Context(), principal, r.PathValue("id"), query)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to list conversation messages")
+		return
+	}
+	next := ""
+	if len(items) == query.Limit {
+		last := items[len(items)-1]
+		next = encodeCursor(last.CreatedAt, last.ID)
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": sanitizeHistoryRecords(items), "next_cursor": next})
+}
+
+func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	query := model.CursorQuery{Limit: 100}
+	for {
+		items, err := h.history.ListConversationMessages(r.Context(), principal, r.PathValue("id"), query)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		if len(items) == 0 {
+			break
+		}
+		for index := range items {
+			if err := h.history.Delete(r.Context(), principal, items[index].ID); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			h.generation.DeleteMedia(r.Context(), &items[index])
+		}
+		if len(items) < query.Limit {
+			break
+		}
+		last := items[len(items)-1]
+		query.BeforeTime, query.BeforeID = last.CreatedAt, last.ID
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {

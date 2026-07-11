@@ -4,6 +4,7 @@ import HistorySidebar from './HistorySidebar.vue'
 import PromptComposer from './PromptComposer.vue'
 import GeneratedImageCard from './GeneratedImageCard.vue'
 import ChatThread from './ChatThread.vue'
+import ImagePreviewDialog from './ImagePreviewDialog.vue'
 import type { Conversation, ImageApiKey } from '../types'
 
 const conversation: Conversation = {
@@ -19,6 +20,17 @@ const conversation: Conversation = {
 const key: ImageApiKey = { id: 1, key: 'sk', name: 'Key', status: 'active', group: { allow_image_generation: true } }
 
 describe('image generation components', () => {
+  it('opens an original image dialog with an original download link', async () => {
+    const wrapper = mount(ImagePreviewDialog, {
+      props: { open: true, src: '/plugins/image-generation/api/assets/h1/result/0?token=test', alt: 'result' },
+    })
+
+    expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('查看原图')
+    expect(wrapper.get('a[download]').attributes('href')).toContain('download=1')
+    await wrapper.get('button[aria-label="关闭原图"]').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
   it('emits history selection and deletion from native buttons', async () => {
     const wrapper = mount(HistorySidebar, {
       props: { conversations: [conversation], activeId: '', keys: [key], selectedKeyId: 1 },

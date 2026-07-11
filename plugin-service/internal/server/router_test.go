@@ -102,7 +102,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 		t.Fatalf("second generate status = %d, want %d; body=%s", secondGenerateRec.Code, http.StatusCreated, secondGenerateRec.Body.String())
 	}
 
-	historyReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/history", nil)
+	historyReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/conversations", nil)
 	historyReq.Header.Set("Authorization", "Bearer launch-token")
 	historyRec := httptest.NewRecorder()
 	router.ServeHTTP(historyRec, historyReq)
@@ -110,14 +110,27 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 		t.Fatalf("history status = %d, want %d; body=%s", historyRec.Code, http.StatusOK, historyRec.Body.String())
 	}
 
+	var conversations struct {
+		Items []model.ConversationSummary `json:"items"`
+	}
+	if err := json.NewDecoder(historyRec.Body).Decode(&conversations); err != nil {
+		t.Fatal(err)
+	}
+	if len(conversations.Items) != 1 || conversations.Items[0].ID != "conversation-live-test" {
+		t.Fatalf("conversations = %#v", conversations.Items)
+	}
+	messagesReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/conversations/conversation-live-test/messages", nil)
+	messagesReq.Header.Set("Authorization", "Bearer launch-token")
+	messagesRec := httptest.NewRecorder()
+	router.ServeHTTP(messagesRec, messagesReq)
 	var payload struct {
 		Items []model.HistoryRecord `json:"items"`
 	}
-	if err := json.NewDecoder(historyRec.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(messagesRec.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(payload.Items) != 2 {
-		t.Fatalf("history item count = %d, want 2", len(payload.Items))
+		t.Fatalf("message item count = %d, want 2", len(payload.Items))
 	}
 	for _, item := range payload.Items {
 		if item.UserID != 42 {
@@ -139,7 +152,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 		t.Fatalf("delete history status = %d, want %d; body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
 	}
 
-	historyAfterDeleteReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/history", nil)
+	historyAfterDeleteReq := httptest.NewRequest(http.MethodGet, "/plugins/image-generation/api/conversations/conversation-live-test/messages", nil)
 	historyAfterDeleteReq.Header.Set("Authorization", "Bearer launch-token")
 	historyAfterDeleteRec := httptest.NewRecorder()
 	router.ServeHTTP(historyAfterDeleteRec, historyAfterDeleteReq)

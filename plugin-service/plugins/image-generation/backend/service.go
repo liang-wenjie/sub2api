@@ -1,10 +1,13 @@
 package backend
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/httpx"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
@@ -17,6 +20,38 @@ func parseHistoryQuery(values url.Values) model.HistoryQuery {
 		Page:     parsePositiveInt(values.Get("page"), 1),
 		PageSize: parsePositiveInt(values.Get("page_size"), 20),
 	}
+}
+
+func parseCursorQuery(values url.Values, key string) (model.CursorQuery, error) {
+	query := model.CursorQuery{Limit: parsePositiveInt(values.Get("limit"), 20)}
+	if query.Limit > 100 {
+		query.Limit = 100
+	}
+	raw := strings.TrimSpace(values.Get(key))
+	if raw == "" {
+		return query, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return query, errors.New("invalid cursor")
+	}
+	parts := strings.SplitN(string(decoded), "|", 2)
+	if len(parts) != 2 {
+		return query, errors.New("invalid cursor")
+	}
+	query.BeforeTime, err = time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil || parts[1] == "" {
+		return query, errors.New("invalid cursor")
+	}
+	query.BeforeID = parts[1]
+	return query, nil
+}
+
+func encodeCursor(value time.Time, id string) string {
+	if value.IsZero() || id == "" {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(value.UTC().Format(time.RFC3339Nano) + "|" + id))
 }
 
 func parsePositiveInt(raw string, fallback int) int {

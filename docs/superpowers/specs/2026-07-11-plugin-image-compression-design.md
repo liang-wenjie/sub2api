@@ -9,19 +9,19 @@ Optimize only the image-generation plugin service. Compress uploaded reference i
 Each persisted image may have two variants:
 
 - Original: unchanged source bytes, content type, dimensions, and file name where available.
-- Preview: WebP, quality 82, with the longest edge limited to 1600 pixels. Images already within the limit are still encoded as WebP when that reduces transfer size.
+- Preview: JPEG at quality 82 for opaque images and lossless WebP for images with transparency, with the longest edge limited to 1600 pixels. The browser prefers WebP at quality 82 for local previews.
 
 Compression must never replace the original object. If preview generation fails, the operation continues with the original as the display fallback.
 
 ## Reference Image Flow
 
-The browser keeps the selected original file and creates a WebP preview for immediate UI display. The request sends the original image to the plugin once. The plugin backend persists those bytes, creates the WebP variant, and forwards the compressed WebP to the generation provider. This preserves an original download without sending both variants across the browser-to-plugin boundary.
+The browser keeps the selected original file and creates a compressed preview for immediate UI display. The request sends the original image to the plugin once. The plugin backend persists those bytes, creates the compressed variant, and forwards that variant to the generation provider. This preserves an original download without sending both variants across the browser-to-plugin boundary.
 
 Reference images shown in the composer and conversation use the preview URL after persistence. Before persistence, the browser-generated WebP data URL is used. Clicking a reference image opens the original.
 
 ## Generated Image Flow
 
-The backend archives the provider result as the original object, then generates and stores a WebP preview object. History result metadata exposes both URLs:
+The backend archives the provider result as the original object, then generates and stores a compressed preview object. History result metadata exposes both URLs:
 
 - `url`: original authenticated media URL, retained for backward compatibility.
 - `preview_url`: compressed authenticated media URL.
@@ -61,4 +61,4 @@ Historical records without `preview_url` display their original URL. Records who
 
 ## Testing
 
-Backend tests cover WebP dimensions and type, original byte preservation, preview metadata, preview fallback, authenticated preview serving, and deletion of both variants. Frontend tests cover preview selection, legacy fallback, opening original images, downloading originals, Escape/backdrop behavior, and reference image compression before display. Production assets are rebuilt and Go hosting tests verify the generated bundle.
+Backend tests cover JPEG/WebP selection, dimensions, original byte preservation, preview metadata, preview fallback, authenticated preview serving, and deletion of both variants. Frontend tests cover preview selection, legacy fallback, opening original images, downloading originals, Escape/backdrop behavior, and reference image compression before display. Production assets are rebuilt and Go hosting tests verify the generated bundle.

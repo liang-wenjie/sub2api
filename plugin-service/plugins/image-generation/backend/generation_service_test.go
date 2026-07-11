@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -59,8 +62,19 @@ func (s *memoryMediaStorage) PresignGet(_ context.Context, key string, _ time.Du
 }
 
 func TestGenerationService_ArchivesBase64Result(t *testing.T) {
+	fixture := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			fixture.Set(x, y, color.RGBA{R: 40, G: 100, B: 180, A: 255})
+		}
+	}
+	var pngBytes bytes.Buffer
+	if err := png.Encode(&pngBytes, fixture); err != nil {
+		t.Fatal(err)
+	}
+	encodedPNG := base64.StdEncoding.EncodeToString(pngBytes.Bytes())
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"b64_json":"cG5nLWJ5dGVz"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"` + encodedPNG + `"}]}`))
 	}))
 	defer upstream.Close()
 
@@ -83,8 +97,16 @@ func TestGenerationService_ArchivesBase64Result(t *testing.T) {
 		t.Fatalf("base64 persisted in history: %#v", images[0])
 	}
 	key := stringValue(images[0]["object_key"])
-	if string(storage.objects[key]) != "png-bytes" {
-		t.Fatalf("stored bytes = %q", storage.objects[key])
+	original, _ := base64.StdEncoding.DecodeString(encodedPNG)
+	if !bytes.Equal(storage.objects[key], original) {
+		t.Fatal("stored original bytes changed")
+	}
+	previewKey := stringValue(images[0]["preview_object_key"])
+	if previewKey == "" || len(storage.objects[previewKey]) == 0 {
+		t.Fatalf("preview metadata = %#v", images[0])
+	}
+	if images[0]["preview_url"] == "" {
+		t.Fatalf("preview URL missing: %#v", images[0])
 	}
 }
 

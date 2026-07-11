@@ -25,12 +25,19 @@ async function preparePage(viewport) {
   }))
   await page.route('**/plugins/image-generation/api/**', async route => {
     const url = new URL(route.request().url())
-    if (url.pathname.endsWith('/me')) return route.fulfill({ json: { user_id: 1, role: 'user', email: 'test@example.com', username: 'tester', plugin: 'image-generation' } })
-    if (url.pathname.endsWith('/config')) return route.fulfill({ json: { plugin_key: 'image-generation', history_enabled: true, user_id: 1, role: 'user' } })
-    if (url.pathname.endsWith('/history')) return route.fulfill({ json: { items: [] } })
+    if (url.pathname.includes('/assets/')) return route.fulfill({
+      contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=', 'base64'),
+    })
+    if (url.pathname.endsWith('/conversations')) return route.fulfill({ json: { items: [] } })
+    if (url.pathname.includes('/conversations/') && url.pathname.endsWith('/messages')) return route.fulfill({ json: { items: [] } })
     if (url.pathname.endsWith('/generate')) return route.fulfill({ status: 201, json: {
       job_id: 'browser-job', status: 'succeeded',
-      result: { images: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=', revised_prompt: 'Browser smoke result' }] },
+      result: { images: [{
+        url: '/plugins/image-generation/api/assets/browser-job/result/0',
+        preview_url: '/plugins/image-generation/api/assets/browser-job/result/0/preview',
+        revised_prompt: 'Browser smoke result',
+      }] },
     } })
     return route.fulfill({ status: 404, json: { error: 'not found' } })
   })
@@ -85,12 +92,17 @@ try {
     const parameterPills = document.querySelectorAll('.message-user .request-settings span').length
     return composer && composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight
       && singleImageBubble && singleImageBubble.width <= 400
-      && actionTops.length === 3 && new Set(actionTops.map(top => Math.round(top))).size === 1
+      && actionTops.length === 4 && new Set(actionTops.map(top => Math.round(top))).size === 1
       && userBubble && userBubble.width <= 320
       && userText.includes('Prompt') && userText.includes('创作描述') && userText.includes('生成参数')
       && parameterPills === 1
   })
   if (!desktopLayout) throw new Error('Desktop composer exceeds the viewport')
+  await desktop.getByRole('button', { name: '查看原图' }).first().click()
+  await desktop.getByRole('dialog', { name: '查看原图' }).waitFor()
+  const downloadHref = await desktop.getByRole('link', { name: '下载原图' }).getAttribute('href')
+  if (!downloadHref?.includes('download=1')) throw new Error('Original download URL is missing download=1')
+  await desktop.getByRole('button', { name: '关闭原图' }).click()
   await desktop.screenshot({ path: resolve(screenshotDir, 'image-generation-desktop.png'), fullPage: true })
   await desktop.close()
 

@@ -100,11 +100,13 @@ type GenerateResponse struct {
 }
 
 type ReferenceImage struct {
-	Name       string `json:"name,omitempty"`
-	MimeType   string `json:"mime_type,omitempty"`
-	DataURL    string `json:"data_url,omitempty"`
-	RemoteURL  string `json:"remote_url,omitempty"`
-	StorageKey string `json:"storage_key,omitempty"`
+	Name              string `json:"name,omitempty"`
+	MimeType          string `json:"mime_type,omitempty"`
+	DataURL           string `json:"data_url,omitempty"`
+	RemoteURL         string `json:"remote_url,omitempty"`
+	StorageKey        string `json:"storage_key,omitempty"`
+	PreviewStorageKey string `json:"preview_storage_key,omitempty"`
+	PreviewURL        string `json:"preview_url,omitempty"`
 }
 
 type CreationRecord struct {
@@ -157,9 +159,15 @@ func (s *GenerationService) DeleteMedia(ctx context.Context, record *model.Histo
 		if reference.StorageKey != "" {
 			keys = append(keys, reference.StorageKey)
 		}
+		if reference.PreviewStorageKey != "" {
+			keys = append(keys, reference.PreviewStorageKey)
+		}
 	}
 	for _, image := range imageMapsValue(record.Result["images"]) {
 		if key := stringValue(image["object_key"]); key != "" {
+			keys = append(keys, key)
+		}
+		if key := stringValue(image["preview_object_key"]); key != "" {
 			keys = append(keys, key)
 		}
 	}
@@ -769,12 +777,35 @@ func (s *GenerationService) archiveImage(ctx context.Context, historyID string, 
 	if err := s.mediaStorage.Put(ctx, key, contentType, bytes.NewReader(data), int64(len(data))); err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	stored := map[string]any{
 		"url":          apiBasePath + "/assets/" + historyID + "/result/" + strconv.Itoa(index),
 		"object_key":   key,
 		"content_type": contentType,
 		"byte_size":    len(data),
-	}, nil
+	}
+	s.addPreview(ctx, stored, historyID, "result", index, data)
+	return stored, nil
+}
+
+func (s *GenerationService) addPreview(ctx context.Context, stored map[string]any, historyID, kind string, index int, data []byte) ([]byte, string) {
+	preview, contentType, err := createCompressedPreview(data)
+	if err != nil {
+		return nil, ""
+	}
+	extension := ".jpg"
+	if contentType == "image/webp" {
+		extension = ".webp"
+	}
+	digest := sha256.Sum256(preview)
+	key := "image-generation/" + historyID + "/" + kind + "/preview-" + strconv.Itoa(index) + "-" + hex.EncodeToString(digest[:]) + extension
+	if err := s.mediaStorage.Put(ctx, key, contentType, bytes.NewReader(preview), int64(len(preview))); err != nil {
+		return nil, ""
+	}
+	stored["preview_object_key"] = key
+	stored["preview_url"] = apiBasePath + "/assets/" + historyID + "/" + kind + "/" + strconv.Itoa(index) + "/preview"
+	stored["preview_content_type"] = contentType
+	stored["preview_byte_size"] = len(preview)
+	return preview, contentType
 }
 
 func (s *GenerationService) archiveReferenceImages(ctx context.Context, principal model.CurrentPrincipal, historyID string, images []ReferenceImage) error {
@@ -795,7 +826,15 @@ func (s *GenerationService) archiveReferenceImages(ctx context.Context, principa
 		images[index].Name = name
 		images[index].MimeType = contentType
 		images[index].StorageKey = key
-		images[index].DataURL = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+		previewMetadata := map[string]any{}
+		preview, previewType := s.addPreview(ctx, previewMetadata, historyID, "reference", index, data)
+		images[index].PreviewStorageKey = stringValue(previewMetadata["preview_object_key"])
+		images[index].PreviewURL = stringValue(previewMetadata["preview_url"])
+		if len(preview) > 0 {
+			images[index].DataURL = "data:" + previewType + ";base64," + base64.StdEncoding.EncodeToString(preview)
+		} else {
+			images[index].DataURL = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+		}
 	}
 	return nil
 }
@@ -1002,10 +1041,12 @@ func requestPayload(req GenerateRequest) map[string]any {
 		references := make([]map[string]any, 0, len(req.ReferenceImages))
 		for _, reference := range req.ReferenceImages {
 			stored := map[string]any{
-				"name":        reference.Name,
-				"mime_type":   reference.MimeType,
-				"remote_url":  reference.RemoteURL,
-				"storage_key": reference.StorageKey,
+				"name":                reference.Name,
+				"mime_type":           reference.MimeType,
+				"remote_url":          reference.RemoteURL,
+				"storage_key":         reference.StorageKey,
+				"preview_storage_key": reference.PreviewStorageKey,
+				"preview_url":         reference.PreviewURL,
 			}
 			if reference.StorageKey == "" {
 				stored["data_url"] = reference.DataURL
@@ -1035,11 +1076,13 @@ func referenceImagesValue(value any) []ReferenceImage {
 	references := make([]ReferenceImage, 0, len(items))
 	for _, item := range items {
 		references = append(references, ReferenceImage{
-			Name:       stringValue(item["name"]),
-			MimeType:   stringValue(item["mime_type"]),
-			DataURL:    stringValue(item["data_url"]),
-			RemoteURL:  stringValue(item["remote_url"]),
-			StorageKey: stringValue(item["storage_key"]),
+			Name:              stringValue(item["name"]),
+			MimeType:          stringValue(item["mime_type"]),
+			DataURL:           stringValue(item["data_url"]),
+			RemoteURL:         stringValue(item["remote_url"]),
+			StorageKey:        stringValue(item["storage_key"]),
+			PreviewStorageKey: stringValue(item["preview_storage_key"]),
+			PreviewURL:        stringValue(item["preview_url"]),
 		})
 	}
 	return references

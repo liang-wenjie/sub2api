@@ -218,6 +218,60 @@ func (r *SQLHistoryRepository) ListByUser(ctx context.Context, userID int64, que
 	return scanHistoryRows(rows)
 }
 
+func (r *SQLHistoryRepository) ListConversations(ctx context.Context, userID *int64, query model.CursorQuery) ([]model.ConversationSummary, error) {
+	limit := normalizeCursorLimit(query.Limit)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT conversation_id, prompt, prompt, status, updated_at
+		FROM (
+			SELECT DISTINCT ON (conversation_id) conversation_id, id, prompt, status, updated_at
+			FROM plugin_generation_history
+			WHERE conversation_id <> '' AND ($1::BIGINT IS NULL OR user_id = $1)
+			ORDER BY conversation_id, updated_at DESC, id DESC
+		) latest
+		WHERE (NOT $2 OR (updated_at, conversation_id) < ($3, $4))
+		ORDER BY updated_at DESC, conversation_id DESC
+		LIMIT $5
+	`, nullableUserID(userID), !query.BeforeTime.IsZero(), query.BeforeTime, query.BeforeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.ConversationSummary, 0)
+	for rows.Next() {
+		var item model.ConversationSummary
+		if err := rows.Scan(&item.ID, &item.Title, &item.Preview, &item.Status, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *SQLHistoryRepository) ListConversationMessages(ctx context.Context, userID *int64, conversationID string, query model.CursorQuery) ([]model.HistoryRecord, error) {
+	limit := normalizeCursorLimit(query.Limit)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, conversation_id, user_id, user_email, plugin_key, prompt, status,
+			request_payload, result_payload, error_message, created_at, updated_at
+		FROM plugin_generation_history
+		WHERE conversation_id = $1 AND ($2::BIGINT IS NULL OR user_id = $2)
+			AND (NOT $3 OR (created_at, id) < ($4, $5))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $6
+	`, conversationID, nullableUserID(userID), !query.BeforeTime.IsZero(), query.BeforeTime, query.BeforeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanHistoryRows(rows)
+}
+
+func nullableUserID(userID *int64) any {
+	if userID == nil {
+		return nil
+	}
+	return *userID
+}
+
 type historyScanner interface {
 	Scan(dest ...any) error
 }

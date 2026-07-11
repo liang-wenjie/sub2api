@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { authenticatedMediaUrl, type PluginApi } from '../api/client'
-import { projectHistory } from './history'
+import { projectConversationMessages } from './conversationMessages'
 import type {
   ChatMessage,
   Conversation,
@@ -36,8 +36,7 @@ function supportsImageGeneration(key: ImageApiKey): boolean {
 }
 
 function sourceOf(image: GeneratedImagePayload): string {
-	if (image.url) return authenticatedMediaUrl(image.url)
-  return image.b64_json ? `data:image/png;base64,${image.b64_json}` : ''
+	return image.url ? authenticatedMediaUrl(image.url) : ''
 }
 
 export function useImageGeneration(options: UseImageGenerationOptions) {
@@ -53,10 +52,14 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const generationStatus = ref<GenerationStatus>('idle')
   const activeJobId = ref('')
   const errorMessage = ref('')
+  const conversationNextCursor = ref<Record<string, string>>({})
+  const loadingConversation = ref(false)
+  let conversationRequestSequence = 0
   let pollTimer: ReturnType<typeof setTimeout> | undefined
 
   const selectedKey = computed(() => keys.value.find(key => key.id === selectedKeyId.value) ?? null)
   const activeConversation = computed(() => conversations.value.find(item => item.id === activeConversationId.value) ?? null)
+  const hasOlderMessages = computed(() => Boolean(conversationNextCursor.value[activeConversationId.value]))
   const availableModels = computed(() => {
     const config = selectedKey.value?.group?.models_list_config
     if (!config?.enabled || !config.models?.length) return defaultModels
@@ -89,32 +92,60 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   }
 
   async function initialize(): Promise<void> {
-    const [, , history, loadedKeys] = await Promise.all([
-      options.api.getMe(),
-      options.api.getConfig(),
-      options.api.listHistory(),
-      options.loadKeys(),
-    ])
-    keys.value = loadedKeys.filter(supportsImageGeneration)
-    selectedKeyId.value = keys.value[0]?.id ?? null
-    const remote = projectHistory(history.items)
-    conversations.value = remote
-    if (remote.length > 0) activeConversationId.value = remote[0].id
-    else createConversation()
-
-    const pending = history.items.find(record => record.status === 'pending')
-    if (pending) {
-      activeJobId.value = pending.id
-      generationStatus.value = 'polling'
-      schedulePoll()
+    if (!activeConversation.value) createConversation()
+    const keysPromise = options.loadKeys().then((loadedKeys) => {
+      keys.value = loadedKeys.filter(supportsImageGeneration)
+      selectedKeyId.value = keys.value[0]?.id ?? null
+    })
+    const summaries = await options.api.listConversations()
+    if (summaries.items.length > 0) {
+      conversations.value = summaries.items.map(item => ({
+        id: item.id, conversationId: item.id, title: item.title, preview: item.preview,
+        lastUsedAt: new Date(item.updated_at).toLocaleString(), messages: [], referenceImages: [], historyIds: [],
+      }))
+      await selectConversation(summaries.items[0].id)
     }
+    await keysPromise
+  }
+
+  async function loadConversation(id: string, before = ''): Promise<void> {
+    const sequence = ++conversationRequestSequence
+    loadingConversation.value = true
+    try {
+      const page = await options.api.listConversationMessages(id, before)
+      if (sequence !== conversationRequestSequence) return
+      const messages = projectConversationMessages(page.items)
+      updateConversation(id, conversation => ({
+        ...conversation,
+        messages: before ? [...messages, ...conversation.messages] : messages,
+        referenceImages: [...messages].reverse().find(message => message.role === 'user' && message.referenceImages?.length)?.referenceImages ?? conversation.referenceImages,
+        historyIds: before ? [...page.items.map(item => item.id), ...conversation.historyIds] : page.items.map(item => item.id),
+      }))
+      conversationNextCursor.value = { ...conversationNextCursor.value, [id]: page.next_cursor || '' }
+      const pending = page.items.find(record => record.status === 'pending')
+      if (pending) { activeJobId.value = pending.id; generationStatus.value = 'polling'; schedulePoll() }
+    } finally {
+      if (sequence === conversationRequestSequence) loadingConversation.value = false
+    }
+  }
+
+  async function selectConversation(id: string): Promise<void> {
+    activeConversationId.value = id
+    const conversation = conversations.value.find(item => item.id === id)
+    if (conversation && conversation.messages.length === 0) await loadConversation(id)
+  }
+
+  async function loadOlderMessages(): Promise<void> {
+    const id = activeConversationId.value
+    const cursor = conversationNextCursor.value[id]
+    if (id && cursor && !loadingConversation.value) await loadConversation(id, cursor)
   }
 
   function referencesToRequest(references: ImageReference[]) {
     return references.filter(reference => reference.dataUrl).slice(0, 1).map(reference => ({
       name: reference.fileName,
       mime_type: reference.mimeType,
-      data_url: reference.dataUrl,
+      data_url: reference.uploadDataUrl || reference.originalDataUrl || reference.dataUrl,
     }))
   }
 
@@ -131,7 +162,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const resultPrompt = response.result?.revised_prompt || fallbackPrompt
     return (response.result?.images ?? []).map((image, index) => ({
       id: `${response.job_id}-image-${index}`,
-      src: sourceOf(image),
+      src: image.preview_url ? authenticatedMediaUrl(image.preview_url) : sourceOf(image),
+      originalSrc: sourceOf(image),
       revisedPrompt: image.revised_prompt || resultPrompt,
       createdAt: response.result?.created
         ? new Date(response.result.created * 1000).toLocaleString()
@@ -303,6 +335,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const reference: ImageReference = {
       id: `${image.id}-repeat-reference`,
       dataUrl: image.src,
+      originalDataUrl: image.originalSrc,
       fileName: `${image.id}.png`,
       mimeType: 'image/png',
     }
@@ -334,7 +367,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   }
 
   async function deleteConversation(conversation: Conversation): Promise<void> {
-    await Promise.all(conversation.historyIds.map(id => options.api.deleteHistory(id)))
+    if (conversation.conversationId) await options.api.deleteConversation(conversation.conversationId)
     conversations.value = conversations.value.filter(item => item.id !== conversation.id)
     if (activeConversationId.value === conversation.id) {
       activeConversationId.value = conversations.value[0]?.id ?? ''
@@ -357,11 +390,15 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     conversations,
     activeConversationId,
     activeConversation,
+    hasOlderMessages,
     generationStatus,
     activeJobId,
     errorMessage,
+    loadingConversation,
     initialize,
     createConversation,
+    selectConversation,
+    loadOlderMessages,
     submit,
     cancelGeneration,
     repeatFromImage,

@@ -1,22 +1,20 @@
 import type {
   GenerateRequest,
   GenerateResponse,
-  HistoryList,
+  ConversationList,
+  ConversationMessages,
   HistoryRecord,
-  PluginConfig,
-  Principal,
   ImageApiKey,
 } from '../types'
 
 export interface PluginApi {
-  getMe(): Promise<Principal>
-  getConfig(): Promise<PluginConfig>
-  listHistory(): Promise<HistoryList>
+  listConversations(cursor?: string): Promise<ConversationList>
+  listConversationMessages(id: string, before?: string): Promise<ConversationMessages>
   generate(request: GenerateRequest): Promise<GenerateResponse>
   retryHistory(id: string): Promise<GenerateResponse>
   getStatus(id: string): Promise<HistoryRecord>
   cancel(id: string): Promise<HistoryRecord>
-  deleteHistory(id: string): Promise<void>
+  deleteConversation(id: string): Promise<void>
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -48,9 +46,8 @@ export function createPluginApi(base: string, fetcher: typeof fetch = window.fet
   const historyPath = (id: string, action = '') => `/history/${encodeURIComponent(id)}${action}`
 
   return {
-    getMe: () => request('/me'),
-    getConfig: () => request('/config'),
-    listHistory: () => request('/history'),
+    listConversations: cursor => request(`/conversations?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
+    listConversationMessages: (id, before) => request(`/conversations/${encodeURIComponent(id)}/messages?limit=20${before ? `&before=${encodeURIComponent(before)}` : ''}`),
     generate: payload => request('/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -59,7 +56,7 @@ export function createPluginApi(base: string, fetcher: typeof fetch = window.fet
     retryHistory: id => request(historyPath(id, '/retry'), { method: 'POST' }),
     getStatus: id => request(historyPath(id, '/status')),
     cancel: id => request(historyPath(id, '/cancel'), { method: 'POST' }),
-    deleteHistory: id => request(historyPath(id), { method: 'DELETE' }),
+    deleteConversation: id => request(`/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   }
 }
 

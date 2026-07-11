@@ -10,11 +10,21 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('plugin api client', () => {
+  it('uses separate cursor-paged conversation endpoints', async () => {
+    const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse({ items: [] }))
+    const client = createPluginApi('/plugins/image-generation/api', fetchSpy)
+
+    await client.listConversations('next cursor')
+    await client.listConversationMessages('conversation/1', 'older cursor')
+
+    expect(fetchSpy.mock.calls[0][0]).toContain('/conversations?limit=20&cursor=next%20cursor')
+    expect(fetchSpy.mock.calls[1][0]).toContain('/conversations/conversation%2F1/messages?limit=20&before=older%20cursor')
+  })
+
 	it('adds the login token to media URLs used by image elements', () => {
 		window.localStorage.setItem('auth_token', 'media-token')
 		expect(authenticatedMediaUrl('/plugins/image-generation/api/assets/h1/reference/0'))
 			.toBe('/plugins/image-generation/api/assets/h1/reference/0?token=media-token')
-		expect(authenticatedMediaUrl('data:image/png;base64,abc')).toBe('data:image/png;base64,abc')
 		window.localStorage.removeItem('auth_token')
 	})
   it('submits generation through the configured plugin base', async () => {
@@ -34,23 +44,23 @@ describe('plugin api client', () => {
     )
   })
 
-  it('exposes history task actions', async () => {
+  it('exposes task actions and conversation deletion', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse({ id: 'history-1', status: 'pending' }))
     const client = createPluginApi('/plugins/image-generation/api', fetchSpy)
 
     await client.getStatus('history-1')
     await client.cancel('history-1')
-    await client.deleteHistory('history-1')
+    await client.deleteConversation('conversation-1')
 
     expect(fetchSpy).toHaveBeenNthCalledWith(1, '/plugins/image-generation/api/history/history-1/status', expect.objectContaining({ credentials: 'same-origin' }))
     expect(fetchSpy).toHaveBeenNthCalledWith(2, '/plugins/image-generation/api/history/history-1/cancel', expect.objectContaining({ method: 'POST' }))
-    expect(fetchSpy).toHaveBeenNthCalledWith(3, '/plugins/image-generation/api/history/history-1', expect.objectContaining({ method: 'DELETE' }))
+    expect(fetchSpy).toHaveBeenNthCalledWith(3, '/plugins/image-generation/api/conversations/conversation-1', expect.objectContaining({ method: 'DELETE' }))
   })
 
   it('uses a structured API error message', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ error: 'provider unavailable' }, 502))
     const client = createPluginApi('/plugins/image-generation/api', fetchSpy)
 
-    await expect(client.getConfig()).rejects.toThrow('provider unavailable')
+    await expect(client.listConversations()).rejects.toThrow('provider unavailable')
   })
 })

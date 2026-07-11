@@ -4,29 +4,31 @@ import { createPluginApi, loadImageKeys, pluginApiBase } from './api/client'
 import ChatThread from './components/ChatThread.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import HistorySidebar from './components/HistorySidebar.vue'
+import ImagePreviewDialog from './components/ImagePreviewDialog.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import { useImageGeneration } from './composables/useImageGeneration'
 import type { Conversation, GeneratedImage, ImageReference } from './types'
 
 const state = useImageGeneration({ api: createPluginApi(pluginApiBase()), loadKeys: loadImageKeys })
-const loading = ref(true)
 const drawerOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const deleteTarget = ref<Conversation | null>(null)
+const imagePreview = ref({ open: false, src: '', alt: '' })
 
 onMounted(async () => {
   try { await state.initialize() }
   catch (error) { state.errorMessage.value = error instanceof Error ? error.message : String(error) }
-  finally { loading.value = false }
 })
 onBeforeUnmount(state.dispose)
 
 function useAsReference(image: GeneratedImage) {
   const reference: ImageReference = {
-    id: `${image.id}-reference`, dataUrl: image.src, fileName: `${image.id}.png`, mimeType: 'image/png',
+    id: `${image.id}-reference`, dataUrl: image.src, originalDataUrl: image.originalSrc || image.src, fileName: `${image.id}.png`, mimeType: 'image/png',
   }
   state.setReference(reference)
 }
+
+function openImagePreview(src: string, alt: string) { imagePreview.value = { open: true, src, alt } }
 
 async function confirmDelete() {
   if (deleteTarget.value) await state.deleteConversation(deleteTarget.value)
@@ -55,38 +57,39 @@ async function confirmDelete() {
         :keys="state.keys.value"
         :selected-key-id="state.selectedKeyId.value"
         @update:selected-key-id="state.selectedKeyId.value = $event"
-        @select="state.activeConversationId.value = $event; drawerOpen = false"
+        @select="state.selectConversation($event); drawerOpen = false"
         @create="state.createConversation(); drawerOpen = false"
         @delete="deleteTarget = $event"
         @collapse="sidebarCollapsed = true; drawerOpen = false"
       />
     </div>
     <section class="chat-panel" data-testid="image-chat-panel">
-      <div v-if="loading" class="loading-state" role="status">Loading...</div>
-      <template v-else>
-        <ChatThread
-          :conversation="state.activeConversation.value"
-          @reference="useAsReference"
-          @refine="state.refineFromImage"
-          @repeat="state.repeatFromImage($event, state.prompt.value)"
-          @retry="state.retryMessage"
-        />
-        <p v-if="state.errorMessage.value" class="inline-error" role="alert">{{ state.errorMessage.value }}</p>
-        <PromptComposer
-          :prompt="state.prompt.value"
-          :model="state.model.value"
-          :size="state.size.value"
-          :models="state.availableModels.value"
-          :busy="state.generationStatus.value !== 'idle'"
-          :reference="state.activeConversation.value?.referenceImages[0]"
-          @update:prompt="state.prompt.value = $event"
-          @update:model="state.model.value = $event"
-          @update:size="state.size.value = $event"
-          @reference="state.setReference($event)"
-          @submit="state.submit()"
-          @stop="state.cancelGeneration()"
-        />
-      </template>
+      <ChatThread
+        :conversation="state.activeConversation.value"
+        :loading="state.loadingConversation.value"
+        :has-older="state.hasOlderMessages.value"
+        @reference="useAsReference"
+        @refine="state.refineFromImage"
+        @repeat="state.repeatFromImage($event, state.prompt.value)"
+        @retry="state.retryMessage"
+        @view="openImagePreview"
+        @load-older="state.loadOlderMessages"
+      />
+      <p v-if="state.errorMessage.value" class="inline-error" role="alert">{{ state.errorMessage.value }}</p>
+      <PromptComposer
+        :prompt="state.prompt.value"
+        :model="state.model.value"
+        :size="state.size.value"
+        :models="state.availableModels.value"
+        :busy="state.generationStatus.value !== 'idle'"
+        :reference="state.activeConversation.value?.referenceImages[0]"
+        @update:prompt="state.prompt.value = $event"
+        @update:model="state.model.value = $event"
+        @update:size="state.size.value = $event"
+        @reference="state.setReference($event)"
+        @submit="state.submit()"
+        @stop="state.cancelGeneration()"
+      />
     </section>
     <ConfirmDialog
       :open="Boolean(deleteTarget)"
@@ -94,6 +97,12 @@ async function confirmDelete() {
       message="确认删除当前历史记录及其生成图片吗？"
       @cancel="deleteTarget = null"
       @confirm="confirmDelete"
+    />
+    <ImagePreviewDialog
+      :open="imagePreview.open"
+      :src="imagePreview.src"
+      :alt="imagePreview.alt"
+      @close="imagePreview.open = false"
     />
   </main>
 </template>
