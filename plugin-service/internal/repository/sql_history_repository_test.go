@@ -202,6 +202,12 @@ func TestSQLHistoryRepositoryEnsureSchema(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_created").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_user_conversation_updated").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_conversation_updated").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_user_conversation_created").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := EnsureHistorySchema(context.Background(), db); err != nil {
 		t.Fatal(err)

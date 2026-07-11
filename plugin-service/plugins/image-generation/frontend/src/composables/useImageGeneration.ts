@@ -91,6 +91,12 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     conversations.value = conversations.value.map(conversation => conversation.id === id ? update(conversation) : conversation)
   }
 
+  function promoteConversation(id: string): void {
+    const conversation = conversations.value.find(item => item.id === id)
+    if (!conversation || conversations.value[0]?.id === id) return
+    conversations.value = [conversation, ...conversations.value.filter(item => item.id !== id)]
+  }
+
   async function initialize(): Promise<void> {
     if (!activeConversation.value) createConversation()
     const keysPromise = options.loadKeys().then((loadedKeys) => {
@@ -213,6 +219,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       lastUsedAt: createdAt,
       messages: [...current.messages, userMessage, pendingMessage],
     }))
+    promoteConversation(conversation.id)
     prompt.value = ''
     generationStatus.value = 'submitting'
     errorMessage.value = ''

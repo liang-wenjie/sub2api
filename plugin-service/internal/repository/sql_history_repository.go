@@ -57,6 +57,12 @@ func EnsureHistorySchema(ctx context.Context, db *sql.DB) error {
 			ON plugin_generation_history(conversation_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_created
 			ON plugin_generation_history(created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_user_conversation_updated
+			ON plugin_generation_history(user_id, conversation_id, updated_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_conversation_updated
+			ON plugin_generation_history(conversation_id, updated_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_plugin_generation_history_user_conversation_created
+			ON plugin_generation_history(user_id, conversation_id, created_at DESC, id DESC)`,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
