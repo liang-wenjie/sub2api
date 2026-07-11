@@ -190,6 +190,13 @@ func assertBundledHistoryBehavior(t *testing.T, body string) {
 
 	for _, needle := range []string{
 		`Nt(T.value.filter(D=>D.id!=="conversation-live"||D.messages.length>0),v=>`,
+		`f.status==="failed"`,
+		`String(f.error_message||t("imageGeneration.generationFailed"))`,
+		`status:"failed"`,
+		`id:` + "`assistant-failed-${Date.now()}`" + `,role:"assistant"`,
+		`messages:C.messages.map(H=>H.id===D?U:H)`,
+		`generationFailed:"Image generation failed"`,
+		`generationFailed:"\u56fe\u7247\u751f\u6210\u5931\u8d25"`,
 		`conversation_id:((m=A.value)==null?void 0:m.conversationId)||I`,
 		`const w=String($.conversation_id||((m=$.request)==null?void 0:m.conversation_id)||$.id)`,
 		`Array.from(f.reduce((D,$)=>`,
