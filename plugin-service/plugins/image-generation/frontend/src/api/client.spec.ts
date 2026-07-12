@@ -10,6 +10,26 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('plugin api client', () => {
+  it('uploads a reference image as multipart form data', async () => {
+    const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      name: 'reference.png', mime_type: 'image/png',
+      storage_key: 'image-generation/uploads/7/original.png',
+      preview_storage_key: 'image-generation/uploads/7/preview.jpg',
+      original_url: '/plugins/image-generation/api/uploads/upload-1/original',
+      preview_url: '/plugins/image-generation/api/uploads/upload-1/preview',
+    }, 201))
+    const client = createPluginApi('/plugins/image-generation/api', fetchSpy)
+    const file = new File(['png-bytes'], 'reference.png', { type: 'image/png' })
+
+    await client.uploadReference(file)
+
+    const [, init] = fetchSpy.mock.calls[0]
+    expect(init?.method).toBe('POST')
+    expect(init?.body).toBeInstanceOf(FormData)
+    expect((init?.body as FormData).get('image')).toBe(file)
+    expect(init?.headers).toEqual({})
+  })
+
   it('uses separate cursor-paged conversation endpoints', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse({ items: [] }))
     const client = createPluginApi('/plugins/image-generation/api', fetchSpy)

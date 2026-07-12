@@ -20,6 +20,7 @@ function completedResponse(): GenerateResponse {
 
 function createApi(generateResult: GenerateResponse = completedResponse()) {
   return {
+    uploadReference: vi.fn(),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
     generate: vi.fn().mockResolvedValue(generateResult),
@@ -31,6 +32,31 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
 }
 
 describe('useImageGeneration', () => {
+  it('uploads a reference before generation and submits storage metadata without base64', async () => {
+    const api = createApi()
+    api.uploadReference.mockResolvedValue({
+      name: 'reference.png', mime_type: 'image/png',
+      storage_key: 'image-generation/uploads/7/upload-1/original',
+      preview_storage_key: 'image-generation/uploads/7/upload-1/preview',
+      original_url: '/plugins/image-generation/api/references/upload-1/original',
+      preview_url: '/plugins/image-generation/api/references/upload-1/preview',
+    })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+
+    await state.uploadReference(new File(['png-bytes'], 'reference.png', { type: 'image/png' }))
+    state.prompt.value = 'Edit this image'
+    await state.submit()
+
+    expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({
+      reference_images: [expect.objectContaining({
+        storage_key: 'image-generation/uploads/7/upload-1/original',
+        preview_storage_key: 'image-generation/uploads/7/upload-1/preview',
+        data_url: undefined,
+      })],
+    }))
+  })
+
   it('loads summaries before the selected conversation details', async () => {
     const api = createApi()
     api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })

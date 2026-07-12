@@ -153,8 +153,29 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     return references.filter(reference => reference.dataUrl).slice(0, 1).map(reference => ({
       name: reference.fileName,
       mime_type: reference.mimeType,
-      data_url: reference.uploadDataUrl || reference.originalDataUrl || reference.dataUrl,
+      data_url: reference.storageKey ? undefined : reference.uploadDataUrl || reference.originalDataUrl || reference.dataUrl,
+      storage_key: reference.storageKey,
+      preview_storage_key: reference.previewStorageKey,
+      preview_url: reference.dataUrl,
     }))
+  }
+
+  async function uploadReference(file: File): Promise<void> {
+    errorMessage.value = ''
+    try {
+      const uploaded = await options.api.uploadReference(file)
+      setReference({
+        id: uploaded.storage_key,
+        dataUrl: authenticatedMediaUrl(uploaded.preview_url),
+        originalDataUrl: authenticatedMediaUrl(uploaded.original_url),
+        storageKey: uploaded.storage_key,
+        previewStorageKey: uploaded.preview_storage_key,
+        fileName: uploaded.name || file.name,
+        mimeType: uploaded.mime_type || file.type || 'image/png',
+      })
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : String(error)
+    }
   }
 
   function requestPrompt(userPrompt: string, references: ImageReference[]): string {
@@ -412,6 +433,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     refineFromImage,
     retryMessage,
     setReference,
+    uploadReference,
     deleteConversation,
     dispose,
   }

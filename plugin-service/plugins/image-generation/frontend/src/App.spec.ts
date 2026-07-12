@@ -10,6 +10,7 @@ vi.mock('./api/client', () => ({
   pluginApiBase: () => '/plugins/image-generation/api',
   loadImageKeys: vi.fn().mockResolvedValue([]),
   createPluginApi: () => ({
+    uploadReference: vi.fn(),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
     generate, retryHistory: vi.fn(), getStatus: vi.fn(), cancel: vi.fn(), deleteConversation: vi.fn(),

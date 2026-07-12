@@ -88,6 +88,7 @@ async function confirmDelete() {
         @update:model="state.model.value = $event"
         @update:size="state.size.value = $event"
         @reference="state.setReference($event)"
+        @reference-file="state.uploadReference($event)"
         @submit="state.submit()"
         @stop="state.cancelGeneration()"
       />

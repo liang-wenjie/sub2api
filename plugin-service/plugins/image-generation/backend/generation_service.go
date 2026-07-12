@@ -3,11 +3,13 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -107,6 +109,60 @@ type ReferenceImage struct {
 	StorageKey        string `json:"storage_key,omitempty"`
 	PreviewStorageKey string `json:"preview_storage_key,omitempty"`
 	PreviewURL        string `json:"preview_url,omitempty"`
+}
+
+type UploadedReference struct {
+	ReferenceImage
+	OriginalURL string `json:"original_url"`
+}
+
+func (s *GenerationService) UploadReference(ctx context.Context, principal model.CurrentPrincipal, name, contentType string, body io.Reader) (*UploadedReference, error) {
+	if s.mediaStorage == nil {
+		return nil, errors.New("image storage unavailable")
+	}
+	data, err := io.ReadAll(io.LimitReader(body, maxPersistedImageBytes+1))
+	if err != nil || len(data) == 0 || len(data) > maxPersistedImageBytes {
+		return nil, errors.New("reference image has invalid size")
+	}
+	if detected := http.DetectContentType(data); !strings.HasPrefix(contentType, "image/") {
+		contentType = detected
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		return nil, errors.New("reference file is not an image")
+	}
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return nil, err
+	}
+	uploadID := hex.EncodeToString(random)
+	prefix := "image-generation/uploads/" + strconv.FormatInt(principal.UserID, 10) + "/" + uploadID
+	originalKey := prefix + "/original"
+	if err := s.mediaStorage.Put(ctx, originalKey, contentType, bytes.NewReader(data), int64(len(data))); err != nil {
+		return nil, err
+	}
+	preview, previewType, err := createCompressedPreview(data)
+	if err != nil {
+		_ = s.mediaStorage.Delete(ctx, originalKey)
+		return nil, fmt.Errorf("unsupported reference image format: %w", err)
+	}
+	previewKey := prefix + "/preview"
+	if err := s.mediaStorage.Put(ctx, previewKey, previewType, bytes.NewReader(preview), int64(len(preview))); err != nil {
+		_ = s.mediaStorage.Delete(ctx, originalKey)
+		return nil, err
+	}
+	base := apiBasePath + "/references/" + uploadID
+	return &UploadedReference{ReferenceImage: ReferenceImage{Name: name, MimeType: contentType, StorageKey: originalKey, PreviewStorageKey: previewKey, PreviewURL: base + "/preview"}, OriginalURL: base + "/original"}, nil
+}
+
+func (s *GenerationService) GetUploadedReference(ctx context.Context, principal model.CurrentPrincipal, uploadID, variant string) (*media.Object, error) {
+	if s.mediaStorage == nil || (variant != "original" && variant != "preview") {
+		return nil, media.ErrNotFound
+	}
+	prefix := "image-generation/uploads/" + strconv.FormatInt(principal.UserID, 10) + "/" + uploadID
+	if variant == "original" {
+		return s.mediaStorage.Get(ctx, prefix+"/original")
+	}
+	return s.mediaStorage.Get(ctx, prefix+"/preview")
 }
 
 type CreationRecord struct {
@@ -827,19 +883,28 @@ func (s *GenerationService) archiveReferenceImages(ctx context.Context, principa
 		images[index].MimeType = contentType
 		images[index].StorageKey = key
 		previewMetadata := map[string]any{}
-		preview, previewType := s.addPreview(ctx, previewMetadata, historyID, "reference", index, data)
+		s.addPreview(ctx, previewMetadata, historyID, "reference", index, data)
 		images[index].PreviewStorageKey = stringValue(previewMetadata["preview_object_key"])
 		images[index].PreviewURL = stringValue(previewMetadata["preview_url"])
-		if len(preview) > 0 {
-			images[index].DataURL = "data:" + previewType + ";base64," + base64.StdEncoding.EncodeToString(preview)
-		} else {
-			images[index].DataURL = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
-		}
+		images[index].DataURL = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
 	}
 	return nil
 }
 
 func (s *GenerationService) referenceImageBytes(ctx context.Context, principal model.CurrentPrincipal, image ReferenceImage) (string, string, []byte, error) {
+	expectedUploadPrefix := "image-generation/uploads/" + strconv.FormatInt(principal.UserID, 10) + "/"
+	if strings.HasPrefix(image.StorageKey, expectedUploadPrefix) {
+		object, err := s.mediaStorage.Get(ctx, image.StorageKey)
+		if err != nil {
+			return "", "", nil, err
+		}
+		defer object.Body.Close()
+		data, err := io.ReadAll(io.LimitReader(object.Body, maxPersistedImageBytes+1))
+		if err != nil || len(data) > maxPersistedImageBytes {
+			return "", "", nil, errors.New("failed to read uploaded reference image")
+		}
+		return image.Name, object.ContentType, data, nil
+	}
 	if strings.HasPrefix(strings.TrimSpace(image.DataURL), "data:") {
 		return decodeDataURLImage(image.DataURL, image.Name, image.MimeType)
 	}

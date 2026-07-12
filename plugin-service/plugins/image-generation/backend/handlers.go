@@ -50,6 +50,8 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware
 	mux.HandleFunc("GET "+apiBasePath+"/me", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Me))
 	mux.HandleFunc("GET "+apiBasePath+"/config", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Config))
 	mux.HandleFunc("POST "+apiBasePath+"/generate", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Generate))
+	mux.HandleFunc("POST "+apiBasePath+"/references", authMiddleware.RequirePlugin(imagemanifest.Key, handler.UploadReference))
+	mux.HandleFunc("GET "+apiBasePath+"/references/{upload_id}/{variant}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetUploadedReference))
 	mux.HandleFunc("GET "+apiBasePath+"/creations", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListCreations))
 	mux.HandleFunc("GET "+apiBasePath+"/conversations", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListConversations))
 	mux.HandleFunc("GET "+apiBasePath+"/conversations/{id}/messages", authMiddleware.RequirePlugin(imagemanifest.Key, handler.ListConversationMessages))
@@ -62,6 +64,38 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware
 	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{index}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
 	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{kind}/{index}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
 	mux.HandleFunc("GET "+apiBasePath+"/assets/{history_id}/{kind}/{index}/{variant}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetAsset))
+}
+
+func (h *Handler) UploadReference(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	if err := r.ParseMultipartForm(maxPersistedImageBytes); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid reference image")
+		return
+	}
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "reference image is required")
+		return
+	}
+	defer file.Close()
+	uploaded, err := h.generation.UploadReference(r.Context(), principal, header.Filename, header.Header.Get("Content-Type"), file)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, uploaded)
+}
+
+func (h *Handler) GetUploadedReference(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	object, err := h.generation.GetUploadedReference(r.Context(), principal, r.PathValue("upload_id"), r.PathValue("variant"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, "reference image not found")
+		return
+	}
+	defer object.Body.Close()
+	w.Header().Set("Content-Type", object.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = io.Copy(w, object.Body)
 }
 
 func (h *Handler) GetAsset(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {

@@ -277,6 +277,114 @@ func TestGenerationService_PersistsReferenceWithoutBase64(t *testing.T) {
 	}
 }
 
+func TestGenerationService_UsesPreviouslyUploadedReference(t *testing.T) {
+	fixture := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	var source bytes.Buffer
+	if err := png.Encode(&source, fixture); err != nil {
+		t.Fatal(err)
+	}
+	storage := newMemoryMediaStorage()
+	storage.objects["image-generation/uploads/7/original.png"] = source.Bytes()
+	storage.types["image-generation/uploads/7/original.png"] = "image/png"
+
+	var received []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(maxPersistedImageBytes); err != nil {
+			t.Fatal(err)
+		}
+		file, _, err := r.FormFile("image")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		received, err = io.ReadAll(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded := base64.StdEncoding.EncodeToString(source.Bytes())
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"` + encoded + `"}]}`))
+	}))
+	defer upstream.Close()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), MediaStorage: storage})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
+		Prompt: "edit", ProviderAPIKey: "key", Model: "gpt-image-1",
+		ReferenceImages: []ReferenceImage{{
+			Name: "reference.png", MimeType: "image/png",
+			StorageKey:        "image-generation/uploads/7/original.png",
+			PreviewStorageKey: "image-generation/uploads/7/preview.jpg",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForHistoryStatus(t, history, principal, created.JobID, model.HistoryStatusSucceeded)
+	if !bytes.Equal(received, source.Bytes()) {
+		t.Fatal("provider did not receive the uploaded original")
+	}
+	record, err := history.Get(context.Background(), principal, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := referenceImagesValue(record.Request["reference_images"])[0]
+	if reference.DataURL != "" || reference.StorageKey == "" || reference.PreviewStorageKey == "" {
+		t.Fatalf("persisted reference = %#v", reference)
+	}
+}
+
+func TestGenerationService_ReusesPreviouslyUploadedReference(t *testing.T) {
+	fixture := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	var source bytes.Buffer
+	if err := png.Encode(&source, fixture); err != nil {
+		t.Fatal(err)
+	}
+	storage := newMemoryMediaStorage()
+	storage.objects["image-generation/uploads/7/upload-1/original"] = source.Bytes()
+	storage.types["image-generation/uploads/7/upload-1/original"] = "image/png"
+	storage.objects["image-generation/uploads/7/upload-1/preview"] = source.Bytes()
+	storage.types["image-generation/uploads/7/upload-1/preview"] = "image/png"
+	encoded := base64.StdEncoding.EncodeToString(source.Bytes())
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"` + encoded + `"}]}`))
+	}))
+	defer upstream.Close()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), MediaStorage: storage})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	for attempt := 0; attempt < 2; attempt++ {
+		created, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
+			Prompt: "edit", ProviderAPIKey: "key", Model: "gpt-image-1",
+			ReferenceImages: []ReferenceImage{{
+				Name: "reference.png", MimeType: "image/png",
+				StorageKey:        "image-generation/uploads/7/upload-1/original",
+				PreviewStorageKey: "image-generation/uploads/7/upload-1/preview",
+			}},
+		})
+		if err != nil {
+			t.Fatalf("attempt %d: %v", attempt+1, err)
+		}
+		waitForHistoryStatus(t, history, principal, created.JobID, model.HistoryStatusSucceeded)
+	}
+}
+
+func TestGenerationService_RejectsAnotherUsersUploadedReference(t *testing.T) {
+	storage := newMemoryMediaStorage()
+	storage.objects["image-generation/uploads/8/upload-1/original"] = []byte("private")
+	storage.types["image-generation/uploads/8/upload-1/original"] = "image/png"
+	svc := NewGenerationService(service.NewHistoryService(repository.NewHistoryRepository()), GenerationServiceOptions{MediaStorage: storage})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+
+	_, _, _, err := svc.referenceImageBytes(context.Background(), principal, ReferenceImage{
+		StorageKey: "image-generation/uploads/8/upload-1/original",
+	})
+	if err == nil {
+		t.Fatal("another user's upload was accepted")
+	}
+}
+
 func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *testing.T) {
 	history := service.NewHistoryService(repository.NewHistoryRepository())
 	svc := NewGenerationService(history, GenerationServiceOptions{})

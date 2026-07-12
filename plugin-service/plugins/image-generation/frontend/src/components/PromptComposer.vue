@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { onBeforeUnmount } from 'vue'
 import type { ImageReference } from '../types'
 
 const props = defineProps<{
@@ -18,8 +17,8 @@ const emit = defineEmits<{
   submit: []
   stop: []
   reference: [value?: ImageReference]
+  referenceFile: [value: File]
 }>()
-const localPreviewUrls = new Set<string>()
 
 function keydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.shiftKey) return
@@ -31,27 +30,10 @@ function readReference(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    const previewUrl = URL.createObjectURL(file)
-    localPreviewUrls.add(previewUrl)
-    emit('reference', {
-      id: `${file.name}-${Date.now()}`,
-      dataUrl: previewUrl,
-      originalDataUrl: previewUrl,
-      uploadDataUrl: String(reader.result || ''),
-      fileName: file.name,
-      mimeType: file.type || 'image/png',
-    })
-  }
-  reader.readAsDataURL(file)
+  emit('referenceFile', file)
   input.value = ''
 }
 
-onBeforeUnmount(() => {
-  for (const url of localPreviewUrls) URL.revokeObjectURL(url)
-  localPreviewUrls.clear()
-})
 </script>
 
 <template>
@@ -59,7 +41,7 @@ onBeforeUnmount(() => {
     <div class="composer-main">
       <label class="reference-picker" data-testid="reference-upload-label" :title="reference ? '再次上传参考图' : '上传参考图'">
         <span class="sr-only">{{ reference ? '再次上传参考图' : '上传参考图' }}</span>
-        <input data-testid="reference-image-input" type="file" accept="image/*" @change="readReference">
+        <input data-testid="reference-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" @change="readReference">
         <img v-if="reference" :src="reference.dataUrl" alt="已选择的参考图" data-testid="reference-image-preview">
         <span v-else aria-hidden="true">+</span>
       </label>

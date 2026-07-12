@@ -26,6 +26,14 @@ export interface ReferenceImageRequest {
   remote_url?: string
   storage_key?: string
   preview_url?: string
+  preview_storage_key?: string
+}
+
+export interface UploadedReference extends ReferenceImageRequest {
+  storage_key: string
+  preview_storage_key: string
+  original_url: string
+  preview_url: string
 }
 
 export interface GenerateRequest {
@@ -95,6 +103,8 @@ export interface ImageReference {
   dataUrl: string
   originalDataUrl?: string
   uploadDataUrl?: string
+  storageKey?: string
+  previewStorageKey?: string
   fileName: string
   mimeType: string
 }

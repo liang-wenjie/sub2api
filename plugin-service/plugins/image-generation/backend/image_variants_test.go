@@ -7,7 +7,25 @@ import (
 	"image/jpeg"
 	"image/png"
 	"testing"
+
+	"github.com/HugoSmits86/nativewebp"
 )
+
+func TestCreateCompressedPreviewDecodesWebP(t *testing.T) {
+	input := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	input.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var source bytes.Buffer
+	if err := nativewebp.Encode(&source, input, nil); err != nil {
+		t.Fatal(err)
+	}
+	preview, contentType, err := createCompressedPreview(source.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview) == 0 || contentType == "" {
+		t.Fatalf("preview size=%d contentType=%q", len(preview), contentType)
+	}
+}
 
 func TestCreateCompressedPreviewConstrainsLongestEdge(t *testing.T) {
 	input := image.NewRGBA(image.Rect(0, 0, 2000, 1000))
