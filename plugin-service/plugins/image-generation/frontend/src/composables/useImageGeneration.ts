@@ -424,6 +424,10 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }))
   }
 
+  function clearReferences(): void {
+    setReference()
+  }
+
   async function deleteConversation(conversation: Conversation): Promise<void> {
     if (conversation.conversationId) await options.api.deleteConversation(conversation.conversationId)
     conversations.value = conversations.value.filter(item => item.id !== conversation.id)
@@ -466,6 +470,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     retryMessage,
     setReference,
     removeReference,
+    clearReferences,
     uploadReference,
     deleteConversation,
     dispose,

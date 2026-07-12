@@ -65,6 +65,8 @@ describe('useImageGeneration', () => {
     expect(state.activeConversation.value?.referenceImages.map(item => item.fileName)).toEqual(['first.png', 'second.png'])
     state.removeReference('uploads/second/original')
     expect(state.activeConversation.value?.referenceImages.map(item => item.fileName)).toEqual(['first.png'])
+    state.clearReferences()
+    expect(state.activeConversation.value?.referenceImages).toEqual([])
   })
 
   it('uploads only files within the remaining model capacity', async () => {

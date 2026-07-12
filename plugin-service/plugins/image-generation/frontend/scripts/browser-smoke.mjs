@@ -92,6 +92,13 @@ try {
   })
   if (!desktopFanLayout.passed) throw new Error(`Desktop reference fan layout failed: ${JSON.stringify(desktopFanLayout)}`)
   await desktop.screenshot({ path: resolve(screenshotDir, 'reference-fan-desktop.png'), fullPage: false })
+  await desktop.getByTestId('remove-reference-image').last().click()
+  await desktop.waitForFunction(() => {
+    const toggle = document.querySelector('[data-testid="reference-count-toggle"]')
+    return toggle?.textContent?.trim() === '2/16' && toggle.getAttribute('aria-expanded') === 'true'
+  })
+  await desktop.getByTestId('clear-reference-images').click()
+  await desktop.waitForFunction(() => !document.querySelector('[data-testid="reference-count-toggle"]'))
   await desktop.keyboard.press('Escape')
   await desktop.getByTestId('image-prompt-input').fill('Create a browser smoke image')
   await desktop.getByTestId('image-send-button').click()
@@ -187,6 +194,10 @@ try {
   })
   if (!mobileFanLayout.passed) throw new Error(`Mobile reference fan layout failed: ${JSON.stringify(mobileFanLayout)}`)
   await mobile.screenshot({ path: resolve(screenshotDir, 'reference-fan-mobile.png'), fullPage: false })
+  const mobileClearButton = await mobile.getByTestId('clear-reference-images').boundingBox()
+  if (!mobileClearButton || mobileClearButton.x < 0 || mobileClearButton.x + mobileClearButton.width > 390) {
+    throw new Error(`Mobile clear button is outside the viewport: ${JSON.stringify(mobileClearButton)}`)
+  }
   await mobile.keyboard.press('Escape')
   await mobile.getByTestId('history-drawer-toggle').click()
   await mobile.getByTestId('image-key-select').waitFor({ state: 'visible' })

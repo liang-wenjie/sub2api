@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 const css = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'utf8')
 
 describe('implicit scrollbars', () => {
+  it('renders the centered reference add control without a filled background', () => {
+    expect(css).toMatch(/\.reference-add-core\s*\{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s)
+  })
+
   it('keeps conversation scroll regions scrollable while revealing their thumbs on hover', () => {
     expect(css).toMatch(/\.history-list,\s*\.chat-thread\s*\{[^}]*scrollbar-width:\s*thin;[^}]*scrollbar-color:\s*transparent transparent;/s)
     expect(css).toMatch(/\.history-list:hover,\s*\.chat-thread:hover\s*\{[^}]*scrollbar-color:\s*rgba\(100,\s*116,\s*139,\s*\.45\) transparent;/s)

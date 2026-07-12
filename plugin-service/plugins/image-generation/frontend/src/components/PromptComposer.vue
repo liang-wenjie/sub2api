@@ -26,9 +26,11 @@ const emit = defineEmits<{
   stop: []
   referenceFiles: [value: File[]]
   removeReference: [id: string]
+  clearReferences: []
 }>()
 
 const fanExpanded = ref(false)
+let preserveFanFocus = false
 
 watch(() => props.references.length, (count) => {
   if (count < 2) fanExpanded.value = false
@@ -52,8 +54,15 @@ function keydownComposer(event: KeyboardEvent) {
 }
 
 function focusoutReference(event: FocusEvent) {
+  if (preserveFanFocus) return
   const current = event.currentTarget as HTMLElement
   if (!current.contains(event.relatedTarget as Node | null)) collapseFan()
+}
+
+function removeReference(id: string) {
+  preserveFanFocus = true
+  emit('removeReference', id)
+  requestAnimationFrame(() => { preserveFanFocus = false })
 }
 
 function fanItemStyle(index: number, count: number): CSSProperties {
@@ -114,7 +123,7 @@ function readReference(event: Event) {
                 class="remove-reference"
                 data-testid="remove-reference-image"
                 :aria-label="`移除参考图 ${reference.fileName}`"
-                @click="emit('removeReference', reference.id)"
+                @click="removeReference(reference.id)"
               >×</button>
             </div>
           </div>
@@ -140,10 +149,18 @@ function readReference(event: Event) {
                 data-testid="remove-reference-image"
                 :aria-label="`移除参考图 ${reference.fileName}`"
                 :tabindex="fanExpanded ? 0 : -1"
-                @click="emit('removeReference', reference.id)"
+                @click="removeReference(reference.id)"
               >×</button>
             </div>
           </div>
+          <button
+            v-if="fanExpanded"
+            type="button"
+            class="clear-references"
+            data-testid="clear-reference-images"
+            aria-label="清空全部参考图"
+            @click="emit('clearReferences')"
+          >清空</button>
           <div class="reference-stack-preview" aria-hidden="true">
             <span v-for="(reference, index) in references.slice(0, 3)" :key="reference.id" class="reference-stack-layer" :style="stackLayerStyle(index)">
               <img :src="reference.dataUrl" alt="">

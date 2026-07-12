@@ -209,6 +209,26 @@ describe('image generation components', () => {
     expect(wrapper.get('[data-testid="reference-image-input"]').attributes()).toHaveProperty('multiple')
   })
 
+  it('stays expanded for consecutive removals and offers one clear-all action', async () => {
+    const references = ['first', 'second', 'third'].map(id => ({
+      id, dataUrl: `data:image/png;base64,${id}`, fileName: `${id}.png`, mimeType: 'image/png',
+    }))
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: '', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], busy: false,
+        references, maxReferenceImages: 16, referenceLimitExceeded: false,
+      },
+    })
+
+    await wrapper.get('[data-testid="reference-count-toggle"]').trigger('click')
+    await wrapper.findAll('[data-testid="remove-reference-image"]')[2].trigger('click')
+    await wrapper.setProps({ references: references.slice(0, 2) })
+    expect(wrapper.get('[data-testid="reference-count-toggle"]').attributes('aria-expanded')).toBe('true')
+
+    await wrapper.get('[data-testid="clear-reference-images"]').trigger('click')
+    expect(wrapper.emitted('clearReferences')).toHaveLength(1)
+  })
+
   it('renders sent user messages with reference, description, and generation parameters', () => {
     const wrapper = mount(ChatThread, {
       props: {
