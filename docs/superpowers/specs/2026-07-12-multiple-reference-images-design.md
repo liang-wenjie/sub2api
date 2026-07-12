@@ -22,7 +22,13 @@ Generated images and historical reference images selected through "Use as refere
 
 ## Interaction Design
 
-The file input supports `multiple`, so users may select several files at once or add more files later. Selected references appear as a compact thumbnail list beside the prompt. Every thumbnail has its own remove control, and the upload tile remains visible while more images may be added.
+The file input supports `multiple`, so users may select several files at once or add more files later. The reference control keeps the original single-tile footprint beside the prompt instead of expanding the composer in its resting state. Selected references appear as a compact stack inside that tile, with a centered add affordance that remains available while the model has capacity.
+
+With one or two selected references, the stack stays compact and preserves the original composer layout. With three or more references, activating the stack expands the references upward in a lightly rotated fan. The fan is an overlay and does not participate in document flow, so it does not push the prompt, composer controls, or conversation history. Activating the stack again, pressing Escape, or moving focus outside the fan collapses it.
+
+Every expanded thumbnail has its own accessible remove control. Removing references updates the stack immediately and collapses it when fewer than three references remain. The expanded fan keeps the add control at its base, so adding another image does not require a separate toolbar action.
+
+The fan uses short transform-and-opacity transitions. Mobile layouts use smaller thumbnails and a tighter fan radius. Under `prefers-reduced-motion: reduce`, references switch states without animation.
 
 The UI displays the current count and model limit when references are selected. If a model change makes the current selection exceed the new limit, all references remain selected. The composer shows a clear validation message and disables submission until enough references are removed or a compatible model is selected.
 
