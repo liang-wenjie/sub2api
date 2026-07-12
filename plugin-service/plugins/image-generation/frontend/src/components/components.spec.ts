@@ -149,6 +149,7 @@ describe('image generation components', () => {
     expect(wrapper.get('[data-testid="image-send-button"]').attributes()).toHaveProperty('disabled')
     expect(wrapper.get('[data-testid="image-prompt-input"]').attributes('aria-describedby')).toBe('reference-limit-error')
 
+    await wrapper.get('[data-testid="reference-count-toggle"]').trigger('click')
     await wrapper.findAll('[data-testid="remove-reference-image"]')[1].trigger('click')
     expect(wrapper.emitted('removeReference')?.[0]).toEqual(['second'])
 
@@ -164,11 +165,10 @@ describe('image generation components', () => {
     expect(wrapper.emitted('referenceFiles')?.[0]).toEqual([files])
   })
 
-  it('keeps a compact reference stack and expands three images upward on demand', async () => {
+  it('keeps the centered add input active and expands two images only from the count badge', async () => {
     const references = [
       { id: 'first', dataUrl: 'data:image/png;base64,first', fileName: 'first.png', mimeType: 'image/png' },
       { id: 'second', dataUrl: 'data:image/png;base64,second', fileName: 'second.png', mimeType: 'image/png' },
-      { id: 'third', dataUrl: 'data:image/png;base64,third', fileName: 'third.png', mimeType: 'image/png' },
     ]
     const wrapper = mount(PromptComposer, {
       props: {
@@ -177,21 +177,34 @@ describe('image generation components', () => {
       },
     })
 
-    const trigger = wrapper.get('[data-testid="reference-stack-trigger"]')
-    expect(trigger.attributes('aria-expanded')).toBe('false')
-    expect(wrapper.findAll('[data-testid="reference-fan-item"]')).toHaveLength(3)
-    expect(wrapper.find('[data-testid="reference-image-input"]').exists()).toBe(false)
+    const countToggle = wrapper.get('[data-testid="reference-count-toggle"]')
+    const input = wrapper.get<HTMLInputElement>('[data-testid="reference-image-input"]')
+    expect(countToggle.text()).toBe('2')
+    expect(countToggle.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.findAll('[data-testid="reference-fan-item"]')).toHaveLength(2)
+    expect(input.attributes()).toHaveProperty('multiple')
 
-    await trigger.trigger('click')
-    expect(trigger.attributes('aria-expanded')).toBe('true')
-    expect(wrapper.get('[data-testid="reference-image-input"]').attributes()).toHaveProperty('multiple')
+    const addedFile = new File(['third'], 'third.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [addedFile] })
+    await input.trigger('change')
+    expect(wrapper.emitted('referenceFiles')?.[0]).toEqual([[addedFile]])
+    expect(countToggle.attributes('aria-expanded')).toBe('false')
+
+    await countToggle.trigger('click')
+    expect(countToggle.attributes('aria-expanded')).toBe('true')
+
+    const fourthFile = new File(['fourth'], 'fourth.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [fourthFile] })
+    await input.trigger('change')
+    expect(wrapper.emitted('referenceFiles')?.[1]).toEqual([[fourthFile]])
+    expect(countToggle.attributes('aria-expanded')).toBe('true')
 
     await wrapper.get('[data-testid="image-chat-composer"]').trigger('keydown', { key: 'Escape' })
-    expect(trigger.attributes('aria-expanded')).toBe('false')
+    expect(countToggle.attributes('aria-expanded')).toBe('false')
 
-    await trigger.trigger('click')
-    await wrapper.setProps({ references: references.slice(0, 2) })
-    expect(wrapper.find('[data-testid="reference-stack-trigger"]').exists()).toBe(false)
+    await countToggle.trigger('click')
+    await wrapper.setProps({ references: references.slice(0, 1) })
+    expect(wrapper.find('[data-testid="reference-count-toggle"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="reference-image-input"]').attributes()).toHaveProperty('multiple')
   })
 

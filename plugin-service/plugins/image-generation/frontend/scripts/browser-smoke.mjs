@@ -62,12 +62,16 @@ async function preparePage(viewport) {
 try {
   const desktop = await preparePage({ width: 1440, height: 900 })
   await desktop.goto(baseURL, { waitUntil: 'networkidle' })
-  await desktop.getByTestId('reference-image-input').setInputFiles([1, 2, 3].map(index => ({
+  await desktop.getByTestId('reference-image-input').setInputFiles([1, 2].map(index => ({
     name: `reference-${index}.png`, mimeType: 'image/png', buffer: referenceImage,
   })))
-  const fanTrigger = desktop.getByTestId('reference-stack-trigger')
+  const fanTrigger = desktop.getByTestId('reference-count-toggle')
   await fanTrigger.waitFor()
   await fanTrigger.click()
+  await desktop.getByTestId('reference-image-input').setInputFiles({
+    name: 'reference-3.png', mimeType: 'image/png', buffer: referenceImage,
+  })
+  await desktop.waitForFunction(() => document.querySelector('[data-testid="reference-count-toggle"]')?.textContent?.trim() === '3')
   await desktop.waitForFunction(() => {
     const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
     const firstItem = document.querySelector('[data-testid="reference-fan-item"]')?.getBoundingClientRect()
@@ -76,7 +80,7 @@ try {
   const desktopFanLayout = await desktop.evaluate(() => {
     const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
     const items = Array.from(document.querySelectorAll('[data-testid="reference-fan-item"]')).map(item => item.getBoundingClientRect())
-    const expanded = document.querySelector('[data-testid="reference-stack-trigger"]')?.getAttribute('aria-expanded')
+    const expanded = document.querySelector('[data-testid="reference-count-toggle"]')?.getAttribute('aria-expanded')
     return {
       passed: Boolean(composer && items.length === 3
         && items.every(item => item.top < composer.top && item.left >= 0 && item.right <= innerWidth)
@@ -148,10 +152,21 @@ try {
 
   const mobile = await preparePage({ width: 390, height: 844 })
   await mobile.goto(baseURL, { waitUntil: 'networkidle' })
-  await mobile.getByTestId('reference-image-input').setInputFiles([1, 2, 3].map(index => ({
+  await mobile.getByTestId('reference-image-input').setInputFiles([1, 2].map(index => ({
     name: `mobile-reference-${index}.png`, mimeType: 'image/png', buffer: referenceImage,
   })))
-  await mobile.getByTestId('reference-stack-trigger').click()
+  await mobile.getByTestId('reference-count-toggle').click()
+  await mobile.getByTestId('reference-image-input').setInputFiles({
+    name: 'mobile-reference-3.png', mimeType: 'image/png', buffer: referenceImage,
+  })
+  await mobile.waitForFunction(() => document.querySelector('[data-testid="reference-count-toggle"]')?.textContent?.trim() === '3')
+  const mobileControlSeparation = await mobile.evaluate(() => {
+    const count = document.querySelector('[data-testid="reference-count-toggle"]')?.getBoundingClientRect()
+    const upload = document.querySelector('[data-testid="reference-upload-label"]')?.getBoundingClientRect()
+    if (!count || !upload) return false
+    return count.left >= upload.right - 2 || count.top >= upload.bottom - 2
+  })
+  if (!mobileControlSeparation) throw new Error('Mobile count badge overlaps the centered upload control')
   await mobile.waitForFunction(() => {
     const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
     const firstItem = document.querySelector('[data-testid="reference-fan-item"]')?.getBoundingClientRect()

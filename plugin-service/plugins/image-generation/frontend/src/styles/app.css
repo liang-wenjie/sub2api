@@ -97,10 +97,10 @@ select { padding: 0 34px 0 10px; }
 .reference-stack-anchor { position: relative; flex: 0 0 64px; width: 64px; height: 64px; z-index: 3; }
 .compact-reference-stack, .compact-reference-item, .reference-fan, .reference-fan-item, .reference-stack-layer { position: absolute; inset: 0; }
 .compact-reference-item img, .reference-fan-item img, .reference-stack-layer img { display: block; width: 100%; height: 100%; border: 2px solid #fff; border-radius: 16px; object-fit: cover; box-shadow: 0 5px 14px rgba(15,23,42,.16); }
-.reference-stack-trigger { position: absolute; inset: 0; overflow: visible; padding: 0; border: 1px dashed #cbd5e1; border-radius: 18px; background: #f8fafc; color: #475569; }
+.reference-stack-preview { position: absolute; inset: 0; overflow: visible; border: 1px dashed #cbd5e1; border-radius: 18px; background: #f8fafc; }
 .reference-stack-layer { overflow: hidden; border-radius: 16px; }
 .reference-add-core { position: absolute; inset: 16px; z-index: 20; display: grid; border: 1px solid rgba(255,255,255,.8); border-radius: 50%; background: rgba(255,255,255,.92); color: #475569; place-items: center; font-size: 22px; line-height: 1; box-shadow: 0 2px 7px rgba(15,23,42,.18); }
-.reference-stack-count { position: absolute; right: -7px; bottom: -7px; z-index: 22; display: grid; min-width: 24px; height: 24px; padding: 0 6px; border: 2px solid #fff; border-radius: 9999px; background: #0f172a; color: #fff; place-items: center; font-size: 11px; font-weight: 700; }
+.reference-stack-count { position: absolute; right: -7px; bottom: -7px; z-index: 30; display: grid; min-width: 24px; height: 24px; min-height: 24px; padding: 0 6px; border: 2px solid #fff; border-radius: 9999px; background: #0f172a; color: #fff; place-items: center; font-size: 11px; font-weight: 700; }
 .reference-fan { pointer-events: none; }
 .reference-fan-item { z-index: var(--fan-layer); opacity: 0; transform: translate(0,0) rotate(0); transform-origin: 50% 95%; transition: transform 180ms cubic-bezier(.23,1,.32,1), opacity 130ms cubic-bezier(.23,1,.32,1); }
 .reference-stack-anchor.expanded .reference-fan { pointer-events: auto; }
@@ -146,8 +146,9 @@ select { padding: 0 34px 0 10px; }
   .composer { width: calc(100% - 16px); margin: 0 8px max(8px, env(safe-area-inset-bottom)); }
   .composer-main { flex-wrap: wrap; }
   .reference-stack-anchor, .reference-picker { flex-basis: 44px; width: 44px; height: 44px; }
+  .compact-add-picker, .fan-add-picker { flex-basis: auto; width: auto; height: auto; }
   .reference-add-core { inset: 10px; font-size: 18px; }
-  .reference-stack-count { right: -6px; bottom: -6px; min-width: 21px; height: 21px; font-size: 10px; }
+  .reference-stack-count { right: -16px; bottom: -10px; min-width: 21px; height: 21px; font-size: 10px; }
   .reference-fan { transform: translateX(8px) scale(.78); transform-origin: left bottom; }
   .reference-picker { flex-basis: 44px; border-radius: 8px; }
   .composer textarea { flex-basis: 100%; }

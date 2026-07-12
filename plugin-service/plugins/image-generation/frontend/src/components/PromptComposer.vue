@@ -31,11 +31,11 @@ const emit = defineEmits<{
 const fanExpanded = ref(false)
 
 watch(() => props.references.length, (count) => {
-  if (count < 3) fanExpanded.value = false
+  if (count < 2) fanExpanded.value = false
 })
 
 function toggleFan() {
-  if (props.references.length >= 3) fanExpanded.value = !fanExpanded.value
+  if (props.references.length >= 2) fanExpanded.value = !fanExpanded.value
 }
 
 function collapseFan() {
@@ -105,7 +105,7 @@ function readReference(event: Event) {
         :class="{ expanded: fanExpanded }"
         @focusout="focusoutReference"
       >
-        <template v-if="references.length < 3">
+        <template v-if="references.length === 1">
           <div class="compact-reference-stack" aria-label="已选择的参考图">
             <div v-for="(reference, index) in references" :key="reference.id" class="compact-reference-item" :style="compactItemStyle(index)">
               <img :src="reference.dataUrl" :alt="reference.fileName" data-testid="reference-image-preview">
@@ -144,25 +144,24 @@ function readReference(event: Event) {
               >×</button>
             </div>
           </div>
-          <button
-            type="button"
-            class="reference-stack-trigger"
-            data-testid="reference-stack-trigger"
-            :aria-expanded="fanExpanded"
-            :aria-label="fanExpanded ? '收起参考图' : '展开参考图并继续添加'"
-            @click="toggleFan"
-          >
+          <div class="reference-stack-preview" aria-hidden="true">
             <span v-for="(reference, index) in references.slice(0, 3)" :key="reference.id" class="reference-stack-layer" :style="stackLayerStyle(index)">
               <img :src="reference.dataUrl" alt="">
             </span>
-            <span v-if="!fanExpanded" class="reference-add-core" aria-hidden="true">+</span>
-            <span class="reference-stack-count" aria-hidden="true">{{ references.length }}</span>
-          </button>
-          <label v-if="fanExpanded && references.length < maxReferenceImages" class="reference-picker fan-add-picker" data-testid="reference-upload-label" title="继续上传参考图">
+          </div>
+          <label v-if="references.length < maxReferenceImages" class="reference-picker fan-add-picker" data-testid="reference-upload-label" title="继续上传参考图">
             <span class="sr-only">继续上传参考图</span>
             <input data-testid="reference-image-input" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" @change="readReference">
             <span class="reference-add-core" aria-hidden="true">+</span>
           </label>
+          <button
+            type="button"
+            class="reference-stack-count"
+            data-testid="reference-count-toggle"
+            :aria-expanded="fanExpanded"
+            :aria-label="fanExpanded ? `收起 ${references.length} 张参考图` : `展开 ${references.length} 张参考图`"
+            @click="toggleFan"
+          >{{ references.length }}</button>
         </template>
       </div>
       <label v-else class="reference-picker" data-testid="reference-upload-label" title="上传参考图">
