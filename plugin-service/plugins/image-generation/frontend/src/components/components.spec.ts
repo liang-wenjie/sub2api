@@ -179,7 +179,8 @@ describe('image generation components', () => {
 
     const countToggle = wrapper.get('[data-testid="reference-count-toggle"]')
     const input = wrapper.get<HTMLInputElement>('[data-testid="reference-image-input"]')
-    expect(countToggle.text()).toBe('2')
+    expect(countToggle.text()).toBe('2/16')
+    expect(wrapper.find('.reference-count').exists()).toBe(false)
     expect(countToggle.attributes('aria-expanded')).toBe('false')
     expect(wrapper.findAll('[data-testid="reference-fan-item"]')).toHaveLength(2)
     expect(input.attributes()).toHaveProperty('multiple')

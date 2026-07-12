@@ -71,7 +71,7 @@ try {
   await desktop.getByTestId('reference-image-input').setInputFiles({
     name: 'reference-3.png', mimeType: 'image/png', buffer: referenceImage,
   })
-  await desktop.waitForFunction(() => document.querySelector('[data-testid="reference-count-toggle"]')?.textContent?.trim() === '3')
+  await desktop.waitForFunction(() => document.querySelector('[data-testid="reference-count-toggle"]')?.textContent?.trim() === '3/16')
   await desktop.waitForFunction(() => {
     const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
     const firstItem = document.querySelector('[data-testid="reference-fan-item"]')?.getBoundingClientRect()
@@ -159,7 +159,7 @@ try {
   await mobile.getByTestId('reference-image-input').setInputFiles({
     name: 'mobile-reference-3.png', mimeType: 'image/png', buffer: referenceImage,
   })
-  await mobile.waitForFunction(() => document.querySelector('[data-testid="reference-count-toggle"]')?.textContent?.trim() === '3')
+  await mobile.waitForFunction(() => document.querySelector('[data-testid="reference-count-toggle"]')?.textContent?.trim() === '3/16')
   const mobileControlSeparation = await mobile.evaluate(() => {
     const count = document.querySelector('[data-testid="reference-count-toggle"]')?.getBoundingClientRect()
     const upload = document.querySelector('[data-testid="reference-upload-label"]')?.getBoundingClientRect()

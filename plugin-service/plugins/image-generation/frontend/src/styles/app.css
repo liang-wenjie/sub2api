@@ -113,8 +113,7 @@ select { padding: 0 34px 0 10px; }
 .compact-add-picker .reference-add-core, .fan-add-picker .reference-add-core { inset: 0; }
 .compact-add-picker { border-color: transparent; background: transparent; }
 .fan-add-picker { border-style: solid; background: #f8fafc; }
-.reference-count, .reference-limit-error { margin: 8px 4px 0; font-size: 12px; }
-.reference-count { color: #64748b; }
+.reference-limit-error { margin: 8px 4px 0; font-size: 12px; }
 .reference-limit-error { color: #b42318; }
 .composer-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
 .composer-tools select { height: 40px; padding-left: 16px; padding-right: 40px; border-radius: 9999px; font-size: 12px; }

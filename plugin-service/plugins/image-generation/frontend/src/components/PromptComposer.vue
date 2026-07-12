@@ -161,7 +161,7 @@ function readReference(event: Event) {
             :aria-expanded="fanExpanded"
             :aria-label="fanExpanded ? `收起 ${references.length} 张参考图` : `展开 ${references.length} 张参考图`"
             @click="toggleFan"
-          >{{ references.length }}</button>
+          >{{ references.length }}/{{ maxReferenceImages }}</button>
         </template>
       </div>
       <label v-else class="reference-picker" data-testid="reference-upload-label" title="上传参考图">
@@ -180,9 +180,6 @@ function readReference(event: Event) {
         @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
       />
     </div>
-    <p v-if="references.length" class="reference-count" aria-live="polite">
-      已选择 {{ references.length }} 张，当前模型最多支持 {{ maxReferenceImages }} 张参考图
-    </p>
     <p v-if="referenceLimitExceeded" id="reference-limit-error" class="reference-limit-error" data-testid="reference-limit-error" role="alert">
       当前模型最多支持 {{ maxReferenceImages }} 张参考图，请删除多余图片或切换模型。
     </p>
