@@ -164,6 +164,37 @@ describe('image generation components', () => {
     expect(wrapper.emitted('referenceFiles')?.[0]).toEqual([files])
   })
 
+  it('keeps a compact reference stack and expands three images upward on demand', async () => {
+    const references = [
+      { id: 'first', dataUrl: 'data:image/png;base64,first', fileName: 'first.png', mimeType: 'image/png' },
+      { id: 'second', dataUrl: 'data:image/png;base64,second', fileName: 'second.png', mimeType: 'image/png' },
+      { id: 'third', dataUrl: 'data:image/png;base64,third', fileName: 'third.png', mimeType: 'image/png' },
+    ]
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: '', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], busy: false,
+        references, maxReferenceImages: 16, referenceLimitExceeded: false,
+      },
+    })
+
+    const trigger = wrapper.get('[data-testid="reference-stack-trigger"]')
+    expect(trigger.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.findAll('[data-testid="reference-fan-item"]')).toHaveLength(3)
+    expect(wrapper.find('[data-testid="reference-image-input"]').exists()).toBe(false)
+
+    await trigger.trigger('click')
+    expect(trigger.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('[data-testid="reference-image-input"]').attributes()).toHaveProperty('multiple')
+
+    await wrapper.get('[data-testid="image-chat-composer"]').trigger('keydown', { key: 'Escape' })
+    expect(trigger.attributes('aria-expanded')).toBe('false')
+
+    await trigger.trigger('click')
+    await wrapper.setProps({ references: references.slice(0, 2) })
+    expect(wrapper.find('[data-testid="reference-stack-trigger"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="reference-image-input"]').attributes()).toHaveProperty('multiple')
+  })
+
   it('renders sent user messages with reference, description, and generation parameters', () => {
     const wrapper = mount(ChatThread, {
       props: {

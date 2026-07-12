@@ -10,8 +10,10 @@ await mkdir(screenshotDir, { recursive: true })
 
 const browser = await chromium.launch({ executablePath, headless: true })
 const errors = []
+const referenceImage = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=', 'base64')
 
 async function preparePage(viewport) {
+  let uploadIndex = 0
   const page = await browser.newPage({ viewport })
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
   page.on('pageerror', error => errors.push(error.message))
@@ -25,6 +27,19 @@ async function preparePage(viewport) {
   }))
   await page.route('**/plugins/image-generation/api/**', async route => {
     const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/config')) return route.fulfill({ json: {
+      image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16 } },
+    } })
+    if (url.pathname.endsWith('/references') && route.request().method() === 'POST') {
+      uploadIndex += 1
+      return route.fulfill({ status: 201, json: {
+        name: `reference-${uploadIndex}.png`, mime_type: 'image/png',
+        storage_key: `uploads/${uploadIndex}/original`, preview_storage_key: `uploads/${uploadIndex}/preview`,
+        original_url: `/plugins/image-generation/api/references/${uploadIndex}/original`,
+        preview_url: `/plugins/image-generation/api/references/${uploadIndex}/preview`,
+      } })
+    }
+    if (url.pathname.includes('/references/')) return route.fulfill({ contentType: 'image/png', body: referenceImage })
     if (url.pathname.includes('/assets/')) return route.fulfill({
       contentType: 'image/png',
       body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=', 'base64'),
@@ -47,11 +62,33 @@ async function preparePage(viewport) {
 try {
   const desktop = await preparePage({ width: 1440, height: 900 })
   await desktop.goto(baseURL, { waitUntil: 'networkidle' })
-  await desktop.getByTestId('reference-image-input').setInputFiles({
-    name: 'reference.png',
-    mimeType: 'image/png',
-    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZkAAAAASUVORK5CYII=', 'base64'),
+  await desktop.getByTestId('reference-image-input').setInputFiles([1, 2, 3].map(index => ({
+    name: `reference-${index}.png`, mimeType: 'image/png', buffer: referenceImage,
+  })))
+  const fanTrigger = desktop.getByTestId('reference-stack-trigger')
+  await fanTrigger.waitFor()
+  await fanTrigger.click()
+  await desktop.waitForFunction(() => {
+    const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
+    const firstItem = document.querySelector('[data-testid="reference-fan-item"]')?.getBoundingClientRect()
+    return composer && firstItem && firstItem.top < composer.top
   })
+  const desktopFanLayout = await desktop.evaluate(() => {
+    const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
+    const items = Array.from(document.querySelectorAll('[data-testid="reference-fan-item"]')).map(item => item.getBoundingClientRect())
+    const expanded = document.querySelector('[data-testid="reference-stack-trigger"]')?.getAttribute('aria-expanded')
+    return {
+      passed: Boolean(composer && items.length === 3
+        && items.every(item => item.top < composer.top && item.left >= 0 && item.right <= innerWidth)
+        && expanded === 'true'),
+      composer: composer && { top: composer.top, left: composer.left, right: composer.right },
+      items: items.map(item => ({ top: item.top, left: item.left, right: item.right })),
+      expanded,
+    }
+  })
+  if (!desktopFanLayout.passed) throw new Error(`Desktop reference fan layout failed: ${JSON.stringify(desktopFanLayout)}`)
+  await desktop.screenshot({ path: resolve(screenshotDir, 'reference-fan-desktop.png'), fullPage: false })
+  await desktop.keyboard.press('Escape')
   await desktop.getByTestId('image-prompt-input').fill('Create a browser smoke image')
   await desktop.getByTestId('image-send-button').click()
   await desktop.getByTestId('message-attachments').getByText('Browser smoke result').waitFor()
@@ -90,14 +127,17 @@ try {
     const userBubble = document.querySelector('.message-user .message-body')?.getBoundingClientRect()
     const userText = document.querySelector('.message-user')?.textContent || ''
     const parameterPills = document.querySelectorAll('.message-user .request-settings span').length
-    return composer && composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight
-      && singleImageBubble && singleImageBubble.width <= 400
-      && actionTops.length === 4 && new Set(actionTops.map(top => Math.round(top))).size === 1
-      && userBubble && userBubble.width <= 320
-      && userText.includes('Prompt') && userText.includes('创作描述') && userText.includes('生成参数')
-      && parameterPills === 1
+    const checks = {
+      composer: Boolean(composer && composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight),
+      singleImageBubble: Boolean(singleImageBubble && singleImageBubble.width <= 400),
+      actionRow: actionTops.length === 4 && new Set(actionTops.map(top => Math.round(top))).size === 1,
+      userBubble: Boolean(userBubble && userBubble.width <= 768 && userBubble.left >= 0 && userBubble.right <= innerWidth),
+      userText: userText.includes('Prompt') && userText.includes('创作描述') && userText.includes('生成参数'),
+      parameterPills: parameterPills === 1,
+    }
+    return { passed: Object.values(checks).every(Boolean), checks, userBubbleWidth: userBubble?.width, userText }
   })
-  if (!desktopLayout) throw new Error('Desktop composer exceeds the viewport')
+  if (!desktopLayout.passed) throw new Error(`Desktop layout contract failed: ${JSON.stringify(desktopLayout)}`)
   await desktop.getByRole('button', { name: '查看原图' }).first().click()
   await desktop.getByRole('dialog', { name: '查看原图' }).waitFor()
   const downloadHref = await desktop.getByRole('link', { name: '下载原图' }).getAttribute('href')
@@ -108,6 +148,31 @@ try {
 
   const mobile = await preparePage({ width: 390, height: 844 })
   await mobile.goto(baseURL, { waitUntil: 'networkidle' })
+  await mobile.getByTestId('reference-image-input').setInputFiles([1, 2, 3].map(index => ({
+    name: `mobile-reference-${index}.png`, mimeType: 'image/png', buffer: referenceImage,
+  })))
+  await mobile.getByTestId('reference-stack-trigger').click()
+  await mobile.waitForFunction(() => {
+    const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
+    const firstItem = document.querySelector('[data-testid="reference-fan-item"]')?.getBoundingClientRect()
+    return composer && firstItem && firstItem.top < composer.top
+  })
+  const mobileFanLayout = await mobile.evaluate(() => {
+    const composer = document.querySelector('[data-testid="image-chat-composer"]')?.getBoundingClientRect()
+    const items = Array.from(document.querySelectorAll('[data-testid="reference-fan-item"]')).map(item => item.getBoundingClientRect())
+    return {
+      passed: Boolean(composer && items.length === 3
+        && items.every(item => item.top < composer.top && item.left >= 0 && item.right <= innerWidth)
+        && document.documentElement.scrollWidth <= innerWidth),
+      composer: composer && { top: composer.top, left: composer.left, right: composer.right },
+      items: items.map(item => ({ top: item.top, left: item.left, right: item.right })),
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth,
+    }
+  })
+  if (!mobileFanLayout.passed) throw new Error(`Mobile reference fan layout failed: ${JSON.stringify(mobileFanLayout)}`)
+  await mobile.screenshot({ path: resolve(screenshotDir, 'reference-fan-mobile.png'), fullPage: false })
+  await mobile.keyboard.press('Escape')
   await mobile.getByTestId('history-drawer-toggle').click()
   await mobile.getByTestId('image-key-select').waitFor({ state: 'visible' })
   await mobile.waitForTimeout(250)

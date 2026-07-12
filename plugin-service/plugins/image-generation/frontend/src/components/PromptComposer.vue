@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
+import type { CSSProperties } from 'vue'
 import type { ImageReference } from '../types'
 
 const props = withDefaults(defineProps<{
@@ -26,6 +28,58 @@ const emit = defineEmits<{
   removeReference: [id: string]
 }>()
 
+const fanExpanded = ref(false)
+
+watch(() => props.references.length, (count) => {
+  if (count < 3) fanExpanded.value = false
+})
+
+function toggleFan() {
+  if (props.references.length >= 3) fanExpanded.value = !fanExpanded.value
+}
+
+function collapseFan() {
+  fanExpanded.value = false
+}
+
+function keydownComposer(event: KeyboardEvent) {
+  if (event.key === 'Escape' && fanExpanded.value) {
+    event.preventDefault()
+    collapseFan()
+    return
+  }
+  keydown(event)
+}
+
+function focusoutReference(event: FocusEvent) {
+  const current = event.currentTarget as HTMLElement
+  if (!current.contains(event.relatedTarget as Node | null)) collapseFan()
+}
+
+function fanItemStyle(index: number, count: number): CSSProperties {
+  const progress = count <= 1 ? 0 : index / (count - 1)
+  const distance = Math.min(240, 92 + (count - 1) * 15)
+  return {
+    '--fan-x': `${Math.round((progress - 0.5) * 84)}px`,
+    '--fan-y': `${Math.round(-72 - progress * distance)}px`,
+    '--fan-rotation': `${Math.round((progress - 0.5) * 24)}deg`,
+    '--fan-layer': index + 1,
+  } as CSSProperties
+}
+
+function compactItemStyle(index: number): CSSProperties {
+  return {
+    zIndex: index + 1,
+    transform: `translate(${index * 4}px, ${index * -4}px) rotate(${index * 4 - 2}deg)`,
+  }
+}
+
+function stackLayerStyle(index: number): CSSProperties {
+  return {
+    transform: `translate(${(2 - index) * 3}px, ${(index - 2) * 3}px) rotate(${(index - 1) * 3}deg)`,
+  }
+}
+
 function keydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.shiftKey) return
   event.preventDefault()
@@ -43,21 +97,75 @@ function readReference(event: Event) {
 </script>
 
 <template>
-  <form class="composer" data-testid="image-chat-composer" @submit.prevent="emit('submit')">
+  <form class="composer" data-testid="image-chat-composer" @submit.prevent="emit('submit')" @keydown="keydownComposer">
     <div class="composer-main">
-      <div v-if="references.length" class="selected-reference-list" aria-label="已选择的参考图">
-        <div v-for="reference in references" :key="reference.id" class="selected-reference-item">
-          <img :src="reference.dataUrl" :alt="reference.fileName" data-testid="reference-image-preview">
+      <div
+        v-if="references.length"
+        class="reference-stack-anchor"
+        :class="{ expanded: fanExpanded }"
+        @focusout="focusoutReference"
+      >
+        <template v-if="references.length < 3">
+          <div class="compact-reference-stack" aria-label="已选择的参考图">
+            <div v-for="(reference, index) in references" :key="reference.id" class="compact-reference-item" :style="compactItemStyle(index)">
+              <img :src="reference.dataUrl" :alt="reference.fileName" data-testid="reference-image-preview">
+              <button
+                type="button"
+                class="remove-reference"
+                data-testid="remove-reference-image"
+                :aria-label="`移除参考图 ${reference.fileName}`"
+                @click="emit('removeReference', reference.id)"
+              >×</button>
+            </div>
+          </div>
+          <label v-if="references.length < maxReferenceImages" class="reference-picker compact-add-picker" data-testid="reference-upload-label" title="继续上传参考图">
+            <span class="sr-only">继续上传参考图</span>
+            <input data-testid="reference-image-input" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" @change="readReference">
+            <span class="reference-add-core" aria-hidden="true">+</span>
+          </label>
+        </template>
+        <template v-else>
+          <div class="reference-fan" :aria-hidden="!fanExpanded">
+            <div
+              v-for="(reference, index) in references"
+              :key="reference.id"
+              class="reference-fan-item"
+              data-testid="reference-fan-item"
+              :style="fanItemStyle(index, references.length)"
+            >
+              <img :src="reference.dataUrl" :alt="reference.fileName" data-testid="reference-image-preview">
+              <button
+                type="button"
+                class="remove-reference"
+                data-testid="remove-reference-image"
+                :aria-label="`移除参考图 ${reference.fileName}`"
+                :tabindex="fanExpanded ? 0 : -1"
+                @click="emit('removeReference', reference.id)"
+              >×</button>
+            </div>
+          </div>
           <button
             type="button"
-            class="remove-reference"
-            data-testid="remove-reference-image"
-            :aria-label="`移除参考图 ${reference.fileName}`"
-            @click="emit('removeReference', reference.id)"
-          >×</button>
-        </div>
+            class="reference-stack-trigger"
+            data-testid="reference-stack-trigger"
+            :aria-expanded="fanExpanded"
+            :aria-label="fanExpanded ? '收起参考图' : '展开参考图并继续添加'"
+            @click="toggleFan"
+          >
+            <span v-for="(reference, index) in references.slice(0, 3)" :key="reference.id" class="reference-stack-layer" :style="stackLayerStyle(index)">
+              <img :src="reference.dataUrl" alt="">
+            </span>
+            <span v-if="!fanExpanded" class="reference-add-core" aria-hidden="true">+</span>
+            <span class="reference-stack-count" aria-hidden="true">{{ references.length }}</span>
+          </button>
+          <label v-if="fanExpanded && references.length < maxReferenceImages" class="reference-picker fan-add-picker" data-testid="reference-upload-label" title="继续上传参考图">
+            <span class="sr-only">继续上传参考图</span>
+            <input data-testid="reference-image-input" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" @change="readReference">
+            <span class="reference-add-core" aria-hidden="true">+</span>
+          </label>
+        </template>
       </div>
-      <label v-if="references.length < maxReferenceImages" class="reference-picker" data-testid="reference-upload-label" title="上传参考图">
+      <label v-else class="reference-picker" data-testid="reference-upload-label" title="上传参考图">
         <span class="sr-only">上传参考图</span>
         <input data-testid="reference-image-input" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" @change="readReference">
         <span aria-hidden="true">+</span>
@@ -71,7 +179,6 @@ function readReference(event: Event) {
         :aria-describedby="referenceLimitExceeded ? 'reference-limit-error' : undefined"
         :aria-invalid="referenceLimitExceeded || undefined"
         @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
-        @keydown="keydown"
       />
     </div>
     <p v-if="references.length" class="reference-count" aria-live="polite">
