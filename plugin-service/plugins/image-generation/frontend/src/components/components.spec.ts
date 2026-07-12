@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import { nextTick } from 'vue'
 import HistorySidebar from './HistorySidebar.vue'
 import PromptComposer from './PromptComposer.vue'
 import GeneratedImageCard from './GeneratedImageCard.vue'
@@ -146,5 +147,81 @@ describe('image generation components', () => {
     expect(wrapper.text()).toContain('生成参数')
     expect(wrapper.text()).toContain('Prompt')
     expect(wrapper.text()).toContain('GPT Image 2 | 1024 × 1024 | 数量: 1')
+  })
+  it('loads older messages automatically near the top without rendering a button', async () => {
+    const wrapper = mount(ChatThread, { props: { conversation, hasOlder: true, loading: false } })
+    const thread = wrapper.get('[data-testid="image-chat-thread"]')
+
+    expect(wrapper.find('.load-older').exists()).toBe(false)
+    Object.defineProperty(thread.element, 'scrollTop', { value: 48, writable: true })
+    Object.defineProperty(thread.element, 'scrollHeight', { value: 600, configurable: true })
+    await thread.trigger('scroll')
+
+    expect(wrapper.emitted('loadOlder')).toHaveLength(1)
+  })
+
+  it('does not load older messages outside the threshold or while unavailable', async () => {
+    const wrapper = mount(ChatThread, { props: { conversation, hasOlder: true, loading: false } })
+    const thread = wrapper.get('[data-testid="image-chat-thread"]')
+    Object.defineProperty(thread.element, 'scrollTop', { value: 49, writable: true })
+    Object.defineProperty(thread.element, 'scrollHeight', { value: 600, configurable: true })
+
+    await thread.trigger('scroll')
+    await wrapper.setProps({ loading: true })
+    thread.element.scrollTop = 0
+    await thread.trigger('scroll')
+    await wrapper.setProps({ loading: false, hasOlder: false })
+    await thread.trigger('scroll')
+
+    expect(wrapper.emitted('loadOlder')).toBeUndefined()
+  })
+
+  it('preserves the visible message position after older messages are prepended', async () => {
+    const wrapper = mount(ChatThread, { props: { conversation, hasOlder: true, loading: false } })
+    const thread = wrapper.get('[data-testid="image-chat-thread"]')
+    let scrollHeight = 600
+    Object.defineProperty(thread.element, 'scrollTop', { value: 32, writable: true })
+    Object.defineProperty(thread.element, 'scrollHeight', { get: () => scrollHeight })
+
+    await thread.trigger('scroll')
+    await wrapper.setProps({ loading: true })
+    scrollHeight = 840
+    await wrapper.setProps({ loading: false })
+    await nextTick()
+
+    expect(thread.element.scrollTop).toBe(272)
+  })
+
+  it('positions a newly selected conversation at its latest message after loading', async () => {
+    const wrapper = mount(ChatThread, { props: { conversation, hasOlder: false, loading: false } })
+    const thread = wrapper.get('[data-testid="image-chat-thread"]')
+    Object.defineProperty(thread.element, 'scrollTop', { value: 24, writable: true })
+    Object.defineProperty(thread.element, 'scrollHeight', { value: 900, configurable: true })
+    const selectedConversation = { ...conversation, id: 'conversation-2' }
+
+    await wrapper.setProps({ conversation: selectedConversation, loading: true })
+    await wrapper.setProps({ loading: false })
+    await nextTick()
+
+    expect(thread.element.scrollTop).toBe(900)
+  })
+
+  it('does not force the current conversation to the bottom when its messages change', async () => {
+    const wrapper = mount(ChatThread, { props: { conversation, hasOlder: false, loading: false } })
+    const thread = wrapper.get('[data-testid="image-chat-thread"]')
+    Object.defineProperty(thread.element, 'scrollTop', { value: 120, writable: true })
+    Object.defineProperty(thread.element, 'scrollHeight', { value: 900, configurable: true })
+    await nextTick()
+    thread.element.scrollTop = 120
+
+    await wrapper.setProps({
+      conversation: {
+        ...conversation,
+        messages: [{ id: 'new-message', role: 'assistant', content: 'new result', createdAt: 'now' }],
+      },
+    })
+    await nextTick()
+
+    expect(thread.element.scrollTop).toBe(120)
   })
 })

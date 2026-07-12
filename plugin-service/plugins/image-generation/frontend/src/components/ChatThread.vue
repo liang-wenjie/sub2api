@@ -1,9 +1,48 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from 'vue'
 import GeneratedImageCard from './GeneratedImageCard.vue'
 import type { Conversation, GeneratedImage } from '../types'
 
-defineProps<{ conversation: Conversation | null; loading?: boolean; hasOlder?: boolean }>()
-defineEmits<{ reference: [image: GeneratedImage]; refine: [image: GeneratedImage]; repeat: [image: GeneratedImage, prompt: string]; retry: [messageId: string]; view: [src: string, alt: string]; loadOlder: [] }>()
+const props = defineProps<{ conversation: Conversation | null; loading?: boolean; hasOlder?: boolean }>()
+const emit = defineEmits<{ reference: [image: GeneratedImage]; refine: [image: GeneratedImage]; repeat: [image: GeneratedImage, prompt: string]; retry: [messageId: string]; view: [src: string, alt: string]; loadOlder: [] }>()
+const thread = ref<HTMLElement | null>(null)
+const awaitingOlderMessages = ref(false)
+const pendingInitialScroll = ref(true)
+let previousScrollHeight = 0
+let previousScrollTop = 0
+
+async function scrollToLatestMessage(): Promise<void> {
+  await nextTick()
+  const element = thread.value
+  if (element) element.scrollTop = element.scrollHeight
+  pendingInitialScroll.value = false
+}
+
+function loadOlderNearTop(): void {
+  const element = thread.value
+  if (!element || element.scrollTop > 48 || !props.hasOlder || props.loading || awaitingOlderMessages.value) return
+  previousScrollHeight = element.scrollHeight
+  previousScrollTop = element.scrollTop
+  awaitingOlderMessages.value = true
+  emit('loadOlder')
+}
+
+watch(() => props.loading, async (loading, wasLoading) => {
+  if (!loading && wasLoading && awaitingOlderMessages.value) {
+    await nextTick()
+    const element = thread.value
+    if (element) element.scrollTop = previousScrollTop + Math.max(0, element.scrollHeight - previousScrollHeight)
+    awaitingOlderMessages.value = false
+    return
+  }
+  if (!loading && pendingInitialScroll.value) await scrollToLatestMessage()
+})
+
+watch(() => props.conversation?.id, async (id, previousId) => {
+  if (!id || id === previousId) return
+  pendingInitialScroll.value = true
+  if (!props.loading) await scrollToLatestMessage()
+}, { immediate: true })
 
 function formatModelLabel(value: string): string {
   return ({ 'gpt-image-2': 'GPT Image 2', 'gpt-image-1': 'GPT Image 1', 'gemini-2.5-flash-image': 'Gemini 2.5 Flash Image' } as Record<string, string>)[value] ?? value
@@ -15,8 +54,7 @@ function formatSizeLabel(value: string): string {
 </script>
 
 <template>
-  <div class="chat-thread" data-testid="image-chat-thread" aria-live="polite">
-    <button v-if="hasOlder" type="button" class="load-older" :disabled="loading" @click="$emit('loadOlder')">{{ loading ? '加载中...' : '加载更早消息' }}</button>
+  <div ref="thread" class="chat-thread" data-testid="image-chat-thread" aria-live="polite" @scroll="loadOlderNearTop">
     <div v-if="!conversation?.messages.length" class="empty-state">
       <h1>No conversation yet</h1>
       <p>Send the first prompt and generated images will appear here.</p>
