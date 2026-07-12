@@ -6,6 +6,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import HistorySidebar from './components/HistorySidebar.vue'
 import ImagePreviewDialog from './components/ImagePreviewDialog.vue'
 import PromptComposer from './components/PromptComposer.vue'
+import SidebarToggleButton from './components/SidebarToggleButton.vue'
 import { useImageGeneration } from './composables/useImageGeneration'
 import type { Conversation, GeneratedImage, ImageReference } from './types'
 
@@ -38,19 +39,17 @@ async function confirmDelete() {
 
 <template>
   <main class="plugin-shell" data-testid="image-workspace">
-    <button
+    <SidebarToggleButton
       v-if="sidebarCollapsed || !drawerOpen"
-      type="button"
-      class="drawer-toggle icon-button"
+      direction="expand"
+      class="drawer-toggle"
       :class="{ 'collapsed-handle': sidebarCollapsed }"
       data-testid="history-drawer-toggle"
-      aria-label="展开历史侧栏"
       :aria-expanded="drawerOpen"
       @click="sidebarCollapsed = false; drawerOpen = true"
-    ><span class="drawer-label">侧边栏</span></button>
+    />
     <div v-if="drawerOpen" class="drawer-scrim" @click="drawerOpen = false" />
     <div class="sidebar-wrap" :class="{ open: drawerOpen, collapsed: sidebarCollapsed }">
-      <button type="button" class="drawer-close icon-button" aria-label="关闭历史侧栏" @click="drawerOpen = false">‹</button>
       <HistorySidebar
         :conversations="state.conversations.value"
         :active-id="state.activeConversationId.value"

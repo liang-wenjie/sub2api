@@ -5,6 +5,7 @@ import PromptComposer from './PromptComposer.vue'
 import GeneratedImageCard from './GeneratedImageCard.vue'
 import ChatThread from './ChatThread.vue'
 import ImagePreviewDialog from './ImagePreviewDialog.vue'
+import SidebarToggleButton from './SidebarToggleButton.vue'
 import type { Conversation, ImageApiKey } from '../types'
 
 const conversation: Conversation = {
@@ -81,7 +82,7 @@ describe('image generation components', () => {
     })
 
     expect(wrapper.text()).toContain('设为参考图')
-    expect(wrapper.text()).toContain('基于此图继续优化')
+    expect(wrapper.text()).toContain('优化提示词')
     expect(wrapper.text()).toContain('再次生成')
   })
 
@@ -90,9 +91,21 @@ describe('image generation components', () => {
       props: { conversations: [conversation], activeId: conversation.id, keys: [key], selectedKeyId: 1 },
     })
 
-    expect(wrapper.get('[data-testid="history-inline-collapse"]').attributes('aria-label')).toBe('收起历史侧栏')
+    expect(wrapper.get('[data-testid="history-inline-collapse"]').attributes('aria-label')).toBe('收起侧边栏')
+    expect(wrapper.get('[data-testid="history-inline-collapse"]').classes()).toContain('sidebar-toggle-button')
+    expect(wrapper.get('[data-testid="history-inline-collapse"]').text()).toBe('收起侧边栏')
     expect(wrapper.get('[data-testid="history-delete-button"]').text()).toBe('删除')
     expect(wrapper.text()).toContain('新建会话')
+  })
+
+  it('reuses the main sidebar control for expansion', async () => {
+    const wrapper = mount(SidebarToggleButton, { props: { direction: 'expand' } })
+
+    expect(wrapper.get('button').attributes('aria-label')).toBe('展开侧边栏')
+    expect(wrapper.get('button').text()).toBe('展开侧边栏')
+    expect(wrapper.get('[data-testid="sidebar-toggle-icon"]').classes()).toContain('sidebar-toggle-icon-expand')
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.emitted('click')).toHaveLength(1)
   })
 
   it('labels reference upload and replacement in Chinese', () => {

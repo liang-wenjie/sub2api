@@ -18,7 +18,7 @@ function fallbackToOriginal(event: Event, image: GeneratedImage) {
     <figcaption v-if="image.revisedPrompt">{{ image.revisedPrompt }}</figcaption>
     <div class="image-actions">
       <button type="button" @click="$emit('reference', image)">设为参考图</button>
-      <button type="button" @click="$emit('refine', image)">基于此图继续优化</button>
+      <button type="button" @click="$emit('refine', image)">优化提示词</button>
       <button type="button" @click="$emit('repeat', image)">再次生成</button>
       <button type="button" @click="$emit('view', image)">查看原图</button>
     </div>

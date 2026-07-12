@@ -10,7 +10,7 @@ const en = {
   emptyGenerationResult: 'Image generation returned no images', repeatGeneration: 'Generate again',
   useAsReference: 'Use as reference', refineFromImage: 'Refine prompt', cancelGeneration: 'Cancel generation',
   retryGeneration: 'Retry generation', model: 'Model', size: 'Size', referenceImage: 'Reference image',
-  clearReference: 'Clear reference image', closeSidebar: 'Close history sidebar', openSidebar: 'Open history sidebar',
+  clearReference: 'Clear reference image',
 }
 
 const zh: typeof en = {
@@ -22,7 +22,7 @@ const zh: typeof en = {
   emptyGenerationResult: '图片生成未返回可显示的图片', repeatGeneration: '再次生成',
   useAsReference: '设为参考图', refineFromImage: '基于此图优化', cancelGeneration: '取消生成',
   retryGeneration: '重新生成', model: '模型', size: '尺寸', referenceImage: '参考图',
-  clearReference: '清除参考图', closeSidebar: '关闭历史侧栏', openSidebar: '打开历史侧栏',
+  clearReference: '清除参考图',
 }
 
 export const messages = {

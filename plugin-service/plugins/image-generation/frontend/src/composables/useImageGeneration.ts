@@ -247,11 +247,10 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       }
       const images = imagesFromResult(response, userPrompt)
       if (images.length === 0) throw new Error('图片生成未返回可显示的图片')
-      const content = images[0].revisedPrompt || '生成结果'
       replacePending(conversation.id, pendingId, {
         id: `assistant-${now().getTime()}`,
         role: 'assistant',
-        content,
+        content: '生成结果',
         createdAt: images[0].createdAt,
         images,
       })
@@ -283,12 +282,11 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       }
     }
     const response: GenerateResponse = { job_id: record.id, status: record.status, result: record.result }
-    const requestDisplayPrompt = typeof record.request?.display_prompt === 'string' ? record.request.display_prompt : record.prompt
-    const images = imagesFromResult(response, requestDisplayPrompt)
+    const images = imagesFromResult(response, record.prompt)
     return {
       id: `${record.id}-assistant`,
       role: 'assistant',
-      content: images[0]?.revisedPrompt || (images.length ? '生成结果' : '图片生成未返回可显示的图片'),
+      content: images.length ? '生成结果' : '图片生成未返回可显示的图片',
       createdAt: new Date(record.updated_at || now()).toLocaleString(),
       status: images.length ? undefined : 'failed',
       images: images.length ? images : undefined,

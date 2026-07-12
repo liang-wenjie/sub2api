@@ -24,8 +24,7 @@ function source(image: GeneratedImagePayload): string {
 }
 
 function images(record: HistoryRecord): GeneratedImage[] {
-  const displayPrompt = typeof record.request.display_prompt === 'string' ? record.request.display_prompt : record.prompt
-  const resultPrompt = record.result?.revised_prompt || displayPrompt
+  const resultPrompt = record.result?.revised_prompt || record.prompt
   return (record.result?.images ?? []).map((image, index) => ({
     id: `${record.id}-image-${index}`,
     src: authenticatedMediaUrl(image.preview_url || source(image)),
@@ -47,6 +46,6 @@ export function projectConversationMessages(records: HistoryRecord[]): ChatMessa
       if (record.status === 'pending') return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...', createdAt: new Date(record.updated_at).toLocaleString(), status: 'pending' } as ChatMessage]
       if (record.status === 'failed' || record.status === 'canceled') return [user, { id: `${record.id}-assistant`, role: 'assistant', content: record.error_message || (record.status === 'canceled' ? '生成已取消' : '图片生成失败'), createdAt: new Date(record.updated_at).toLocaleString(), status: record.status } as ChatMessage]
       const generated = images(record)
-      return generated.length ? [user, { id: `${record.id}-assistant`, role: 'assistant', content: generated[0].revisedPrompt || record.prompt, createdAt: new Date(record.updated_at).toLocaleString(), images: generated } as ChatMessage] : [user]
+      return generated.length ? [user, { id: `${record.id}-assistant`, role: 'assistant', content: '生成结果', createdAt: new Date(record.updated_at).toLocaleString(), images: generated } as ChatMessage] : [user]
     })
 }

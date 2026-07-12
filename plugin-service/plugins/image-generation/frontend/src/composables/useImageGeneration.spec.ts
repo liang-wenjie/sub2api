@@ -45,7 +45,9 @@ describe('useImageGeneration', () => {
 
     expect(api.listConversationMessages).toHaveBeenCalledWith('conversation-1', '')
     expect(state.conversations.value[0].messages).toHaveLength(2)
+    expect(state.conversations.value[0].messages[1].content).toBe('生成结果')
     expect(state.conversations.value[0].messages[1].images?.[0].src).toContain('/preview.jpg')
+    expect(state.conversations.value[0].messages[1].images?.[0].revisedPrompt).toBe('Create a lamp')
   })
 
   it('creates a renderable conversation before initialization requests finish', async () => {
@@ -70,10 +72,11 @@ describe('useImageGeneration', () => {
     await state.submit()
 
     expect(state.activeConversation.value?.messages.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(state.activeConversation.value?.messages[1].content).toBe('生成结果')
     expect(state.activeConversation.value?.messages[1].images?.[0].src).toContain('/preview')
   })
 
-  it('uses the display prompt when the provider omits revised_prompt', async () => {
+  it('falls back to the sent prompt when the result has no revised prompt', async () => {
     const api = createApi({
       job_id: 'job-1',
       status: 'succeeded',
@@ -86,6 +89,7 @@ describe('useImageGeneration', () => {
     await state.submit()
 
     expect(state.activeConversation.value?.messages[1].images?.[0].revisedPrompt).toBe('一只坐在客厅地毯上的小狗')
+    expect(state.activeConversation.value?.messages[1].content).toBe('生成结果')
   })
 
   it('renders a failed message when a completed response has no image', async () => {

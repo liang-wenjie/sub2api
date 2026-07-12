@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Conversation, ImageApiKey } from '../types'
+import SidebarToggleButton from './SidebarToggleButton.vue'
 
 defineProps<{
   conversations: Conversation[]
@@ -23,12 +24,6 @@ function changeKey(event: Event) {
 
 <template>
   <aside class="history-sidebar" data-testid="image-history" aria-label="History">
-    <div class="history-topbar" data-testid="history-drawer-topbar">
-      <button type="button" class="history-collapse" data-testid="history-inline-collapse" aria-label="收起历史侧栏" @click="emit('collapse')">
-        <span aria-hidden="true" />
-      </button>
-      <strong>历史记录</strong>
-    </div>
     <div class="key-picker">
       <label for="image-key-select">可用 Key</label>
       <select id="image-key-select" :value="selectedKeyId ?? ''" data-testid="image-key-select" @change="changeKey">
@@ -57,5 +52,8 @@ function changeKey(event: Event) {
         </button>
       </li>
     </ul>
+    <div class="sidebar-footer" data-testid="sidebar-footer">
+      <SidebarToggleButton direction="collapse" data-testid="history-inline-collapse" @click="emit('collapse')" />
+    </div>
   </aside>
 </template>
