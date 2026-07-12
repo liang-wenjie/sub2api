@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,6 +160,7 @@ func TestGenerationService_GPTCreatesLocalTaskAndReturnsResultFromStatus(t *test
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
+	var requestCount atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/images/generations" {
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
@@ -166,9 +168,10 @@ func TestGenerationService_GPTCreatesLocalTaskAndReturnsResultFromStatus(t *test
 		var payload struct {
 			N int `json:"n"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.N != 3 {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.N != 1 {
 			t.Fatalf("generation payload = %#v, err = %v", payload, err)
 		}
+		requestCount.Add(1)
 		once.Do(func() { close(started) })
 		<-release
 		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/gpt.png"}]}`))
@@ -211,7 +214,7 @@ func TestGenerationService_GPTCreatesLocalTaskAndReturnsResultFromStatus(t *test
 		time.Sleep(10 * time.Millisecond)
 	}
 	images := imageMapsValue(record.Result["images"])
-	if len(images) != 1 || images[0]["url"] != "https://cdn.example.com/gpt.png" {
+	if requestCount.Load() != 3 || len(images) != 3 || images[0]["url"] != "https://cdn.example.com/gpt.png" {
 		t.Fatalf("images = %#v", images)
 	}
 }

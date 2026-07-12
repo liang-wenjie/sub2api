@@ -602,6 +602,32 @@ func (s *GenerationService) ListCreations(ctx context.Context, principal model.C
 }
 
 func (s *GenerationService) generateWithProvider(ctx context.Context, providerBaseURL string, req GenerateRequest) (map[string]any, error) {
+	count := req.OutputCount
+	if count < 1 {
+		count = 1
+	}
+	if supportsSynchronousGPTGeneration(req.Model) && count > 1 {
+		var merged map[string]any
+		images := make([]map[string]any, 0, count)
+		single := req
+		single.OutputCount = 1
+		for index := 0; index < count; index++ {
+			result, err := s.generateSingleWithProvider(ctx, providerBaseURL, single)
+			if err != nil {
+				return nil, err
+			}
+			if merged == nil {
+				merged = result
+			}
+			images = append(images, imageMapsValue(result["images"])...)
+		}
+		merged["images"] = images
+		return merged, nil
+	}
+	return s.generateSingleWithProvider(ctx, providerBaseURL, req)
+}
+
+func (s *GenerationService) generateSingleWithProvider(ctx context.Context, providerBaseURL string, req GenerateRequest) (map[string]any, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(providerBaseURL), "/")
 	if baseURL == "" {
 		return nil, ErrProviderBaseURL

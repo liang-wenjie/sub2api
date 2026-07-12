@@ -294,13 +294,16 @@ describe('useImageGeneration', () => {
     const api = createApi()
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
     await state.initialize()
+    state.outputCount.value = 3
     state.prompt.value = 'Create a lamp'
     await state.submit()
     const image = state.activeConversation.value!.messages[1].images![0]
+    state.outputCount.value = 1
 
     await state.repeatFromImage(image, 'Try another')
 
     expect(api.generate).toHaveBeenLastCalledWith(expect.objectContaining({
+      output_count: 3,
       reference_images: [expect.objectContaining({ data_url: image.originalSrc })],
     }))
   })
@@ -318,14 +321,17 @@ describe('useImageGeneration', () => {
     const api = createApi({ job_id: 'job-1', status: 'succeeded', result: { images: [] } })
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
     await state.initialize()
+    state.outputCount.value = 3
     state.prompt.value = '生成一盏台灯'
     await state.submit()
     const failedId = state.activeConversation.value!.messages[1].id
     api.generate.mockResolvedValue(completedResponse())
+    state.outputCount.value = 1
 
     await state.retryMessage(failedId)
 
     expect(api.generate).toHaveBeenLastCalledWith(expect.objectContaining({
+      output_count: 3,
       inputs: expect.objectContaining({ display_prompt: '生成一盏台灯' }),
     }))
     expect(state.activeConversation.value?.messages.at(-1)?.images).toHaveLength(1)

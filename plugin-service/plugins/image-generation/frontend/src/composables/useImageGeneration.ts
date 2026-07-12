@@ -25,6 +25,7 @@ interface UseImageGenerationOptions {
 interface SubmitOptions {
   prompt?: string
   references?: ImageReference[]
+  outputCount?: number
 }
 
 const defaultModels = ['gpt-image-2', 'gpt-image-1', 'gemini-2.5-flash-image']
@@ -237,6 +238,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const key = selectedKey.value
     const userPrompt = (submitOptions.prompt ?? prompt.value).trim()
     const references = submitOptions.references ?? conversation?.referenceImages ?? []
+    const requestedOutputCount = Math.min(Math.max(submitOptions.outputCount ?? outputCount.value, 1), maxOutputImages.value)
     if (!conversation || !key || !userPrompt || references.length > maxReferenceImages.value) return
 
     const createdAt = timestamp()
@@ -248,7 +250,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       content: userPrompt,
       createdAt,
       referenceImages: references.map(reference => ({ ...reference })),
-      requestSettings: [{ modelLabel: model.value, sizeLabel: size.value, countLabel: `数量: ${outputCount.value}` }],
+      requestSettings: [{ modelLabel: model.value, sizeLabel: size.value, countLabel: `数量: ${requestedOutputCount}` }],
     }
     const pendingMessage: ChatMessage = {
       id: pendingId,
@@ -276,7 +278,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         model: model.value,
         size: size.value,
         response_format: 'b64_json',
-        output_count: outputCount.value,
+        output_count: requestedOutputCount,
         reference_images: referencesToRequest(references),
         inputs: {
           display_prompt: userPrompt,
@@ -390,7 +392,10 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       fileName: `${image.id}.png`,
       mimeType: 'image/png',
     }
-    await submit({ prompt: repeatPrompt || image.revisedPrompt, references: [reference] })
+    const conversation = activeConversation.value
+    const assistantIndex = conversation?.messages.findIndex(message => message.images?.some(item => item.id === image.id)) ?? -1
+    const sourceMessage = assistantIndex > 0 ? conversation?.messages.slice(0, assistantIndex).reverse().find(message => message.role === 'user') : undefined
+    await submit({ prompt: repeatPrompt || image.revisedPrompt, references: [reference], outputCount: messageOutputCount(sourceMessage) })
   }
 
   function refineFromImage(image: GeneratedImage): void {
@@ -408,7 +413,13 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       ...current,
       messages: current.messages.filter(message => message.id !== messageId && message.id !== userMessage.id),
     }))
-    await submit({ prompt: userMessage.content, references: userMessage.referenceImages ?? [] })
+    await submit({ prompt: userMessage.content, references: userMessage.referenceImages ?? [], outputCount: messageOutputCount(userMessage) })
+  }
+
+  function messageOutputCount(message?: ChatMessage): number {
+    const label = message?.requestSettings?.[0]?.countLabel ?? ''
+    const parsed = Number(label.match(/\d+/)?.[0])
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
   }
 
   function setReference(reference?: ImageReference): void {
