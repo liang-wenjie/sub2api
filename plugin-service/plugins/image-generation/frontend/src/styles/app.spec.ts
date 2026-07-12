@@ -6,7 +6,7 @@ const css = readFileSync(resolve(process.cwd(), 'src/styles/app.css'), 'utf8')
 
 describe('implicit scrollbars', () => {
   it('renders the centered reference add control without a filled background', () => {
-    expect(css).toMatch(/\.reference-add-core\s*\{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s)
+    expect(css).toMatch(/\.reference-add-core\s*\{[^}]*border:\s*1px dashed #94a3b8;[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s)
   })
 
   it('keeps conversation scroll regions scrollable while revealing their thumbs on hover', () => {
