@@ -33,6 +33,26 @@ describe('image generation components', () => {
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
+  it('moves focus into the image dialog and restores it after closing', async () => {
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    const wrapper = mount(ImagePreviewDialog, {
+      attachTo: document.body,
+      props: { open: false, src: '/image.png', alt: 'result' },
+    })
+
+    await wrapper.setProps({ open: true })
+    await nextTick()
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="image-preview-close"]').element)
+    await wrapper.setProps({ open: false })
+    await nextTick()
+    expect(document.activeElement).toBe(trigger)
+
+    wrapper.unmount()
+    trigger.remove()
+  })
+
   it('emits history selection and deletion from native buttons', async () => {
     const wrapper = mount(HistorySidebar, {
       props: { conversations: [conversation], activeId: '', keys: [key], selectedKeyId: 1 },
@@ -148,6 +168,26 @@ describe('image generation components', () => {
     expect(wrapper.text()).toContain('Prompt')
     expect(wrapper.text()).toContain('GPT Image 2 | 1024 × 1024 | 数量: 1')
   })
+  it('emits a historical reference image from the action beside its thumbnail', async () => {
+    const reference = { id: 'ref-1', dataUrl: '/preview.png', originalDataUrl: '/original.png', fileName: 'dog.png', mimeType: 'image/png' }
+    const wrapper = mount(ChatThread, {
+      props: {
+        conversation: {
+          ...conversation,
+          messages: [{ id: 'user-1', role: 'user', content: 'dog', createdAt: 'now', referenceImages: [reference] }],
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="history-reference-action"]').trigger('click')
+    await wrapper.get('[data-testid="history-refine-action"]').trigger('click')
+
+    expect(wrapper.emitted('referenceImage')?.[0]).toEqual([reference])
+    expect(wrapper.emitted('refinePrompt')?.[0]).toEqual(['dog'])
+    expect(wrapper.get('[data-testid="history-reference-item"]').text()).toContain('设为参考图')
+    expect(wrapper.get('[data-testid="history-reference-item"]').text()).toContain('优化提示词')
+  })
+
   it('loads older messages automatically near the top without rendering a button', async () => {
     const wrapper = mount(ChatThread, { props: { conversation, hasOlder: true, loading: false } })
     const thread = wrapper.get('[data-testid="image-chat-thread"]')

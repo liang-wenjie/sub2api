@@ -50,6 +50,36 @@ describe('useImageGeneration', () => {
     expect(state.conversations.value[0].messages[1].images?.[0].revisedPrompt).toBe('Create a lamp')
   })
 
+  it('keeps the latest reference when older messages are loaded', async () => {
+    const api = createApi()
+    api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })
+    api.listConversationMessages
+      .mockResolvedValueOnce({
+        items: [{
+          id: 'history-new', conversation_id: 'conversation-1', user_id: 1, prompt: 'New prompt', status: 'succeeded',
+          request: { model: 'gpt-image-2', size: '1024x1024', reference_images: [{ name: 'new-reference.png', data_url: 'data:image/png;base64,new' }] },
+          result: { images: [] }, created_at: '2026-07-11T09:59:00Z', updated_at: '2026-07-11T10:00:00Z',
+        }],
+        next_cursor: 'older-cursor',
+      })
+      .mockResolvedValueOnce({
+        items: [{
+          id: 'history-old', conversation_id: 'conversation-1', user_id: 1, prompt: 'Old prompt', status: 'succeeded',
+          request: { model: 'gpt-image-2', size: '1024x1024', reference_images: [{ name: 'old-reference.png', data_url: 'data:image/png;base64,old' }] },
+          result: { images: [] }, created_at: '2026-07-10T09:59:00Z', updated_at: '2026-07-10T10:00:00Z',
+        }],
+        next_cursor: '',
+      })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    await state.initialize()
+    await state.loadOlderMessages()
+
+    expect(api.listConversationMessages).toHaveBeenLastCalledWith('conversation-1', 'older-cursor')
+    expect(state.activeConversation.value?.messages).toHaveLength(2)
+    expect(state.activeConversation.value?.referenceImages[0]?.fileName).toBe('new-reference.png')
+  })
+
   it('creates a renderable conversation before initialization requests finish', async () => {
     let resolveHistory!: (value: { items: [] }) => void
     const api = createApi()

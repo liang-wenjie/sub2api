@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import GeneratedImageCard from './GeneratedImageCard.vue'
-import type { Conversation, GeneratedImage } from '../types'
+import type { Conversation, GeneratedImage, ImageReference } from '../types'
 
 const props = defineProps<{ conversation: Conversation | null; loading?: boolean; hasOlder?: boolean }>()
-const emit = defineEmits<{ reference: [image: GeneratedImage]; refine: [image: GeneratedImage]; repeat: [image: GeneratedImage, prompt: string]; retry: [messageId: string]; view: [src: string, alt: string]; loadOlder: [] }>()
+const emit = defineEmits<{ reference: [image: GeneratedImage]; referenceImage: [image: ImageReference]; refine: [image: GeneratedImage]; refinePrompt: [prompt: string]; repeat: [image: GeneratedImage, prompt: string]; retry: [messageId: string]; view: [src: string, alt: string]; loadOlder: [] }>()
 const thread = ref<HTMLElement | null>(null)
 const awaitingOlderMessages = ref(false)
 const pendingInitialScroll = ref(true)
@@ -66,12 +66,19 @@ function formatSizeLabel(value: string): string {
           <span class="message-role">{{ message.role === 'user' ? 'Prompt' : 'Assistant' }}</span>
           <div class="message-body" :aria-busy="message.status === 'pending'">
           <div v-if="message.referenceImages?.length" class="reference-list">
-            <button v-for="reference in message.referenceImages" :key="reference.id" type="button" class="reference-open" aria-label="查看参考图原图" @click="$emit('view', reference.originalDataUrl || reference.dataUrl, reference.fileName)">
-            <img
-              :src="reference.dataUrl"
-              :alt="reference.fileName"
-              data-testid="user-message-reference-image"
-            ></button>
+            <div v-for="reference in message.referenceImages" :key="reference.id" class="reference-item" data-testid="history-reference-item">
+              <button type="button" class="reference-open" aria-label="查看参考图原图" @click="$emit('view', reference.originalDataUrl || reference.dataUrl, reference.fileName)">
+                <img
+                  :src="reference.dataUrl"
+                  :alt="reference.fileName"
+                  data-testid="user-message-reference-image"
+                >
+              </button>
+              <div class="reference-actions">
+                <button type="button" class="reference-use-button" data-testid="history-reference-action" @click="$emit('referenceImage', reference)">设为参考图</button>
+                <button type="button" class="reference-use-button" data-testid="history-refine-action" @click="$emit('refinePrompt', message.content)">优化提示词</button>
+              </div>
+            </div>
           </div>
           <div v-if="message.role === 'user'" class="user-message-details">
             <section>

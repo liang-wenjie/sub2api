@@ -124,7 +124,9 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       updateConversation(id, conversation => ({
         ...conversation,
         messages: before ? [...messages, ...conversation.messages] : messages,
-        referenceImages: [...messages].reverse().find(message => message.role === 'user' && message.referenceImages?.length)?.referenceImages ?? conversation.referenceImages,
+        referenceImages: before
+          ? conversation.referenceImages
+          : [...messages].reverse().find(message => message.role === 'user' && message.referenceImages?.length)?.referenceImages ?? conversation.referenceImages,
         historyIds: before ? [...page.items.map(item => item.id), ...conversation.historyIds] : page.items.map(item => item.id),
       }))
       conversationNextCursor.value = { ...conversationNextCursor.value, [id]: page.next_cursor || '' }
