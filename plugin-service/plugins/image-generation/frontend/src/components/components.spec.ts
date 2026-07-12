@@ -86,7 +86,7 @@ describe('image generation components', () => {
     expect(wrapper.text()).toContain('再次生成')
   })
 
-  it('renders Chinese sidebar controls including collapse and delete', () => {
+  it('renders Chinese sidebar controls and emits collapse from the pinned footer', async () => {
     const wrapper = mount(HistorySidebar, {
       props: { conversations: [conversation], activeId: conversation.id, keys: [key], selectedKeyId: 1 },
     })
@@ -94,6 +94,9 @@ describe('image generation components', () => {
     expect(wrapper.get('[data-testid="history-inline-collapse"]').attributes('aria-label')).toBe('收起侧边栏')
     expect(wrapper.get('[data-testid="history-inline-collapse"]').classes()).toContain('sidebar-toggle-button')
     expect(wrapper.get('[data-testid="history-inline-collapse"]').text()).toBe('收起侧边栏')
+    expect(wrapper.get('[data-testid="sidebar-footer"]').get('[data-testid="history-inline-collapse"]').attributes('aria-label')).toBe('收起侧边栏')
+    await wrapper.get('[data-testid="history-inline-collapse"]').trigger('click')
+    expect(wrapper.emitted('collapse')).toHaveLength(1)
     expect(wrapper.get('[data-testid="history-delete-button"]').text()).toBe('删除')
     expect(wrapper.text()).toContain('新建会话')
   })
