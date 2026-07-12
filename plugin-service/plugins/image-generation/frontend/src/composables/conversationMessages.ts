@@ -41,7 +41,7 @@ export function projectConversationMessages(records: HistoryRecord[]): ChatMessa
       const user: ChatMessage = {
         id: `${record.id}-user`, role: 'user', content: record.prompt,
         createdAt: new Date(record.created_at).toLocaleString(), referenceImages: references(record),
-        requestSettings: [{ modelLabel: String(record.request.model ?? ''), sizeLabel: String(record.request.size ?? ''), countLabel: '数量: 1' }],
+        requestSettings: [{ modelLabel: String(record.request.model ?? ''), sizeLabel: String(record.request.size ?? ''), countLabel: `数量: ${Number(record.request.output_count) || 1}` }],
       }
       if (record.status === 'pending') return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...', createdAt: new Date(record.updated_at).toLocaleString(), status: 'pending' } as ChatMessage]
       if (record.status === 'failed' || record.status === 'canceled') return [user, { id: `${record.id}-assistant`, role: 'assistant', content: record.error_message || (record.status === 'canceled' ? '生成已取消' : '图片生成失败'), createdAt: new Date(record.updated_at).toLocaleString(), status: record.status } as ChatMessage]

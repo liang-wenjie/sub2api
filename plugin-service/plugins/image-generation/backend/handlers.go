@@ -192,7 +192,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 
 	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r), req)
 	if err != nil {
-		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrImageModelUnsupported) || errors.Is(err, ErrTooManyReferenceImages) {
+		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrImageModelUnsupported) || errors.Is(err, ErrTooManyReferenceImages) || errors.Is(err, ErrInvalidOutputCount) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}

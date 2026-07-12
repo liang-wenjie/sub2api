@@ -163,6 +163,12 @@ func TestGenerationService_GPTCreatesLocalTaskAndReturnsResultFromStatus(t *test
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/images/generations" {
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
+		var payload struct {
+			N int `json:"n"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.N != 3 {
+			t.Fatalf("generation payload = %#v, err = %v", payload, err)
+		}
 		once.Do(func() { close(started) })
 		<-release
 		_, _ = w.Write([]byte(`{"created":1783000000,"data":[{"url":"https://cdn.example.com/gpt.png"}]}`))
@@ -174,7 +180,7 @@ func TestGenerationService_GPTCreatesLocalTaskAndReturnsResultFromStatus(t *test
 	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
 
 	response, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
-		Prompt: "draw a cat", ProviderAPIKey: "provider-key", Model: "gpt-image-1",
+		Prompt: "draw a cat", ProviderAPIKey: "provider-key", Model: "gpt-image-1", OutputCount: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -434,7 +440,7 @@ func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *test
 	history := service.NewHistoryService(repository.NewHistoryRepository())
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 	req, err := svc.newEditRequest(context.Background(), "https://provider.example", GenerateRequest{
-		Prompt: "restyle this image", Model: "gpt-image-1", Size: "1024x1024", ResponseFormat: "b64_json",
+		Prompt: "restyle this image", Model: "gpt-image-1", Size: "1024x1024", ResponseFormat: "b64_json", OutputCount: 3,
 		ReferenceImages: []ReferenceImage{{RemoteURL: "https://cdn.example.com/reference.png"}},
 	})
 	if err != nil {
@@ -447,6 +453,7 @@ func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *test
 		t.Fatalf("content type = %q, want application/json", req.Header.Get("Content-Type"))
 	}
 	var payload struct {
+		N      int `json:"n"`
 		Images []struct {
 			URL string `json:"image_url"`
 		} `json:"images"`
@@ -454,7 +461,7 @@ func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *test
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Images) != 1 || payload.Images[0].URL != "https://cdn.example.com/reference.png" {
+	if payload.N != 3 || len(payload.Images) != 1 || payload.Images[0].URL != "https://cdn.example.com/reference.png" {
 		t.Fatalf("images = %#v", payload.Images)
 	}
 }
@@ -552,7 +559,7 @@ func TestGenerationService_GenerateSubmitsSingleBatch(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if len(payload.Items) != 1 || payload.Items[0].OutputCount != 1 {
+		if len(payload.Items) != 1 || payload.Items[0].OutputCount != 3 {
 			t.Fatalf("payload = %#v", payload)
 		}
 		_, _ = w.Write([]byte(`{"id":"imgbatch_async","status":"queued","model":"gemini-2.5-flash-image"}`))
@@ -564,7 +571,8 @@ func TestGenerationService_GenerateSubmitsSingleBatch(t *testing.T) {
 	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Email: "user@example.com", Plugin: "image-generation"}
 
 	resp, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
-		Prompt: "draw a cat", ProviderAPIKey: "api-key", Model: "gemini-2.5-flash-image",
+		OutputCount: 3,
+		Prompt:      "draw a cat", ProviderAPIKey: "api-key", Model: "gemini-2.5-flash-image",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -593,7 +601,7 @@ func TestGenerationService_ReconcileCompletedBatch(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_done":
 			_, _ = w.Write([]byte(`{"id":"imgbatch_done","status":"completed","model":"gemini-2.5-flash-image"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_done/items":
-			_, _ = w.Write([]byte(`{"data":[{"custom_id":"plugin-image-placeholder","status":"completed","image_count":1}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"custom_id":"plugin-image-placeholder","status":"completed","image_count":2}]}`))
 		default:
 			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/content") {
 				w.Header().Set("Content-Type", "image/png")
@@ -623,7 +631,7 @@ func TestGenerationService_ReconcileCompletedBatch(t *testing.T) {
 		t.Fatalf("status = %q", completed.Status)
 	}
 	images := imageMapsValue(completed.Result["images"])
-	if len(images) != 1 || images[0]["url"] != "data:image/png;base64,cG5n" {
+	if len(images) != 2 || images[0]["url"] != "data:image/png;base64,cG5n" {
 		t.Fatalf("images = %#v", images)
 	}
 }

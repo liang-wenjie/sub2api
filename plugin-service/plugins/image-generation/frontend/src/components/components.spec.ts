@@ -229,6 +229,17 @@ describe('image generation components', () => {
     expect(wrapper.emitted('clearReferences')).toHaveLength(1)
   })
 
+  it('offers model-limited output quantities and emits a numeric selection', async () => {
+    const wrapper = mount(PromptComposer, { props: {
+      prompt: '', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], busy: false,
+      outputCount: 1, maxOutputImages: 4,
+    } })
+    const select = wrapper.get('[data-testid="image-output-count"]')
+    expect(select.findAll('option').map(option => option.text())).toEqual(['1 张', '2 张', '3 张', '4 张'])
+    await select.setValue('3')
+    expect(wrapper.emitted('update:outputCount')?.[0]).toEqual([3])
+  })
+
   it('renders sent user messages with reference, description, and generation parameters', () => {
     const wrapper = mount(ChatThread, {
       props: {

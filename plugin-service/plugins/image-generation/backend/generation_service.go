@@ -91,6 +91,7 @@ type GenerateRequest struct {
 	Model           string           `json:"model,omitempty"`
 	Size            string           `json:"size,omitempty"`
 	ResponseFormat  string           `json:"response_format,omitempty"`
+	OutputCount     int              `json:"output_count,omitempty"`
 	ReferenceImages []ReferenceImage `json:"reference_images,omitempty"`
 	Inputs          map[string]any   `json:"inputs,omitempty"`
 }
@@ -253,6 +254,11 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 	if err := validateReferenceImageCount(req.Model, req.ReferenceImages); err != nil {
 		return nil, err
 	}
+	outputCount, err := validateOutputCount(req.Model, req.OutputCount)
+	if err != nil {
+		return nil, err
+	}
+	req.OutputCount = outputCount
 	req.Size = strings.TrimSpace(req.Size)
 	if req.Size == "" {
 		req.Size = defaultImageSize
@@ -371,7 +377,7 @@ func (s *GenerationService) submitBatch(ctx context.Context, record *model.Histo
 		Items: []batchSubmitItem{{
 			CustomID:        customID,
 			Prompt:          req.Prompt,
-			OutputCount:     1,
+			OutputCount:     req.OutputCount,
 			ReferenceImages: references,
 		}},
 		Metadata: map[string]string{"plugin_history_id": record.ID},
@@ -410,6 +416,7 @@ func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPr
 		Model:           stringValue(record.Request["model"]),
 		Size:            stringValue(record.Request["size"]),
 		ResponseFormat:  stringValue(record.Request["response_format"]),
+		OutputCount:     intValue(record.Request["output_count"]),
 		ReferenceImages: referenceImagesValue(record.Request["reference_images"]),
 		Inputs:          copyMap(record.Request),
 	}
@@ -487,21 +494,25 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 	if found == nil || found.Status != "completed" || found.ImageCount < 1 {
 		return errors.New("completed batch image item is missing")
 	}
-	content, mimeType, err := s.batchClient.GetItemContent(ctx, providerBaseURL, apiKey, batchID, customID, 0)
-	if err != nil {
-		return err
-	}
-	image := map[string]any{
-		"url":            "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
-		"b64_json":       base64.StdEncoding.EncodeToString(content),
-		"revised_prompt": "",
-	}
-	if s.mediaStorage != nil {
-		stored, err := s.archiveImage(ctx, record.ID, 0, mimeType, content)
+	images := make([]map[string]any, 0, found.ImageCount)
+	for imageIndex := 0; imageIndex < found.ImageCount; imageIndex++ {
+		content, mimeType, err := s.batchClient.GetItemContent(ctx, providerBaseURL, apiKey, batchID, customID, imageIndex)
 		if err != nil {
 			return err
 		}
-		image = stored
+		image := map[string]any{
+			"url":            "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
+			"b64_json":       base64.StdEncoding.EncodeToString(content),
+			"revised_prompt": "",
+		}
+		if s.mediaStorage != nil {
+			stored, err := s.archiveImage(ctx, record.ID, imageIndex, mimeType, content)
+			if err != nil {
+				return err
+			}
+			image = stored
+		}
+		images = append(images, image)
 	}
 	record.Result = map[string]any{
 		"type":         "image_generation",
@@ -509,7 +520,7 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 		"model":        stringValue(record.Request["model"]),
 		"size":         stringValue(record.Request["size"]),
 		"batch_status": "completed",
-		"images":       []map[string]any{image},
+		"images":       images,
 	}
 	return nil
 }
@@ -635,7 +646,7 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 
 func (s *GenerationService) newGenerationRequest(ctx context.Context, baseURL string, req GenerateRequest) (*http.Request, error) {
 	payload := map[string]any{
-		"model": req.Model, "prompt": req.Prompt, "response_format": req.ResponseFormat, "size": req.Size, "n": 1,
+		"model": req.Model, "prompt": req.Prompt, "response_format": req.ResponseFormat, "size": req.Size, "n": req.OutputCount,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -679,7 +690,7 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 			"prompt":          req.Prompt,
 			"response_format": req.ResponseFormat,
 			"size":            req.Size,
-			"n":               1,
+			"n":               req.OutputCount,
 			"input_fidelity":  "high",
 			"images":          images,
 		}
@@ -699,7 +710,7 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 	_ = writer.WriteField("model", req.Model)
 	_ = writer.WriteField("prompt", req.Prompt)
 	_ = writer.WriteField("size", req.Size)
-	_ = writer.WriteField("n", "1")
+	_ = writer.WriteField("n", strconv.Itoa(req.OutputCount))
 	_ = writer.WriteField("response_format", req.ResponseFormat)
 	_ = writer.WriteField("input_fidelity", "high")
 	for index, image := range req.ReferenceImages {
@@ -1071,6 +1082,20 @@ func stringValue(value any) string {
 	return ""
 }
 
+func intValue(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	case json.Number:
+		parsed, _ := strconv.Atoi(typed.String())
+		return parsed
+	default:
+		return 0
+	}
+}
+
 func boolValue(value any) bool {
 	result, _ := value.(bool)
 	return result
@@ -1105,6 +1130,7 @@ func requestPayload(req GenerateRequest) map[string]any {
 	payload["model"] = req.Model
 	payload["size"] = req.Size
 	payload["response_format"] = req.ResponseFormat
+	payload["output_count"] = req.OutputCount
 	if len(req.ReferenceImages) > 0 {
 		references := make([]map[string]any, 0, len(req.ReferenceImages))
 		for _, reference := range req.ReferenceImages {

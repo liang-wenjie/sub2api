@@ -7,6 +7,8 @@ const props = withDefaults(defineProps<{
   prompt: string
   model: string
   size: string
+  outputCount?: number
+  maxOutputImages?: number
   models: string[]
   busy: boolean
   references?: ImageReference[]
@@ -14,6 +16,8 @@ const props = withDefaults(defineProps<{
   referenceLimitExceeded?: boolean
 }>(), {
   references: () => [],
+  outputCount: 1,
+  maxOutputImages: 1,
   maxReferenceImages: 1,
   referenceLimitExceeded: false,
 })
@@ -22,6 +26,7 @@ const emit = defineEmits<{
   'update:prompt': [value: string]
   'update:model': [value: string]
   'update:size': [value: string]
+  'update:outputCount': [value: number]
   submit: []
   stop: []
   referenceFiles: [value: File[]]
@@ -213,6 +218,12 @@ function readReference(event: Event) {
           <option value="1024x1024">1024 × 1024</option>
           <option value="1536x1024">1536 × 1024</option>
           <option value="1024x1536">1024 × 1536</option>
+        </select>
+      </label>
+      <label>
+        <span class="sr-only">生成数量</span>
+        <select :value="outputCount" data-testid="image-output-count" @change="emit('update:outputCount', Number(($event.target as HTMLSelectElement).value))">
+          <option v-for="count in maxOutputImages" :key="count" :value="count">{{ count }} 张</option>
         </select>
       </label>
       <button v-if="busy" type="button" class="send-button stop-button" aria-label="停止生成" @click="emit('stop')">

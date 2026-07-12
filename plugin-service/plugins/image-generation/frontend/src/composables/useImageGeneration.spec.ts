@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { useImageGeneration } from './useImageGeneration'
 import type { GenerateResponse, HistoryRecord, ImageApiKey } from '../types'
 
@@ -22,9 +23,9 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
   return {
     getConfig: vi.fn().mockResolvedValue({
       image_model_capabilities: {
-        'gpt-image-2': { max_reference_images: 16 },
-        'gpt-image-1': { max_reference_images: 16 },
-        'gemini-2.5-flash-image': { max_reference_images: 10 },
+        'gpt-image-2': { max_reference_images: 16, max_output_images: 10 },
+        'gpt-image-1': { max_reference_images: 16, max_output_images: 10 },
+        'gemini-2.5-flash-image': { max_reference_images: 10, max_output_images: 4 },
       },
     }),
     uploadReference: vi.fn(),
@@ -67,6 +68,20 @@ describe('useImageGeneration', () => {
     expect(state.activeConversation.value?.referenceImages.map(item => item.fileName)).toEqual(['first.png'])
     state.clearReferences()
     expect(state.activeConversation.value?.referenceImages).toEqual([])
+  })
+
+  it('clamps output count to the selected model and sends it', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+    state.outputCount.value = 8
+    state.model.value = 'gemini-2.5-flash-image'
+    await nextTick()
+    expect(state.maxOutputImages.value).toBe(4)
+    expect(state.outputCount.value).toBe(4)
+    state.prompt.value = 'four variations'
+    await state.submit()
+    expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({ output_count: 4 }))
   })
 
   it('uploads only files within the remaining model capacity', async () => {
@@ -160,12 +175,13 @@ describe('useImageGeneration', () => {
     api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })
     api.listConversationMessages.mockResolvedValue({ items: [{
       id: 'history-1', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create a lamp', status: 'succeeded',
-      request: { model: 'gpt-image-2', size: '1024x1024' }, result: { images: [{ url: '/original.png', preview_url: '/preview.jpg' }] },
+      request: { model: 'gpt-image-2', size: '1024x1024', output_count: 3 }, result: { images: [{ url: '/original.png', preview_url: '/preview.jpg' }] },
       created_at: '2026-07-11T09:59:00Z', updated_at: '2026-07-11T10:00:00Z',
     }] })
     const state = useImageGeneration({ api, loadKeys: async () => [key] })
 
     await state.initialize()
+    expect(state.conversations.value[0].messages[0].requestSettings?.[0].countLabel).toBe('数量: 3')
 
     expect(api.listConversationMessages).toHaveBeenCalledWith('conversation-1', '')
     expect(state.conversations.value[0].messages).toHaveLength(2)

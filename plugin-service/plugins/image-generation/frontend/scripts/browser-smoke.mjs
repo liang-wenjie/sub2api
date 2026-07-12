@@ -28,7 +28,7 @@ async function preparePage(viewport) {
   await page.route('**/plugins/image-generation/api/**', async route => {
     const url = new URL(route.request().url())
     if (url.pathname.endsWith('/config')) return route.fulfill({ json: {
-      image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16 } },
+      image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16, max_output_images: 10 } },
     } })
     if (url.pathname.endsWith('/references') && route.request().method() === 'POST') {
       uploadIndex += 1
@@ -46,14 +46,17 @@ async function preparePage(viewport) {
     })
     if (url.pathname.endsWith('/conversations')) return route.fulfill({ json: { items: [] } })
     if (url.pathname.includes('/conversations/') && url.pathname.endsWith('/messages')) return route.fulfill({ json: { items: [] } })
-    if (url.pathname.endsWith('/generate')) return route.fulfill({ status: 201, json: {
+    if (url.pathname.endsWith('/generate')) {
+      if (route.request().postDataJSON()?.output_count !== 3) throw new Error('Generation request is missing output_count=3')
+      return route.fulfill({ status: 201, json: {
       job_id: 'browser-job', status: 'succeeded',
       result: { images: [{
         url: '/plugins/image-generation/api/assets/browser-job/result/0',
         preview_url: '/plugins/image-generation/api/assets/browser-job/result/0/preview',
         revised_prompt: 'Browser smoke result',
       }] },
-    } })
+      } })
+    }
     return route.fulfill({ status: 404, json: { error: 'not found' } })
   })
   return page
@@ -101,6 +104,7 @@ try {
   await desktop.waitForFunction(() => !document.querySelector('[data-testid="reference-count-toggle"]'))
   await desktop.keyboard.press('Escape')
   await desktop.getByTestId('image-prompt-input').fill('Create a browser smoke image')
+  await desktop.getByTestId('image-output-count').selectOption('3')
   await desktop.getByTestId('image-send-button').click()
   await desktop.getByTestId('message-attachments').getByText('Browser smoke result').waitFor()
   const visualContract = await desktop.evaluate(() => {

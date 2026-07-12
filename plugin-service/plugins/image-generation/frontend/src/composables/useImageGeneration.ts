@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { authenticatedMediaUrl, type PluginApi } from '../api/client'
 import { projectConversationMessages } from './conversationMessages'
 import type {
@@ -47,6 +47,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const selectedKeyId = ref<number | null>(null)
   const model = ref(defaultModels[0])
   const size = ref('1024x1024')
+  const outputCount = ref(1)
   const prompt = ref('')
   const conversations = ref<Conversation[]>([])
   const activeConversationId = ref('')
@@ -68,7 +69,12 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     return config.models.filter(value => defaultModels.includes(value) || value.startsWith('gpt-image-') || value.includes('image'))
   })
   const maxReferenceImages = computed(() => modelCapabilities.value[model.value]?.max_reference_images ?? 1)
+  const maxOutputImages = computed(() => modelCapabilities.value[model.value]?.max_output_images ?? 1)
   const referenceLimitExceeded = computed(() => (activeConversation.value?.referenceImages.length ?? 0) > maxReferenceImages.value)
+
+  watch(maxOutputImages, limit => {
+    outputCount.value = Math.min(Math.max(outputCount.value, 1), limit)
+  })
 
   function timestamp(): string {
     return now().toLocaleString()
@@ -242,7 +248,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       content: userPrompt,
       createdAt,
       referenceImages: references.map(reference => ({ ...reference })),
-      requestSettings: [{ modelLabel: model.value, sizeLabel: size.value, countLabel: '数量: 1' }],
+      requestSettings: [{ modelLabel: model.value, sizeLabel: size.value, countLabel: `数量: ${outputCount.value}` }],
     }
     const pendingMessage: ChatMessage = {
       id: pendingId,
@@ -270,6 +276,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         model: model.value,
         size: size.value,
         response_format: 'b64_json',
+        output_count: outputCount.value,
         reference_images: referencesToRequest(references),
         inputs: {
           display_prompt: userPrompt,
@@ -450,6 +457,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     referenceLimitExceeded,
     model,
     size,
+    outputCount,
     prompt,
     conversations,
     activeConversationId,
@@ -458,6 +466,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     generationStatus,
     activeJobId,
     errorMessage,
+    maxOutputImages,
     loadingConversation,
     initialize,
     createConversation,

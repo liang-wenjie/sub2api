@@ -21,6 +21,7 @@ export interface ImageApiKey {
 
 export interface ImageModelCapability {
   max_reference_images: number
+  max_output_images: number
 }
 
 export interface PluginConfig {
@@ -50,6 +51,7 @@ export interface GenerateRequest {
   model: string
   size: string
   response_format: string
+  output_count?: number
   reference_images?: ReferenceImageRequest[]
   inputs?: Record<string, unknown>
 }
