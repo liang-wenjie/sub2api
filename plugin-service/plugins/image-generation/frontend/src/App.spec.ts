@@ -10,6 +10,7 @@ vi.mock('./api/client', () => ({
   pluginApiBase: () => '/plugins/image-generation/api',
   loadImageKeys: vi.fn().mockResolvedValue([]),
   createPluginApi: () => ({
+    getConfig: vi.fn().mockResolvedValue({ image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16 } } }),
     uploadReference: vi.fn(),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
@@ -33,7 +34,7 @@ describe('image generation app sidebar', () => {
     wrapper.getComponent(ChatThread).vm.$emit('referenceImage', reference)
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.getComponent(PromptComposer).props('reference')).toEqual(reference)
+    expect(wrapper.getComponent(PromptComposer).props('references')).toEqual([reference])
   })
 
   it('copies a historical creation description into the prompt without submitting', async () => {

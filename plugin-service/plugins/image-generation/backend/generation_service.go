@@ -250,6 +250,9 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 	if !supportsBatchGeneration(req.Model) && !supportsSynchronousGPTGeneration(req.Model) {
 		return nil, ErrImageModelUnsupported
 	}
+	if err := validateReferenceImageCount(req.Model, req.ReferenceImages); err != nil {
+		return nil, err
+	}
 	req.Size = strings.TrimSpace(req.Size)
 	if req.Size == "" {
 		req.Size = defaultImageSize

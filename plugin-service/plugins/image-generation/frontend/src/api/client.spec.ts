@@ -10,6 +10,18 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('plugin api client', () => {
+  it('loads image model capabilities from plugin config', async () => {
+    const payload = { image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16 } } }
+    const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(payload))
+    const client = createPluginApi('/plugins/image-generation/api', fetchSpy)
+
+    await expect(client.getConfig()).resolves.toEqual(payload)
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/plugins/image-generation/api/config',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+  })
+
   it('uploads a reference image as multipart form data', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
       name: 'reference.png', mime_type: 'image/png',

@@ -5,10 +5,12 @@ import type {
   ConversationMessages,
   HistoryRecord,
   ImageApiKey,
+  PluginConfig,
   UploadedReference,
 } from '../types'
 
 export interface PluginApi {
+  getConfig(): Promise<PluginConfig>
   uploadReference(file: File): Promise<UploadedReference>
   listConversations(cursor?: string): Promise<ConversationList>
   listConversationMessages(id: string, before?: string): Promise<ConversationMessages>
@@ -48,6 +50,7 @@ export function createPluginApi(base: string, fetcher: typeof fetch = window.fet
   const historyPath = (id: string, action = '') => `/history/${encodeURIComponent(id)}${action}`
 
   return {
+    getConfig: () => request('/config'),
     uploadReference: file => {
       const body = new FormData()
       body.append('image', file)

@@ -19,6 +19,14 @@ export interface ImageApiKey {
   group?: ImageKeyGroup
 }
 
+export interface ImageModelCapability {
+  max_reference_images: number
+}
+
+export interface PluginConfig {
+  image_model_capabilities: Record<string, ImageModelCapability>
+}
+
 export interface ReferenceImageRequest {
   name?: string
   mime_type?: string

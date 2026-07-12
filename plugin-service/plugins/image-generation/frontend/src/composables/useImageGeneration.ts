@@ -9,6 +9,7 @@ import type {
   GeneratedImagePayload,
   HistoryRecord,
   ImageApiKey,
+  ImageModelCapability,
   ImageReference,
 } from '../types'
 
@@ -52,6 +53,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const generationStatus = ref<GenerationStatus>('idle')
   const activeJobId = ref('')
   const errorMessage = ref('')
+  const modelCapabilities = ref<Record<string, ImageModelCapability>>({})
   const conversationNextCursor = ref<Record<string, string>>({})
   const loadingConversation = ref(false)
   let conversationRequestSequence = 0
@@ -65,6 +67,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     if (!config?.enabled || !config.models?.length) return defaultModels
     return config.models.filter(value => defaultModels.includes(value) || value.startsWith('gpt-image-') || value.includes('image'))
   })
+  const maxReferenceImages = computed(() => modelCapabilities.value[model.value]?.max_reference_images ?? 1)
+  const referenceLimitExceeded = computed(() => (activeConversation.value?.referenceImages.length ?? 0) > maxReferenceImages.value)
 
   function timestamp(): string {
     return now().toLocaleString()
@@ -99,6 +103,9 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
 
   async function initialize(): Promise<void> {
     if (!activeConversation.value) createConversation()
+    const configPromise = options.api.getConfig().then((config) => {
+      modelCapabilities.value = config.image_model_capabilities ?? {}
+    })
     const keysPromise = options.loadKeys().then((loadedKeys) => {
       keys.value = loadedKeys.filter(supportsImageGeneration)
       selectedKeyId.value = keys.value[0]?.id ?? null
@@ -111,7 +118,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       }))
       await selectConversation(summaries.items[0].id)
     }
-    await keysPromise
+    await Promise.all([keysPromise, configPromise])
   }
 
   async function loadConversation(id: string, before = ''): Promise<void> {
@@ -150,7 +157,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   }
 
   function referencesToRequest(references: ImageReference[]) {
-    return references.filter(reference => reference.dataUrl).slice(0, 1).map(reference => ({
+    return references.filter(reference => reference.dataUrl).map(reference => ({
       name: reference.fileName,
       mime_type: reference.mimeType,
       data_url: reference.storageKey ? undefined : reference.uploadDataUrl || reference.originalDataUrl || reference.dataUrl,
@@ -160,22 +167,31 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }))
   }
 
-  async function uploadReference(file: File): Promise<void> {
+  async function uploadReference(files: File[]): Promise<void> {
     errorMessage.value = ''
-    try {
-      const uploaded = await options.api.uploadReference(file)
-      setReference({
-        id: uploaded.storage_key,
-        dataUrl: authenticatedMediaUrl(uploaded.preview_url),
-        originalDataUrl: authenticatedMediaUrl(uploaded.original_url),
-        storageKey: uploaded.storage_key,
-        previewStorageKey: uploaded.preview_storage_key,
-        fileName: uploaded.name || file.name,
-        mimeType: uploaded.mime_type || file.type || 'image/png',
-      })
-    } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : String(error)
+    const remainingCapacity = Math.max(0, maxReferenceImages.value - (activeConversation.value?.referenceImages.length ?? 0))
+    const acceptedFiles = files.slice(0, remainingCapacity)
+    const errors: string[] = []
+    if (acceptedFiles.length < files.length) {
+      errors.push(`当前模型最多支持 ${maxReferenceImages.value} 张参考图`)
     }
+    for (const file of acceptedFiles) {
+      try {
+        const uploaded = await options.api.uploadReference(file)
+        setReference({
+          id: uploaded.storage_key,
+          dataUrl: authenticatedMediaUrl(uploaded.preview_url),
+          originalDataUrl: authenticatedMediaUrl(uploaded.original_url),
+          storageKey: uploaded.storage_key,
+          previewStorageKey: uploaded.preview_storage_key,
+          fileName: uploaded.name || file.name,
+          mimeType: uploaded.mime_type || file.type || 'image/png',
+        })
+      } catch (error) {
+        errors.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    errorMessage.value = errors.join('\n')
   }
 
   function requestPrompt(userPrompt: string, references: ImageReference[]): string {
@@ -215,7 +231,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const key = selectedKey.value
     const userPrompt = (submitOptions.prompt ?? prompt.value).trim()
     const references = submitOptions.references ?? conversation?.referenceImages ?? []
-    if (!conversation || !key || !userPrompt) return
+    if (!conversation || !key || !userPrompt || references.length > maxReferenceImages.value) return
 
     const createdAt = timestamp()
     const userId = `user-${now().getTime()}`
@@ -391,7 +407,21 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   function setReference(reference?: ImageReference): void {
     const conversation = activeConversation.value
     if (!conversation) return
-    updateConversation(conversation.id, current => ({ ...current, referenceImages: reference ? [reference] : [] }))
+    updateConversation(conversation.id, current => {
+      if (!reference) return { ...current, referenceImages: [] }
+      const identity = reference.storageKey || reference.id
+      const exists = current.referenceImages.some(item => (item.storageKey || item.id) === identity)
+      return exists ? current : { ...current, referenceImages: [...current.referenceImages, reference] }
+    })
+  }
+
+  function removeReference(id: string): void {
+    const conversation = activeConversation.value
+    if (!conversation) return
+    updateConversation(conversation.id, current => ({
+      ...current,
+      referenceImages: current.referenceImages.filter(reference => reference.id !== id),
+    }))
   }
 
   async function deleteConversation(conversation: Conversation): Promise<void> {
@@ -412,6 +442,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     selectedKeyId,
     selectedKey,
     availableModels,
+    maxReferenceImages,
+    referenceLimitExceeded,
     model,
     size,
     prompt,
@@ -433,6 +465,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     refineFromImage,
     retryMessage,
     setReference,
+    removeReference,
     uploadReference,
     deleteConversation,
     dispose,

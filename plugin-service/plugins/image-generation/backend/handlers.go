@@ -161,10 +161,11 @@ func (h *Handler) GetAsset(w http.ResponseWriter, r *http.Request, principal mod
 
 func (h *Handler) Config(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"plugin_key":      h.pluginKey,
-		"history_enabled": true,
-		"user_id":         principal.UserID,
-		"role":            principal.Role,
+		"plugin_key":               h.pluginKey,
+		"history_enabled":          true,
+		"user_id":                  principal.UserID,
+		"role":                     principal.Role,
+		"image_model_capabilities": imageModelCapabilities,
 	})
 }
 
@@ -191,7 +192,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 
 	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r), req)
 	if err != nil {
-		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrImageModelUnsupported) {
+		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrImageModelUnsupported) || errors.Is(err, ErrTooManyReferenceImages) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}

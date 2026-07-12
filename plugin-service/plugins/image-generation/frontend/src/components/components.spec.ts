@@ -132,16 +132,36 @@ describe('image generation components', () => {
     expect(wrapper.emitted('click')).toHaveLength(1)
   })
 
-  it('labels reference upload and replacement in Chinese', () => {
+  it('supports multiple references, exposes overflow validation, and removes one image', async () => {
+    const references = [
+      { id: 'first', dataUrl: 'data:image/png;base64,first', fileName: 'first.png', mimeType: 'image/png' },
+      { id: 'second', dataUrl: 'data:image/png;base64,second', fileName: 'second.png', mimeType: 'image/png' },
+    ]
     const wrapper = mount(PromptComposer, {
       props: {
-        prompt: '', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], busy: false,
-        reference: { id: 'ref', dataUrl: 'data:image/png;base64,abc', fileName: 'ref.png', mimeType: 'image/png' },
+        prompt: 'Use both', model: 'custom-image-model', size: '1024x1024', models: ['custom-image-model'], busy: false,
+        references, maxReferenceImages: 1, referenceLimitExceeded: true,
       },
     })
 
-    expect(wrapper.get('[data-testid="reference-upload-label"]').attributes('title')).toBe('再次上传参考图')
-    expect(wrapper.get('.clear-reference').attributes('aria-label')).toBe('清除参考图')
+    expect(wrapper.findAll('[data-testid="reference-image-preview"]')).toHaveLength(2)
+    expect(wrapper.get('[data-testid="reference-limit-error"]').text()).toContain('1')
+    expect(wrapper.get('[data-testid="image-send-button"]').attributes()).toHaveProperty('disabled')
+    expect(wrapper.get('[data-testid="image-prompt-input"]').attributes('aria-describedby')).toBe('reference-limit-error')
+
+    await wrapper.findAll('[data-testid="remove-reference-image"]')[1].trigger('click')
+    expect(wrapper.emitted('removeReference')?.[0]).toEqual(['second'])
+
+    await wrapper.setProps({ maxReferenceImages: 3, referenceLimitExceeded: false })
+    const input = wrapper.get<HTMLInputElement>('[data-testid="reference-image-input"]')
+    expect(input.attributes()).toHaveProperty('multiple')
+    const files = [
+      new File(['third'], 'third.png', { type: 'image/png' }),
+      new File(['fourth'], 'fourth.png', { type: 'image/png' }),
+    ]
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    expect(wrapper.emitted('referenceFiles')?.[0]).toEqual([files])
   })
 
   it('renders sent user messages with reference, description, and generation parameters', () => {

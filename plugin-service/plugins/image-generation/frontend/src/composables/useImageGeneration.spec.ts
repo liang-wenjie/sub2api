@@ -20,6 +20,13 @@ function completedResponse(): GenerateResponse {
 
 function createApi(generateResult: GenerateResponse = completedResponse()) {
   return {
+    getConfig: vi.fn().mockResolvedValue({
+      image_model_capabilities: {
+        'gpt-image-2': { max_reference_images: 16 },
+        'gpt-image-1': { max_reference_images: 16 },
+        'gemini-2.5-flash-image': { max_reference_images: 10 },
+      },
+    }),
     uploadReference: vi.fn(),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
@@ -32,6 +39,95 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
 }
 
 describe('useImageGeneration', () => {
+  it('appends uploaded references, ignores duplicates, and removes one by id', async () => {
+    const api = createApi()
+    api.uploadReference
+      .mockResolvedValueOnce({
+        name: 'first.png', mime_type: 'image/png', storage_key: 'uploads/first/original',
+        preview_storage_key: 'uploads/first/preview', original_url: '/first/original', preview_url: '/first/preview',
+      })
+      .mockResolvedValueOnce({
+        name: 'second.png', mime_type: 'image/png', storage_key: 'uploads/second/original',
+        preview_storage_key: 'uploads/second/preview', original_url: '/second/original', preview_url: '/second/preview',
+      })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+
+    await state.uploadReference([
+      new File(['first'], 'first.png', { type: 'image/png' }),
+      new File(['second'], 'second.png', { type: 'image/png' }),
+    ])
+    state.setReference({
+      id: 'uploads/second/original', dataUrl: '/second/preview', storageKey: 'uploads/second/original',
+      fileName: 'second.png', mimeType: 'image/png',
+    })
+
+    expect(state.activeConversation.value?.referenceImages.map(item => item.fileName)).toEqual(['first.png', 'second.png'])
+    state.removeReference('uploads/second/original')
+    expect(state.activeConversation.value?.referenceImages.map(item => item.fileName)).toEqual(['first.png'])
+  })
+
+  it('uploads only files within the remaining model capacity', async () => {
+    const api = createApi()
+    api.getConfig.mockResolvedValue({
+      image_model_capabilities: { 'gpt-image-2': { max_reference_images: 1 } },
+    })
+    api.uploadReference.mockResolvedValue({
+      name: 'first.png', mime_type: 'image/png', storage_key: 'uploads/first/original',
+      preview_storage_key: 'uploads/first/preview', original_url: '/first/original', preview_url: '/first/preview',
+    })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+
+    await state.uploadReference([
+      new File(['first'], 'first.png', { type: 'image/png' }),
+      new File(['second'], 'second.png', { type: 'image/png' }),
+    ])
+
+    expect(api.uploadReference).toHaveBeenCalledTimes(1)
+    expect(state.activeConversation.value?.referenceImages).toHaveLength(1)
+    expect(state.errorMessage.value).toContain('最多支持 1 张参考图')
+  })
+
+  it('keeps references and blocks submission when the selected model limit is exceeded', async () => {
+    const api = createApi()
+    const limitedKey: ImageApiKey = {
+      ...key,
+      group: { allow_image_generation: true, models_list_config: { enabled: true, models: ['gpt-image-2', 'custom-image-model'] } },
+    }
+    const state = useImageGeneration({ api, loadKeys: async () => [limitedKey] })
+    await state.initialize()
+    state.setReference({ id: 'first', dataUrl: '/first', fileName: 'first.png', mimeType: 'image/png' })
+    state.setReference({ id: 'second', dataUrl: '/second', fileName: 'second.png', mimeType: 'image/png' })
+
+    state.model.value = 'custom-image-model'
+    state.prompt.value = 'Edit both images'
+    await state.submit()
+
+    expect(state.activeConversation.value?.referenceImages).toHaveLength(2)
+    expect(state.maxReferenceImages.value).toBe(1)
+    expect(state.referenceLimitExceeded.value).toBe(true)
+    expect(api.generate).not.toHaveBeenCalled()
+  })
+
+  it('serializes every selected reference for a compatible model', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+    state.setReference({ id: 'first', dataUrl: '/first', storageKey: 'uploads/first/original', fileName: 'first.png', mimeType: 'image/png' })
+    state.setReference({ id: 'second', dataUrl: '/second', storageKey: 'uploads/second/original', fileName: 'second.png', mimeType: 'image/png' })
+    state.prompt.value = 'Use both references'
+
+    await state.submit()
+
+    expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({
+      reference_images: [
+        expect.objectContaining({ storage_key: 'uploads/first/original' }),
+        expect.objectContaining({ storage_key: 'uploads/second/original' }),
+      ],
+    }))
+  })
+
   it('uploads a reference before generation and submits storage metadata without base64', async () => {
     const api = createApi()
     api.uploadReference.mockResolvedValue({
@@ -44,7 +140,7 @@ describe('useImageGeneration', () => {
     const state = useImageGeneration({ api, loadKeys: async () => [key] })
     await state.initialize()
 
-    await state.uploadReference(new File(['png-bytes'], 'reference.png', { type: 'image/png' }))
+    await state.uploadReference([new File(['png-bytes'], 'reference.png', { type: 'image/png' })])
     state.prompt.value = 'Edit this image'
     await state.submit()
 

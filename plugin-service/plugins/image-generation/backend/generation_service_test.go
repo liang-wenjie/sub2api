@@ -110,6 +110,51 @@ func TestGenerationService_ArchivesBase64Result(t *testing.T) {
 	}
 }
 
+func TestGenerationService_RejectsTooManyReferenceImagesBeforeCreatingHistory(t *testing.T) {
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+
+	response, err := svc.Generate(context.Background(), principal, "http://provider.example", GenerateRequest{
+		Prompt:         "cat",
+		ProviderAPIKey: "key",
+		Model:          "gpt-image-1",
+		ReferenceImages: []ReferenceImage{
+			{Name: "first.png", DataURL: "data:image/png;base64,Zmlyc3Q="},
+			{Name: "second.png", DataURL: "data:image/png;base64,c2Vjb25k"},
+			{Name: "third.png", DataURL: "data:image/png;base64,dGhpcmQ="},
+			{Name: "fourth.png", DataURL: "data:image/png;base64,Zm91cnRo"},
+			{Name: "fifth.png", DataURL: "data:image/png;base64,ZmlmdGg="},
+			{Name: "sixth.png", DataURL: "data:image/png;base64,c2l4dGg="},
+			{Name: "seventh.png", DataURL: "data:image/png;base64,c2V2ZW50aA=="},
+			{Name: "eighth.png", DataURL: "data:image/png;base64,ZWlnaHRo"},
+			{Name: "ninth.png", DataURL: "data:image/png;base64,bmludGg="},
+			{Name: "tenth.png", DataURL: "data:image/png;base64,dGVudGg="},
+			{Name: "eleventh.png", DataURL: "data:image/png;base64,ZWxldmVudGg="},
+			{Name: "twelfth.png", DataURL: "data:image/png;base64,dHdlbGZ0aA=="},
+			{Name: "thirteenth.png", DataURL: "data:image/png;base64,dGhpcnRlZW50aA=="},
+			{Name: "fourteenth.png", DataURL: "data:image/png;base64,Zm91cnRlZW50aA=="},
+			{Name: "fifteenth.png", DataURL: "data:image/png;base64,ZmlmdGVlbnRo"},
+			{Name: "sixteenth.png", DataURL: "data:image/png;base64,c2l4dGVlbnRo"},
+			{Name: "seventeenth.png", DataURL: "data:image/png;base64,c2V2ZW50ZWVudGg="},
+		},
+	})
+	if response != nil {
+		t.Fatalf("response = %#v, want nil", response)
+	}
+	if !errors.Is(err, ErrTooManyReferenceImages) {
+		t.Fatalf("error = %v, want ErrTooManyReferenceImages", err)
+	}
+
+	records, listErr := history.List(context.Background(), principal, model.HistoryQuery{Page: 1, PageSize: 20})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(records) != 0 {
+		t.Fatalf("history records = %d, want 0", len(records))
+	}
+}
+
 func TestGenerationService_GPTCreatesLocalTaskAndReturnsResultFromStatus(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
