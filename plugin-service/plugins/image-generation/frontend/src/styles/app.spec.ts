@@ -33,6 +33,7 @@ describe('implicit scrollbars', () => {
   it('keeps native generation selects out of intrinsic width calculation', () => {
     expect(css).toMatch(/\.composer-select\s*\{[^}]*position:\s*relative;[^}]*display:\s*inline-grid;/s)
     expect(css).toMatch(/\.composer-select select\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*width:\s*100%;/s)
+    expect(css).toMatch(/\.composer-select-width\s*\{[^}]*padding:\s*0\s+44px\s+0\s+16px;/s)
     expect(css).not.toMatch(/\.composer-select[^}]*max-width:\s*150px;/s)
   })
 })

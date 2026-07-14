@@ -120,7 +120,7 @@ select { padding: 0 34px 0 10px; }
 .reference-limit-error { color: #b42318; }
 .composer-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
 .composer-select { position: relative; display: inline-grid; max-width: 100%; }
-.composer-select-width { height: 40px; min-width: 0; padding: 0 40px 0 16px; border: 1px solid transparent; font-size: 12px; line-height: 40px; visibility: hidden; white-space: nowrap; }
+.composer-select-width { height: 40px; min-width: 0; padding: 0 44px 0 16px; border: 1px solid transparent; font-size: 12px; line-height: 40px; visibility: hidden; white-space: nowrap; }
 .composer-tools select { height: 40px; padding-left: 16px; padding-right: 40px; border-radius: 9999px; font-size: 12px; }
 .composer-select select { position: absolute; inset: 0; width: 100%; min-width: 0; }
 .send-button { display: grid; width: 44px; height: 44px; min-height: 44px; margin-left: auto; padding: 0; border: 0; border-radius: 50%; background: #0f172a; color: #fff; place-items: center; }
