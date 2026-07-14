@@ -19,6 +19,12 @@ export interface PluginApi {
   getStatus(id: string): Promise<HistoryRecord>
   cancel(id: string): Promise<HistoryRecord>
   deleteConversation(id: string): Promise<void>
+  getImageGenerationPreference(): Promise<ImageGenerationPreference>
+  saveImageGenerationPreference(lastAPIKeyID: number | null): Promise<ImageGenerationPreference>
+}
+
+export interface ImageGenerationPreference {
+  last_api_key_id: number | null
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -67,7 +73,45 @@ export function createPluginApi(base: string, fetcher: typeof fetch = window.fet
     getStatus: id => request(historyPath(id, '/status')),
     cancel: id => request(historyPath(id, '/cancel'), { method: 'POST' }),
     deleteConversation: id => request(`/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    getImageGenerationPreference: () => loadImageGenerationPreference(fetcher),
+    saveImageGenerationPreference: lastAPIKeyID => saveImageGenerationPreference(lastAPIKeyID, fetcher),
   }
+}
+
+function authHeaders(): Record<string, string> {
+  let token = ''
+  try { token = window.localStorage.getItem('auth_token') || '' } catch { token = '' }
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function gatewayPreferenceRequest(
+  fetcher: typeof fetch,
+  init: RequestInit = {},
+): Promise<ImageGenerationPreference> {
+  const response = await fetcher('/api/v1/user/preferences/image-generation', {
+    credentials: 'same-origin',
+    ...init,
+    headers: { ...authHeaders(), ...init.headers },
+  })
+  const payload = await readResponse<unknown>(response)
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+  const data = record.code === 0 && record.data && typeof record.data === 'object' ? record.data as Record<string, unknown> : record
+  return { last_api_key_id: typeof data.last_api_key_id === 'number' ? data.last_api_key_id : null }
+}
+
+export function loadImageGenerationPreference(fetcher: typeof fetch = window.fetch.bind(window)): Promise<ImageGenerationPreference> {
+  return gatewayPreferenceRequest(fetcher)
+}
+
+export function saveImageGenerationPreference(
+  lastAPIKeyID: number | null,
+  fetcher: typeof fetch = window.fetch.bind(window),
+): Promise<ImageGenerationPreference> {
+  return gatewayPreferenceRequest(fetcher, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ last_api_key_id: lastAPIKeyID }),
+  })
 }
 
 export function pluginApiBase(): string {
@@ -87,11 +131,9 @@ export function authenticatedMediaUrl(rawUrl: string): string {
 }
 
 export async function loadImageKeys(fetcher: typeof fetch = window.fetch.bind(window)): Promise<ImageApiKey[]> {
-  let token = ''
-  try { token = window.localStorage.getItem('auth_token') || '' } catch { token = '' }
   const response = await fetcher('/api/v1/keys?page=1&page_size=100', {
     credentials: 'same-origin',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: authHeaders(),
   })
   const payload = await readResponse<unknown>(response)
   if (typeof payload !== 'object' || payload === null) return []

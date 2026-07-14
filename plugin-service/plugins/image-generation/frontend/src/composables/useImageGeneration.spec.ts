@@ -28,6 +28,8 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
         'gemini-2.5-flash-image': { max_reference_images: 10, max_output_images: 4 },
       },
     }),
+    getImageGenerationPreference: vi.fn().mockResolvedValue({ last_api_key_id: null }),
+    saveImageGenerationPreference: vi.fn().mockResolvedValue({ last_api_key_id: null }),
     uploadReference: vi.fn(),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
@@ -40,6 +42,70 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
 }
 
 describe('useImageGeneration', () => {
+  it('restores a saved usable key without rewriting the preference', async () => {
+    const api = createApi()
+    api.getImageGenerationPreference.mockResolvedValue({ last_api_key_id: 8 })
+    const savedKey = { ...key, id: 8 }
+    const state = useImageGeneration({ api, loadKeys: async () => [key, savedKey] })
+
+    await state.initialize()
+
+    expect(state.selectedKeyId.value).toBe(8)
+    expect(api.saveImageGenerationPreference).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the first usable key and persists it when the saved key is unavailable', async () => {
+    const api = createApi()
+    api.getImageGenerationPreference.mockResolvedValue({ last_api_key_id: 99 })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    await state.initialize()
+
+    expect(state.selectedKeyId.value).toBe(7)
+    expect(api.saveImageGenerationPreference).toHaveBeenCalledWith(7)
+  })
+
+  it('falls back when the saved key is filtered out of image generation', async () => {
+    const api = createApi()
+    api.getImageGenerationPreference.mockResolvedValue({ last_api_key_id: 8 })
+    const unavailable = { ...key, id: 8, status: 'disabled' }
+    const state = useImageGeneration({ api, loadKeys: async () => [unavailable, key] })
+
+    await state.initialize()
+
+    expect(state.selectedKeyId.value).toBe(7)
+    expect(api.saveImageGenerationPreference).toHaveBeenCalledWith(7)
+  })
+
+  it('persists a user key selection after initialization', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key, { ...key, id: 8 }] })
+    await state.initialize()
+
+    state.selectedKeyId.value = 8
+    await nextTick()
+    await Promise.resolve()
+
+    expect(api.saveImageGenerationPreference).toHaveBeenCalledWith(8)
+  })
+
+  it('persists null for an empty usable key list and retains user selection on save failure', async () => {
+    const api = createApi()
+    api.getImageGenerationPreference.mockResolvedValue({ last_api_key_id: 99 })
+    const empty = useImageGeneration({ api, loadKeys: async () => [] })
+    await empty.initialize()
+    expect(api.saveImageGenerationPreference).toHaveBeenCalledWith(null)
+
+    const changing = createApi()
+    changing.saveImageGenerationPreference.mockRejectedValue(new Error('sync failed'))
+    const state = useImageGeneration({ api: changing, loadKeys: async () => [key, { ...key, id: 8 }] })
+    await state.initialize()
+    state.selectedKeyId.value = 8
+    await nextTick()
+    await Promise.resolve()
+    expect(state.selectedKeyId.value).toBe(8)
+    expect(state.errorMessage.value).toBe('sync failed')
+  })
   it('appends uploaded references, ignores duplicates, and removes one by id', async () => {
     const api = createApi()
     api.uploadReference

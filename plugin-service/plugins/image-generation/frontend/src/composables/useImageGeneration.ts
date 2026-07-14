@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { authenticatedMediaUrl, type PluginApi } from '../api/client'
 import { projectConversationMessages } from './conversationMessages'
 import type {
@@ -60,6 +60,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const loadingConversation = ref(false)
   let conversationRequestSequence = 0
   let pollTimer: ReturnType<typeof setTimeout> | undefined
+  let initializedKeySelection = false
 
   const selectedKey = computed(() => keys.value.find(key => key.id === selectedKeyId.value) ?? null)
   const activeConversation = computed(() => conversations.value.find(item => item.id === activeConversationId.value) ?? null)
@@ -75,6 +76,15 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
 
   watch(maxOutputImages, limit => {
     outputCount.value = Math.min(Math.max(outputCount.value, 1), limit)
+  })
+
+  watch(selectedKeyId, async (next, previous) => {
+    if (!initializedKeySelection || next === previous) return
+    try {
+      await options.api.saveImageGenerationPreference(next)
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : String(error)
+    }
   })
 
   function timestamp(): string {
@@ -113,10 +123,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const configPromise = options.api.getConfig().then((config) => {
       modelCapabilities.value = config.image_model_capabilities ?? {}
     })
-    const keysPromise = options.loadKeys().then((loadedKeys) => {
-      keys.value = loadedKeys.filter(supportsImageGeneration)
-      selectedKeyId.value = keys.value[0]?.id ?? null
-    })
+    const keysPromise = options.loadKeys()
+    const preferencePromise = options.api.getImageGenerationPreference()
     const summaries = await options.api.listConversations()
     if (summaries.items.length > 0) {
       conversations.value = summaries.items.map(item => ({
@@ -125,7 +133,21 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       }))
       await selectConversation(summaries.items[0].id)
     }
-    await Promise.all([keysPromise, configPromise])
+    const [loadedKeys, preference] = await Promise.all([keysPromise, preferencePromise])
+    keys.value = loadedKeys.filter(supportsImageGeneration)
+    const savedKeyID = preference.last_api_key_id
+    const nextKeyID = keys.value.some(key => key.id === savedKeyID) ? savedKeyID : keys.value[0]?.id ?? null
+    selectedKeyId.value = nextKeyID
+    if (nextKeyID !== savedKeyID) {
+      try {
+        await options.api.saveImageGenerationPreference(nextKeyID)
+      } catch (error) {
+        errorMessage.value = error instanceof Error ? error.message : String(error)
+      }
+    }
+    await nextTick()
+    initializedKeySelection = true
+    await configPromise
   }
 
   async function loadConversation(id: string, before = ''): Promise<void> {

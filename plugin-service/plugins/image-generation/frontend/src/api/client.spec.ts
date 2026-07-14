@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { authenticatedMediaUrl, createPluginApi } from './client'
+import { authenticatedMediaUrl, createPluginApi, loadImageGenerationPreference, saveImageGenerationPreference } from './client'
 import type { GenerateRequest } from '../types'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -10,6 +10,24 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('plugin api client', () => {
+
+  it('loads and saves the gateway image-generation preference with the login token', async () => {
+    window.localStorage.setItem('auth_token', 'preference-token')
+    const fetchSpy = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { last_api_key_id: 41 } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { last_api_key_id: null } }))
+
+    await expect(loadImageGenerationPreference(fetchSpy)).resolves.toEqual({ last_api_key_id: 41 })
+    await expect(saveImageGenerationPreference(null, fetchSpy)).resolves.toEqual({ last_api_key_id: null })
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, '/api/v1/user/preferences/image-generation', expect.objectContaining({
+      credentials: 'same-origin', headers: { Authorization: 'Bearer preference-token' },
+    }))
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/v1/user/preferences/image-generation', expect.objectContaining({
+      method: 'PUT', body: JSON.stringify({ last_api_key_id: null }), headers: expect.objectContaining({ Authorization: 'Bearer preference-token' }),
+    }))
+    window.localStorage.removeItem('auth_token')
+  })
   it('loads image model capabilities from plugin config', async () => {
     const payload = { image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16 } } }
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(payload))
