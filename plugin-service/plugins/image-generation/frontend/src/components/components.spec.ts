@@ -97,6 +97,32 @@ describe('image generation components', () => {
     expect(wrapper.get('[data-testid="image-send-button"]').attributes('aria-label')).toBeTruthy()
   })
 
+  it('sizes generation selects from their current visible values', async () => {
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: '',
+        model: 'gpt-image-2',
+        size: '1536x1024',
+        outputCount: 3,
+        maxOutputImages: 4,
+        models: ['gpt-image-2', 'image-model-with-a-long-name'],
+        busy: false,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="image-model-width"]').text()).toBe('gpt-image-2')
+    expect(wrapper.get('[data-testid="image-size-width"]').text()).toBe('1536 × 1024')
+    expect(wrapper.get('[data-testid="image-output-count-width"]').text()).toBe('3 张')
+
+    await wrapper.get('[data-testid="image-model-select"]').setValue('image-model-with-a-long-name')
+    await wrapper.get('[data-testid="image-size-select"]').setValue('1024x1536')
+    await wrapper.get('[data-testid="image-output-count"]').setValue('4')
+
+    expect(wrapper.emitted('update:model')?.[0]).toEqual(['image-model-with-a-long-name'])
+    expect(wrapper.emitted('update:size')?.[0]).toEqual(['1024x1536'])
+    expect(wrapper.emitted('update:outputCount')?.[0]).toEqual([4])
+  })
+
   it('renders the original Chinese generation actions', () => {
     const wrapper = mount(GeneratedImageCard, {
       props: { image: { id: 'image-1', src: 'data:image/png;base64,abc', revisedPrompt: '蓝色台灯', createdAt: 'now' } },

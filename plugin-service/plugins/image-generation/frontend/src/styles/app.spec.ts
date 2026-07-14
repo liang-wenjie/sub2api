@@ -29,4 +29,10 @@ describe('implicit scrollbars', () => {
     expect(css).toMatch(/\.reference-actions\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*gap:\s*6px;/s)
     expect(css).toMatch(/\.reference-use-button\s*\{[^}]*height:\s*32px;[^}]*min-height:\s*32px;[^}]*padding:\s*0\s+10px;[^}]*border-radius:\s*8px;[^}]*font-size:\s*11px;/s)
   })
+
+  it('keeps native generation selects out of intrinsic width calculation', () => {
+    expect(css).toMatch(/\.composer-select\s*\{[^}]*position:\s*relative;[^}]*display:\s*inline-grid;/s)
+    expect(css).toMatch(/\.composer-select select\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*width:\s*100%;/s)
+    expect(css).not.toMatch(/\.composer-select[^}]*max-width:\s*150px;/s)
+  })
 })

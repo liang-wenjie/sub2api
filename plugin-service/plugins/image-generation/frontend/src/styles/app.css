@@ -119,7 +119,10 @@ select { padding: 0 34px 0 10px; }
 .reference-limit-error { margin: 8px 4px 0; font-size: 12px; }
 .reference-limit-error { color: #b42318; }
 .composer-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
+.composer-select { position: relative; display: inline-grid; max-width: 100%; }
+.composer-select-width { height: 40px; min-width: 0; padding: 0 40px 0 16px; border: 1px solid transparent; font-size: 12px; line-height: 40px; visibility: hidden; white-space: nowrap; }
 .composer-tools select { height: 40px; padding-left: 16px; padding-right: 40px; border-radius: 9999px; font-size: 12px; }
+.composer-select select { position: absolute; inset: 0; width: 100%; min-width: 0; }
 .send-button { display: grid; width: 44px; height: 44px; min-height: 44px; margin-left: auto; padding: 0; border: 0; border-radius: 50%; background: #0f172a; color: #fff; place-items: center; }
 .stop-icon { width: 12px; height: 12px; border-radius: 2px; background: currentColor; }
 .inline-error { width: min(calc(100% - 32px), 980px); margin: 0 auto 8px; color: #b42318; font-size: 13px; }
@@ -155,7 +158,6 @@ select { padding: 0 34px 0 10px; }
   .clear-references { top: -34px; right: -54px; }
   .reference-picker { flex-basis: 44px; border-radius: 8px; }
   .composer textarea { flex-basis: 100%; }
-  .composer-tools select { max-width: 150px; }
   .image-actions { gap: 4px; padding: 0 8px 8px; }
   .image-actions button { padding: 0 7px; font-size: 10px; }
 }

@@ -206,22 +206,25 @@ function readReference(event: Event) {
       当前模型最多支持 {{ maxReferenceImages }} 张参考图，请删除多余图片或切换模型。
     </p>
     <div class="composer-tools">
-      <label>
+      <label class="composer-select">
         <span class="sr-only">模型</span>
+        <span class="composer-select-width" data-testid="image-model-width" aria-hidden="true">{{ model }}</span>
         <select :value="model" data-testid="image-model-select" @change="emit('update:model', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in models" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
-      <label>
+      <label class="composer-select">
         <span class="sr-only">尺寸</span>
-        <select :value="size" @change="emit('update:size', ($event.target as HTMLSelectElement).value)">
+        <span class="composer-select-width" data-testid="image-size-width" aria-hidden="true">{{ size.replace('x', ' × ') }}</span>
+        <select :value="size" data-testid="image-size-select" @change="emit('update:size', ($event.target as HTMLSelectElement).value)">
           <option value="1024x1024">1024 × 1024</option>
           <option value="1536x1024">1536 × 1024</option>
           <option value="1024x1536">1024 × 1536</option>
         </select>
       </label>
-      <label>
+      <label class="composer-select">
         <span class="sr-only">生成数量</span>
+        <span class="composer-select-width" data-testid="image-output-count-width" aria-hidden="true">{{ outputCount }} 张</span>
         <select :value="outputCount" data-testid="image-output-count" @change="emit('update:outputCount', Number(($event.target as HTMLSelectElement).value))">
           <option v-for="count in maxOutputImages" :key="count" :value="count">{{ count }} 张</option>
         </select>
