@@ -125,7 +125,7 @@ npm run verify:generated
 
 The production build writes deterministic `app.js` and `app.css` files to `../web/assets` while preserving the hosted URLs under `/plugins/image-generation/assets/`.
 
-`POST /plugins/image-generation/api/generate` proxies image generation requests to the main Sub2API gateway resolved from the same-origin request headers. The request must include `provider_api_key`, and the plugin service persists structured history plus a flattened creations list for gallery-style views.
+`POST /plugins/image-generation/api/generate` proxies image generation requests to the main Sub2API gateway resolved from the same-origin request headers. The request must include the authenticated user's numeric `api_key_id`. The plugin service resolves the key secret only while calling the gateway, persists the ID with structured history, and returns compact job status responses until the final result is ready.
 
 ## Adding a New Plugin
 

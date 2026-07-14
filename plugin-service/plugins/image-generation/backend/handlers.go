@@ -33,6 +33,32 @@ type Handler struct {
 	generation *GenerationService
 }
 
+type JobResponse struct {
+	JobID        string         `json:"job_id"`
+	Status       string         `json:"status"`
+	Result       map[string]any `json:"result,omitempty"`
+	ErrorMessage string         `json:"error_message,omitempty"`
+}
+
+func compactJobResponse(record *model.HistoryRecord) JobResponse {
+	response := JobResponse{JobID: record.ID, Status: record.Status}
+	if record.Status == model.HistoryStatusSucceeded {
+		response.Result = record.Result
+	}
+	if record.Status == model.HistoryStatusFailed || record.Status == model.HistoryStatusCanceled {
+		response.ErrorMessage = record.ErrorMessage
+	}
+	return response
+}
+
+func compactGenerateResponse(response *GenerateResponse) JobResponse {
+	job := JobResponse{JobID: response.JobID, Status: response.Status}
+	if response.Status == model.HistoryStatusSucceeded {
+		job.Result = response.Result
+	}
+	return job
+}
+
 func NewHandler(deps HandlerDeps) *Handler {
 	pluginKey := deps.PluginKey
 	if pluginKey == "" {
@@ -190,9 +216,9 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 		len(req.ReferenceImages),
 	)
 
-	resp, err := h.generation.Generate(r.Context(), principal, resolveMainServiceBaseURL(r), req)
+	resp, err := h.generation.GenerateWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), req)
 	if err != nil {
-		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrImageModelUnsupported) || errors.Is(err, ErrTooManyReferenceImages) || errors.Is(err, ErrInvalidOutputCount) {
+		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrAPIKeyUnavailable) || errors.Is(err, ErrImageModelUnsupported) || errors.Is(err, ErrTooManyReferenceImages) || errors.Is(err, ErrInvalidOutputCount) {
 			httpx.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -207,7 +233,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, resp)
+	httpx.WriteJSON(w, http.StatusCreated, compactGenerateResponse(resp))
 }
 
 func (h *Handler) ListCreations(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
@@ -312,32 +338,32 @@ func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request, principa
 }
 
 func (h *Handler) RetryHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	resp, err := h.generation.Retry(r.Context(), principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
+	resp, err := h.generation.RetryWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, resp)
+	httpx.WriteJSON(w, http.StatusCreated, compactGenerateResponse(resp))
 }
 
 func (h *Handler) CancelHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	record, err := h.generation.Cancel(r.Context(), principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
+	record, err := h.generation.CancelWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
+	httpx.WriteJSON(w, http.StatusOK, compactJobResponse(record))
 }
 
 func (h *Handler) StatusHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	record, err := h.generation.Status(r.Context(), principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
+	record, err := h.generation.StatusWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, sanitizeHistoryRecord(record))
+	httpx.WriteJSON(w, http.StatusOK, compactJobResponse(record))
 }
 
 func resolveMainServiceBaseURL(r *http.Request) string {

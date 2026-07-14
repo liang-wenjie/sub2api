@@ -42,15 +42,17 @@ const (
 )
 
 type GenerationServiceOptions struct {
-	HTTPClient   *http.Client
-	BatchClient  *BatchClient
-	MediaStorage media.Storage
+	HTTPClient     *http.Client
+	BatchClient    *BatchClient
+	APIKeyResolver APIKeyResolver
+	MediaStorage   media.Storage
 }
 
 type GenerationService struct {
 	history      *service.HistoryService
 	httpClient   *http.Client
 	batchClient  *BatchClient
+	keyResolver  APIKeyResolver
 	mediaStorage media.Storage
 	tasksMu      sync.Mutex
 	localTasks   map[string]context.CancelFunc
@@ -87,7 +89,8 @@ func (e *UpstreamHTTPError) Error() string {
 
 type GenerateRequest struct {
 	Prompt          string           `json:"prompt"`
-	ProviderAPIKey  string           `json:"provider_api_key,omitempty"`
+	APIKeyID        int64            `json:"api_key_id"`
+	ProviderAPIKey  string           `json:"-"`
 	Model           string           `json:"model,omitempty"`
 	Size            string           `json:"size,omitempty"`
 	ResponseFormat  string           `json:"response_format,omitempty"`
@@ -191,10 +194,15 @@ func NewGenerationService(history *service.HistoryService, opts GenerationServic
 	if batchClient == nil {
 		batchClient = NewBatchClient(client)
 	}
+	keyResolver := opts.APIKeyResolver
+	if keyResolver == nil {
+		keyResolver = NewMainServiceAPIKeyResolver(client)
+	}
 	return &GenerationService{
 		history:      history,
 		httpClient:   client,
 		batchClient:  batchClient,
+		keyResolver:  keyResolver,
 		mediaStorage: opts.MediaStorage,
 		localTasks:   make(map[string]context.CancelFunc),
 	}
@@ -236,13 +244,17 @@ func (s *GenerationService) DeleteMedia(ctx context.Context, record *model.Histo
 }
 
 func (s *GenerationService) Generate(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
+	return s.generate(ctx, nil, principal, providerBaseURL, req)
+}
+
+func (s *GenerationService) GenerateWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
+	return s.generate(ctx, source, principal, providerBaseURL, req)
+}
+
+func (s *GenerationService) generate(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
 		return nil, ErrPromptRequired
-	}
-	req.ProviderAPIKey = strings.TrimSpace(req.ProviderAPIKey)
-	if req.ProviderAPIKey == "" {
-		return nil, ErrProviderKeyRequired
 	}
 	req.Model = strings.TrimSpace(req.Model)
 	if req.Model == "" {
@@ -269,6 +281,18 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 	}
 	if strings.TrimSpace(providerBaseURL) == "" {
 		return nil, ErrProviderBaseURL
+	}
+	if req.APIKeyID > 0 {
+		secret, err := s.keyResolver.Resolve(ctx, source, principal, providerBaseURL, req.APIKeyID, req.Model)
+		if err != nil {
+			return nil, err
+		}
+		req.ProviderAPIKey = secret
+	} else {
+		req.ProviderAPIKey = strings.TrimSpace(req.ProviderAPIKey)
+		if req.ProviderAPIKey == "" {
+			return nil, ErrProviderKeyRequired
+		}
 	}
 
 	log.Printf(
@@ -406,13 +430,21 @@ func (s *GenerationService) submitBatch(ctx context.Context, record *model.Histo
 }
 
 func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
+	return s.retry(ctx, nil, principal, providerBaseURL, id)
+}
+
+func (s *GenerationService) RetryWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
+	return s.retry(ctx, source, principal, providerBaseURL, id)
+}
+
+func (s *GenerationService) retry(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
 	record, err := s.history.Get(ctx, principal, id)
 	if err != nil {
 		return nil, err
 	}
 	retryReq := GenerateRequest{
 		Prompt:          stringValue(record.Request["prompt"]),
-		ProviderAPIKey:  stringValue(record.Request["provider_api_key"]),
+		APIKeyID:        int64(intValue(record.Request["api_key_id"])),
 		Model:           stringValue(record.Request["model"]),
 		Size:            stringValue(record.Request["size"]),
 		ResponseFormat:  stringValue(record.Request["response_format"]),
@@ -420,16 +452,27 @@ func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPr
 		ReferenceImages: referenceImagesValue(record.Request["reference_images"]),
 		Inputs:          copyMap(record.Request),
 	}
+	if retryReq.APIKeyID <= 0 {
+		return nil, ErrProviderKeyRequired
+	}
 	if err := s.restoreReferenceImages(ctx, retryReq.ReferenceImages); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(retryReq.Prompt) == "" {
 		retryReq.Prompt = record.Prompt
 	}
-	return s.Generate(ctx, principal, providerBaseURL, retryReq)
+	return s.generate(ctx, source, principal, providerBaseURL, retryReq)
 }
 
 func (s *GenerationService) Status(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
+	return s.status(ctx, nil, principal, providerBaseURL, id)
+}
+
+func (s *GenerationService) StatusWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
+	return s.status(ctx, source, principal, providerBaseURL, id)
+}
+
+func (s *GenerationService) status(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
 	record, err := s.history.Get(ctx, principal, id)
 	if err != nil {
 		return nil, err
@@ -440,12 +483,15 @@ func (s *GenerationService) Status(ctx context.Context, principal model.CurrentP
 	if boolValue(record.Request["local_task"]) {
 		return record, nil
 	}
-	return s.reconcileBatch(ctx, record, providerBaseURL)
+	return s.reconcileBatch(ctx, source, principal, record, providerBaseURL)
 }
 
-func (s *GenerationService) reconcileBatch(ctx context.Context, record *model.HistoryRecord, providerBaseURL string) (*model.HistoryRecord, error) {
+func (s *GenerationService) reconcileBatch(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, record *model.HistoryRecord, providerBaseURL string) (*model.HistoryRecord, error) {
 	batchID := stringValue(record.Request["batch_id"])
-	apiKey := stringValue(record.Request["provider_api_key"])
+	apiKey, err := s.resolveStoredAPIKey(ctx, source, principal, providerBaseURL, record)
+	if err != nil {
+		return nil, err
+	}
 	if batchID == "" || apiKey == "" {
 		return nil, errors.New("batch tracking data is missing")
 	}
@@ -530,6 +576,14 @@ func isTerminalHistoryStatus(status string) bool {
 }
 
 func (s *GenerationService) Cancel(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
+	return s.cancel(ctx, nil, principal, providerBaseURL, id)
+}
+
+func (s *GenerationService) CancelWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
+	return s.cancel(ctx, source, principal, providerBaseURL, id)
+}
+
+func (s *GenerationService) cancel(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*model.HistoryRecord, error) {
 	record, err := s.history.Get(ctx, principal, id)
 	if err != nil {
 		return nil, err
@@ -551,7 +605,11 @@ func (s *GenerationService) Cancel(ctx context.Context, principal model.CurrentP
 		return record, nil
 	}
 	if batchID := stringValue(record.Request["batch_id"]); batchID != "" {
-		if _, err := s.batchClient.Cancel(ctx, providerBaseURL, stringValue(record.Request["provider_api_key"]), batchID); err != nil {
+		apiKey, err := s.resolveStoredAPIKey(ctx, source, principal, providerBaseURL, record)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.batchClient.Cancel(ctx, providerBaseURL, apiKey, batchID); err != nil {
 			return nil, err
 		}
 	}
@@ -560,6 +618,16 @@ func (s *GenerationService) Cancel(ctx context.Context, principal model.CurrentP
 		return nil, err
 	}
 	return record, nil
+}
+
+func (s *GenerationService) resolveStoredAPIKey(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, record *model.HistoryRecord) (string, error) {
+	if keyID := int64(intValue(record.Request["api_key_id"])); keyID > 0 {
+		return s.keyResolver.Resolve(ctx, source, principal, providerBaseURL, keyID, stringValue(record.Request["model"]))
+	}
+	if legacy := strings.TrimSpace(stringValue(record.Request["provider_api_key"])); legacy != "" {
+		return legacy, nil
+	}
+	return "", ErrProviderKeyRequired
 }
 
 func (s *GenerationService) ListCreations(ctx context.Context, principal model.CurrentPrincipal, query model.HistoryQuery) ([]CreationRecord, error) {
@@ -1112,6 +1180,8 @@ func intValue(value any) int {
 	switch typed := value.(type) {
 	case int:
 		return typed
+	case int64:
+		return int(typed)
 	case float64:
 		return int(typed)
 	case json.Number:
@@ -1152,7 +1222,11 @@ func requestPayload(req GenerateRequest) map[string]any {
 		payload[key] = value
 	}
 	payload["prompt"] = req.Prompt
-	payload["provider_api_key"] = req.ProviderAPIKey
+	if req.APIKeyID > 0 {
+		payload["api_key_id"] = req.APIKeyID
+	} else if req.ProviderAPIKey != "" {
+		payload["provider_api_key"] = req.ProviderAPIKey
+	}
 	payload["model"] = req.Model
 	payload["size"] = req.Size
 	payload["response_format"] = req.ResponseFormat

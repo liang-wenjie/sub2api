@@ -150,6 +150,20 @@ describe('useImageGeneration', () => {
     expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({ output_count: 4 }))
   })
 
+  it('submits the selected API key id without the key secret or duplicate metadata', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+    state.prompt.value = 'draw a lamp'
+
+    await state.submit()
+
+    const request = api.generate.mock.calls[0][0] as Record<string, unknown>
+    expect(request.api_key_id).toBe(key.id)
+    expect(request).not.toHaveProperty('provider_api_key')
+    expect(request.inputs).not.toHaveProperty('api_key_id')
+  })
+
   it('uploads only files within the remaining model capacity', async () => {
     const api = createApi()
     api.getConfig.mockResolvedValue({
@@ -342,8 +356,8 @@ describe('useImageGeneration', () => {
 
   it('polls a pending job and can cancel it', async () => {
     const api = createApi({ job_id: 'history-1', status: 'pending' })
-    api.getStatus.mockResolvedValue({ id: 'history-1', status: 'pending' } as HistoryRecord)
-    api.cancel.mockResolvedValue({ id: 'history-1', status: 'canceled', error_message: 'stopped' } as HistoryRecord)
+    api.getStatus.mockResolvedValue({ job_id: 'history-1', status: 'pending' })
+    api.cancel.mockResolvedValue({ job_id: 'history-1', status: 'canceled', error_message: 'stopped' })
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 60_000 })
     await state.initialize()
     state.prompt.value = 'Create a lamp'

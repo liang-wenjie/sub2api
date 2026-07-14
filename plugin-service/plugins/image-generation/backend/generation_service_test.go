@@ -31,6 +31,16 @@ type memoryMediaStorage struct {
 	types   map[string]string
 }
 
+type fakeAPIKeyResolver struct {
+	secret string
+	calls  []int64
+}
+
+func (r *fakeAPIKeyResolver) Resolve(_ context.Context, _ *http.Request, _ model.CurrentPrincipal, _ string, keyID int64, _ string) (string, error) {
+	r.calls = append(r.calls, keyID)
+	return r.secret, nil
+}
+
 func newMemoryMediaStorage() *memoryMediaStorage {
 	return &memoryMediaStorage{objects: map[string][]byte{}, types: map[string]string{}}
 }
@@ -153,6 +163,98 @@ func TestGenerationService_RejectsTooManyReferenceImagesBeforeCreatingHistory(t 
 	}
 	if len(records) != 0 {
 		t.Fatalf("history records = %d, want 0", len(records))
+	}
+}
+
+func TestGenerationService_PersistsAPIKeyIDWithoutSecret(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer resolved-secret" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"url":"https://cdn.example.com/image.png"}]}`))
+	}))
+	defer upstream.Close()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	resolver := &fakeAPIKeyResolver{secret: "resolved-secret"}
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), APIKeyResolver: resolver})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
+		Prompt: "cat", APIKeyID: 42, Model: "gpt-image-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := waitForHistoryStatus(t, history, principal, created.JobID, model.HistoryStatusSucceeded)
+	if got := int64(intValue(record.Request["api_key_id"])); got != 42 {
+		t.Fatalf("api_key_id = %d, want 42", got)
+	}
+	if _, exists := record.Request["provider_api_key"]; exists {
+		t.Fatalf("history contains provider_api_key: %#v", record.Request)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0] != 42 {
+		t.Fatalf("resolver calls = %#v", resolver.calls)
+	}
+}
+
+func TestGenerationService_BatchLifecycleResolvesStoredAPIKeyID(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer resolved-secret" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches":
+			_, _ = w.Write([]byte(`{"id":"batch-key-id","status":"queued"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/batch-key-id":
+			_, _ = w.Write([]byte(`{"id":"batch-key-id","status":"queued"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches/batch-key-id/cancel":
+			_, _ = w.Write([]byte(`{"id":"batch-key-id","status":"cancelled"}`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	resolver := &fakeAPIKeyResolver{secret: "resolved-secret"}
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: server.Client(), APIKeyResolver: resolver})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(ctx, principal, server.URL, GenerateRequest{Prompt: "cat", APIKeyID: 42, Model: "gemini-2.5-flash-image"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Status(ctx, principal, server.URL, created.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Cancel(ctx, principal, server.URL, created.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolver.calls) != 3 {
+		t.Fatalf("resolver calls = %#v, want submit/status/cancel", resolver.calls)
+	}
+}
+
+func TestGenerationService_RetryResolvesStoredAPIKeyID(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"batch-retry-id","status":"queued"}`))
+	}))
+	defer server.Close()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	resolver := &fakeAPIKeyResolver{secret: "resolved-secret"}
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: server.Client(), APIKeyResolver: resolver})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(ctx, principal, server.URL, GenerateRequest{Prompt: "cat", APIKeyID: 42, Model: "gemini-2.5-flash-image"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Retry(ctx, principal, server.URL, created.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolver.calls) != 2 {
+		t.Fatalf("resolver calls = %#v, want submit and retry", resolver.calls)
 	}
 }
 
@@ -724,7 +826,8 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 
 	historyRepo := repository.NewHistoryRepository()
 	history := service.NewHistoryService(historyRepo)
-	svc := NewGenerationService(history, GenerationServiceOptions{})
+	resolver := &fakeAPIKeyResolver{secret: "provider-secret"}
+	svc := NewGenerationService(history, GenerationServiceOptions{APIKeyResolver: resolver})
 
 	principal := model.CurrentPrincipal{
 		UserID:   7,
@@ -735,9 +838,9 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 	}
 
 	resp, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
-		Prompt:         "Follow the user request.\nUser request: draw a camera",
-		ProviderAPIKey: "provider-secret",
-		Model:          "gemini-2.5-flash-image",
+		Prompt:   "Follow the user request.\nUser request: draw a camera",
+		APIKeyID: 42,
+		Model:    "gemini-2.5-flash-image",
 		Inputs: map[string]any{
 			"display_prompt": "draw a camera",
 		},

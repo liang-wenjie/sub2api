@@ -47,7 +47,7 @@ export interface UploadedReference extends ReferenceImageRequest {
 
 export interface GenerateRequest {
   prompt: string
-  provider_api_key: string
+  api_key_id: number
   model: string
   size: string
   response_format: string
@@ -73,6 +73,7 @@ export interface GenerateResponse {
   job_id: string
   status: HistoryStatus
   result?: GenerationResult
+  error_message?: string
 }
 
 export interface HistoryRecord {

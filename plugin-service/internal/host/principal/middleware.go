@@ -175,6 +175,11 @@ func copyMainSiteCredentials(dst *http.Request, src *http.Request) {
 	}
 }
 
+// CopyMainSiteCredentials forwards the current user's main-site credentials.
+func CopyMainSiteCredentials(dst *http.Request, src *http.Request) {
+	copyMainSiteCredentials(dst, src)
+}
+
 func firstNonEmptyQuery(r *http.Request, keys ...string) string {
 	for _, key := range keys {
 		if value := strings.TrimSpace(r.URL.Query().Get(key)); value != "" {

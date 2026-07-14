@@ -296,7 +296,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     try {
       const response = await options.api.generate({
         prompt: requestPrompt(userPrompt, references),
-        provider_api_key: key.key,
+        api_key_id: key.id,
         model: model.value,
         size: size.value,
         response_format: 'b64_json',
@@ -305,8 +305,6 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         inputs: {
           display_prompt: userPrompt,
           conversation_id: conversation.conversationId || conversation.id,
-          api_key_id: key.id,
-          api_key_name: key.name,
         },
       })
       activeJobId.value = response.job_id
@@ -341,23 +339,22 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }
   }
 
-  function terminalMessage(record: HistoryRecord): ChatMessage {
+  function terminalMessage(record: GenerateResponse, fallbackPrompt = ''): ChatMessage {
     if (record.status === 'failed' || record.status === 'canceled') {
       return {
-        id: `${record.id}-assistant`,
+        id: `${record.job_id}-assistant`,
         role: 'assistant',
         content: record.error_message || (record.status === 'canceled' ? '生成已取消' : '图片生成失败'),
-        createdAt: new Date(record.updated_at || now()).toLocaleString(),
+        createdAt: timestamp(),
         status: record.status,
       }
     }
-    const response: GenerateResponse = { job_id: record.id, status: record.status, result: record.result }
-    const images = imagesFromResult(response, record.prompt)
+    const images = imagesFromResult(record, fallbackPrompt)
     return {
-      id: `${record.id}-assistant`,
+      id: `${record.job_id}-assistant`,
       role: 'assistant',
       content: images.length ? '生成结果' : '图片生成未返回可显示的图片',
-      createdAt: new Date(record.updated_at || now()).toLocaleString(),
+      createdAt: timestamp(),
       status: images.length ? undefined : 'failed',
       images: images.length ? images : undefined,
     }
@@ -371,6 +368,16 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     return null
   }
 
+  function promptBeforePending(conversationId: string, messageId: string): string {
+    const conversation = conversations.value.find(item => item.id === conversationId)
+    const pendingIndex = conversation?.messages.findIndex(item => item.id === messageId) ?? -1
+    if (!conversation || pendingIndex < 1) return ''
+    for (let index = pendingIndex - 1; index >= 0; index -= 1) {
+      if (conversation.messages[index].role === 'user') return conversation.messages[index].content
+    }
+    return ''
+  }
+
   function schedulePoll(conversationId?: string, pendingId?: string): void {
     clearTimeout(pollTimer)
     pollTimer = setTimeout(async () => {
@@ -382,7 +389,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
           return
         }
         const location = conversationId && pendingId ? { conversationId, messageId: pendingId } : findPendingLocation()
-        if (location) replacePending(location.conversationId, location.messageId, terminalMessage(record))
+        if (location) replacePending(location.conversationId, location.messageId, terminalMessage(record, promptBeforePending(location.conversationId, location.messageId)))
         generationStatus.value = 'idle'
         activeJobId.value = ''
       } catch (error) {

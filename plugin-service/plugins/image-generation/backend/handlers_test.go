@@ -23,3 +23,35 @@ func TestHandlerConfigIncludesImageModelCapabilities(t *testing.T) {
 		t.Fatalf("gpt-image-2 max_reference_images = %d, want 16", got)
 	}
 }
+
+func TestCompactJobResponseOmitsPendingRequestAndResult(t *testing.T) {
+	record := &model.HistoryRecord{
+		ID:     "job-1",
+		Status: model.HistoryStatusPending,
+		Request: map[string]any{
+			"prompt":     "cat",
+			"api_key_id": int64(42),
+		},
+		Result: map[string]any{"batch_status": "queued"},
+	}
+
+	encoded, err := json.Marshal(compactJobResponse(record))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(encoded); got != `{"job_id":"job-1","status":"pending"}` {
+		t.Fatalf("response = %s", got)
+	}
+}
+
+func TestCompactJobResponseIncludesOnlyTerminalPayload(t *testing.T) {
+	succeeded := compactJobResponse(&model.HistoryRecord{ID: "job-2", Status: model.HistoryStatusSucceeded, Result: map[string]any{"images": []any{"image"}}})
+	if succeeded.Result == nil || succeeded.ErrorMessage != "" {
+		t.Fatalf("succeeded response = %#v", succeeded)
+	}
+
+	failed := compactJobResponse(&model.HistoryRecord{ID: "job-3", Status: model.HistoryStatusFailed, Result: map[string]any{"batch_status": "failed"}, ErrorMessage: "provider failed"})
+	if failed.Result != nil || failed.ErrorMessage != "provider failed" {
+		t.Fatalf("failed response = %#v", failed)
+	}
+}

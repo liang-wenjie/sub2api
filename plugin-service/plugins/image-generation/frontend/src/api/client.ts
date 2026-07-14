@@ -16,8 +16,8 @@ export interface PluginApi {
   listConversationMessages(id: string, before?: string): Promise<ConversationMessages>
   generate(request: GenerateRequest): Promise<GenerateResponse>
   retryHistory(id: string): Promise<GenerateResponse>
-  getStatus(id: string): Promise<HistoryRecord>
-  cancel(id: string): Promise<HistoryRecord>
+  getStatus(id: string): Promise<GenerateResponse>
+  cancel(id: string): Promise<GenerateResponse>
   deleteConversation(id: string): Promise<void>
   getImageGenerationPreference(): Promise<ImageGenerationPreference>
   saveImageGenerationPreference(lastAPIKeyID: number | null): Promise<ImageGenerationPreference>
