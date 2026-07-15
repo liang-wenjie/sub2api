@@ -88,15 +88,22 @@ func (e *UpstreamHTTPError) Error() string {
 }
 
 type GenerateRequest struct {
-	Prompt          string           `json:"prompt"`
-	APIKeyID        int64            `json:"api_key_id"`
-	ProviderAPIKey  string           `json:"-"`
-	Model           string           `json:"model,omitempty"`
-	Size            string           `json:"size,omitempty"`
-	ResponseFormat  string           `json:"response_format,omitempty"`
-	OutputCount     int              `json:"output_count,omitempty"`
-	ReferenceImages []ReferenceImage `json:"reference_images,omitempty"`
-	Inputs          map[string]any   `json:"inputs,omitempty"`
+	Prompt            string           `json:"prompt"`
+	APIKeyID          int64            `json:"api_key_id"`
+	ProviderAPIKey    string           `json:"-"`
+	Model             string           `json:"model,omitempty"`
+	Size              string           `json:"size,omitempty"`
+	ResponseFormat    string           `json:"response_format,omitempty"`
+	OutputCount       int              `json:"output_count,omitempty"`
+	Quality           string           `json:"quality,omitempty"`
+	OutputFormat      string           `json:"output_format,omitempty"`
+	OutputCompression *int             `json:"output_compression,omitempty"`
+	Background        string           `json:"background,omitempty"`
+	InputFidelity     string           `json:"input_fidelity,omitempty"`
+	AspectRatio       string           `json:"aspect_ratio,omitempty"`
+	Resolution        string           `json:"resolution,omitempty"`
+	ReferenceImages   []ReferenceImage `json:"reference_images,omitempty"`
+	Inputs            map[string]any   `json:"inputs,omitempty"`
 }
 
 type GenerateResponse struct {
@@ -271,9 +278,8 @@ func (s *GenerationService) generate(ctx context.Context, source *http.Request, 
 		return nil, err
 	}
 	req.OutputCount = outputCount
-	req.Size = strings.TrimSpace(req.Size)
-	if req.Size == "" {
-		req.Size = defaultImageSize
+	if err := normalizeImageParameters(&req); err != nil {
+		return nil, err
 	}
 	req.ResponseFormat = strings.TrimSpace(req.ResponseFormat)
 	if req.ResponseFormat == "" {
@@ -406,7 +412,11 @@ func (s *GenerationService) submitBatch(ctx context.Context, record *model.Histo
 		}},
 		Metadata: map[string]string{"plugin_history_id": record.ID},
 	}
-	payload.AspectRatio, payload.ImageSize = batchDimensions(req.Size)
+	payload.AspectRatio = req.AspectRatio
+	payload.ImageSize = req.Resolution
+	if payload.AspectRatio == "" && payload.ImageSize == "" {
+		payload.AspectRatio, payload.ImageSize = batchDimensions(req.Size)
+	}
 	job, err := s.batchClient.Submit(ctx, providerBaseURL, req.ProviderAPIKey, customID, payload)
 	if err != nil {
 		record.Status = model.HistoryStatusFailed
@@ -443,14 +453,21 @@ func (s *GenerationService) retry(ctx context.Context, source *http.Request, pri
 		return nil, err
 	}
 	retryReq := GenerateRequest{
-		Prompt:          stringValue(record.Request["prompt"]),
-		APIKeyID:        int64(intValue(record.Request["api_key_id"])),
-		Model:           stringValue(record.Request["model"]),
-		Size:            stringValue(record.Request["size"]),
-		ResponseFormat:  stringValue(record.Request["response_format"]),
-		OutputCount:     intValue(record.Request["output_count"]),
-		ReferenceImages: referenceImagesValue(record.Request["reference_images"]),
-		Inputs:          copyMap(record.Request),
+		Prompt:            stringValue(record.Request["prompt"]),
+		APIKeyID:          int64(intValue(record.Request["api_key_id"])),
+		Model:             stringValue(record.Request["model"]),
+		Size:              stringValue(record.Request["size"]),
+		ResponseFormat:    stringValue(record.Request["response_format"]),
+		OutputCount:       intValue(record.Request["output_count"]),
+		Quality:           stringValue(record.Request["quality"]),
+		OutputFormat:      stringValue(record.Request["output_format"]),
+		OutputCompression: intPointerValue(record.Request["output_compression"]),
+		Background:        stringValue(record.Request["background"]),
+		InputFidelity:     stringValue(record.Request["input_fidelity"]),
+		AspectRatio:       stringValue(record.Request["aspect_ratio"]),
+		Resolution:        stringValue(record.Request["resolution"]),
+		ReferenceImages:   referenceImagesValue(record.Request["reference_images"]),
+		Inputs:            copyMap(record.Request),
 	}
 	if retryReq.APIKeyID <= 0 {
 		return nil, ErrProviderKeyRequired
@@ -742,6 +759,7 @@ func (s *GenerationService) newGenerationRequest(ctx context.Context, baseURL st
 	payload := map[string]any{
 		"model": req.Model, "prompt": req.Prompt, "response_format": req.ResponseFormat, "size": req.Size, "n": req.OutputCount,
 	}
+	addOptionalImageParameters(payload, req)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -785,9 +803,9 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 			"response_format": req.ResponseFormat,
 			"size":            req.Size,
 			"n":               req.OutputCount,
-			"input_fidelity":  "high",
 			"images":          images,
 		}
+		addOptionalImageParameters(payload, req)
 		body, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
@@ -806,7 +824,9 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 	_ = writer.WriteField("size", req.Size)
 	_ = writer.WriteField("n", strconv.Itoa(req.OutputCount))
 	_ = writer.WriteField("response_format", req.ResponseFormat)
-	_ = writer.WriteField("input_fidelity", "high")
+	if err := writeOptionalImageFormFields(writer, req); err != nil {
+		return nil, err
+	}
 	for index, image := range req.ReferenceImages {
 		if strings.TrimSpace(image.DataURL) == "" {
 			continue
@@ -836,6 +856,44 @@ func (s *GenerationService) newEditRequest(ctx context.Context, baseURL string, 
 	}
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
 	return httpReq, nil
+}
+
+func addOptionalImageParameters(payload map[string]any, req GenerateRequest) {
+	if req.Quality != "" {
+		payload["quality"] = req.Quality
+	}
+	if req.OutputFormat != "" {
+		payload["output_format"] = req.OutputFormat
+	}
+	if req.OutputCompression != nil {
+		payload["output_compression"] = *req.OutputCompression
+	}
+	if req.Background != "" {
+		payload["background"] = req.Background
+	}
+	if req.InputFidelity != "" {
+		payload["input_fidelity"] = req.InputFidelity
+	}
+}
+
+func writeOptionalImageFormFields(writer *multipart.Writer, req GenerateRequest) error {
+	fields := []struct{ name, value string }{
+		{"quality", req.Quality},
+		{"output_format", req.OutputFormat},
+		{"background", req.Background},
+		{"input_fidelity", req.InputFidelity},
+	}
+	if req.OutputCompression != nil {
+		fields = append(fields, struct{ name, value string }{"output_compression", strconv.Itoa(*req.OutputCompression)})
+	}
+	for _, field := range fields {
+		if field.value != "" {
+			if err := writer.WriteField(field.name, field.value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func createImageFormFile(writer *multipart.Writer, fieldName, fileName, mimeType string) (io.Writer, error) {
@@ -1192,6 +1250,14 @@ func intValue(value any) int {
 	}
 }
 
+func intPointerValue(value any) *int {
+	if value == nil {
+		return nil
+	}
+	parsed := intValue(value)
+	return &parsed
+}
+
 func boolValue(value any) bool {
 	result, _ := value.(bool)
 	return result
@@ -1231,6 +1297,27 @@ func requestPayload(req GenerateRequest) map[string]any {
 	payload["size"] = req.Size
 	payload["response_format"] = req.ResponseFormat
 	payload["output_count"] = req.OutputCount
+	if req.Quality != "" {
+		payload["quality"] = req.Quality
+	}
+	if req.OutputFormat != "" {
+		payload["output_format"] = req.OutputFormat
+	}
+	if req.OutputCompression != nil {
+		payload["output_compression"] = *req.OutputCompression
+	}
+	if req.Background != "" {
+		payload["background"] = req.Background
+	}
+	if req.InputFidelity != "" {
+		payload["input_fidelity"] = req.InputFidelity
+	}
+	if req.AspectRatio != "" {
+		payload["aspect_ratio"] = req.AspectRatio
+	}
+	if req.Resolution != "" {
+		payload["resolution"] = req.Resolution
+	}
 	if len(req.ReferenceImages) > 0 {
 		references := make([]map[string]any, 0, len(req.ReferenceImages))
 		for _, reference := range req.ReferenceImages {

@@ -237,7 +237,13 @@ func TestGenerationService_BatchLifecycleResolvesStoredAPIKeyID(t *testing.T) {
 
 func TestGenerationService_RetryResolvesStoredAPIKeyID(t *testing.T) {
 	ctx := context.Background()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var payloads []batchSubmitRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload batchSubmitRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, payload)
 		_, _ = w.Write([]byte(`{"id":"batch-retry-id","status":"queued"}`))
 	}))
 	defer server.Close()
@@ -246,7 +252,9 @@ func TestGenerationService_RetryResolvesStoredAPIKeyID(t *testing.T) {
 	resolver := &fakeAPIKeyResolver{secret: "resolved-secret"}
 	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: server.Client(), APIKeyResolver: resolver})
 	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
-	created, err := svc.Generate(ctx, principal, server.URL, GenerateRequest{Prompt: "cat", APIKeyID: 42, Model: "gemini-2.5-flash-image"})
+	created, err := svc.Generate(ctx, principal, server.URL, GenerateRequest{
+		Prompt: "cat", APIKeyID: 42, Model: "gemini-2.5-flash-image", AspectRatio: "21:9", Resolution: "4K",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +263,14 @@ func TestGenerationService_RetryResolvesStoredAPIKeyID(t *testing.T) {
 	}
 	if len(resolver.calls) != 2 {
 		t.Fatalf("resolver calls = %#v, want submit and retry", resolver.calls)
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("payload count = %d, want 2", len(payloads))
+	}
+	for _, payload := range payloads {
+		if payload.AspectRatio != "21:9" || payload.ImageSize != "4K" {
+			t.Fatalf("batch dimensions = %q %q", payload.AspectRatio, payload.ImageSize)
+		}
 	}
 }
 
@@ -546,6 +562,7 @@ func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *test
 	svc := NewGenerationService(history, GenerationServiceOptions{})
 	req, err := svc.newEditRequest(context.Background(), "https://provider.example", GenerateRequest{
 		Prompt: "restyle this image", Model: "gpt-image-1", Size: "1024x1024", ResponseFormat: "b64_json", OutputCount: 3,
+		Quality: "high", OutputFormat: "webp", Background: "transparent", InputFidelity: "low",
 		ReferenceImages: []ReferenceImage{{RemoteURL: "https://cdn.example.com/reference.png"}},
 	})
 	if err != nil {
@@ -558,8 +575,12 @@ func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *test
 		t.Fatalf("content type = %q, want application/json", req.Header.Get("Content-Type"))
 	}
 	var payload struct {
-		N      int `json:"n"`
-		Images []struct {
+		N             int    `json:"n"`
+		Quality       string `json:"quality"`
+		OutputFormat  string `json:"output_format"`
+		Background    string `json:"background"`
+		InputFidelity string `json:"input_fidelity"`
+		Images        []struct {
 			URL string `json:"image_url"`
 		} `json:"images"`
 	}
@@ -568,6 +589,50 @@ func TestGenerationService_NewEditRequestUsesJSONForRemoteReferenceImage(t *test
 	}
 	if payload.N != 3 || len(payload.Images) != 1 || payload.Images[0].URL != "https://cdn.example.com/reference.png" {
 		t.Fatalf("images = %#v", payload.Images)
+	}
+	if payload.Quality != "high" || payload.OutputFormat != "webp" || payload.Background != "transparent" || payload.InputFidelity != "low" {
+		t.Fatalf("advanced parameters = %#v", payload)
+	}
+}
+
+func TestGenerationService_NewGenerationRequestForwardsAdvancedParameters(t *testing.T) {
+	compression := 82
+	svc := NewGenerationService(nil, GenerationServiceOptions{})
+	req, err := svc.newGenerationRequest(context.Background(), "https://provider.example", GenerateRequest{
+		Model: "gpt-image-1", Prompt: "cat", Size: "1024x1024", ResponseFormat: "b64_json", OutputCount: 1,
+		Quality: "high", OutputFormat: "webp", OutputCompression: &compression, Background: "transparent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["quality"] != "high" || payload["output_format"] != "webp" || payload["background"] != "transparent" || payload["output_compression"] != float64(82) {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestGenerationService_NewEditRequestForwardsMultipartParameters(t *testing.T) {
+	compression := 76
+	svc := NewGenerationService(nil, GenerationServiceOptions{})
+	req, err := svc.newEditRequest(context.Background(), "https://provider.example", GenerateRequest{
+		Model: "gpt-image-1", Prompt: "edit", Size: "1024x1024", ResponseFormat: "b64_json", OutputCount: 1,
+		Quality: "medium", OutputFormat: "jpeg", OutputCompression: &compression, Background: "opaque", InputFidelity: "low",
+		ReferenceImages: []ReferenceImage{{Name: "reference.png", MimeType: "image/png", DataURL: "data:image/png;base64,cG5n"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := req.ParseMultipartForm(1 << 20); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"quality": "medium", "output_format": "jpeg", "output_compression": "76", "background": "opaque", "input_fidelity": "low"}
+	for name, expected := range want {
+		if got := req.FormValue(name); got != expected {
+			t.Fatalf("%s = %q, want %q", name, got, expected)
+		}
 	}
 }
 

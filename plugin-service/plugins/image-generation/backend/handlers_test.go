@@ -22,6 +22,14 @@ func TestHandlerConfigIncludesImageModelCapabilities(t *testing.T) {
 	if got := response.ImageModelCapabilities["gpt-image-2"].MaxReferenceImages; got != 16 {
 		t.Fatalf("gpt-image-2 max_reference_images = %d, want 16", got)
 	}
+	gpt := response.ImageModelCapabilities["gpt-image-2"]
+	if gpt.Sizes == nil || len(gpt.Sizes.Values) != 3 || gpt.Quality == nil || gpt.OutputFormats == nil {
+		t.Fatalf("gpt-image-2 capability = %#v", gpt)
+	}
+	gemini := response.ImageModelCapabilities["gemini-2.5-flash-image"]
+	if gemini.AspectRatios == nil || len(gemini.AspectRatios.Values) != 10 {
+		t.Fatalf("gemini capability = %#v", gemini)
+	}
 }
 
 func TestCompactJobResponseOmitsPendingRequestAndResult(t *testing.T) {
