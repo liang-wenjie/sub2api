@@ -89,7 +89,7 @@ function formatSizeLabel(value: string): string {
               <h3>生成参数</h3>
               <div class="request-settings">
                 <span v-for="(setting, index) in message.requestSettings" :key="`${setting.modelLabel}-${index}`">
-                  {{ formatModelLabel(setting.modelLabel) }} | {{ formatSizeLabel(setting.sizeLabel) }} | {{ setting.countLabel.startsWith('数量:') ? setting.countLabel : `数量: ${setting.countLabel}` }}
+                  {{ formatModelLabel(setting.modelLabel) }} | {{ formatSizeLabel(setting.sizeLabel) }} | {{ setting.countLabel.startsWith('数量:') ? setting.countLabel : `数量: ${setting.countLabel}` }}<template v-if="setting.detailsLabel"> | {{ setting.detailsLabel }}</template>
                 </span>
               </div>
             </section>

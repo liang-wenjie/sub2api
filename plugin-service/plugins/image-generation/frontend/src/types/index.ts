@@ -19,9 +19,28 @@ export interface ImageApiKey {
   group?: ImageKeyGroup
 }
 
+export interface EnumCapability {
+  values: string[]
+  default: string
+}
+
+export interface IntegerCapability {
+  min: number
+  max: number
+  default: number
+}
+
 export interface ImageModelCapability {
   max_reference_images: number
   max_output_images: number
+  sizes?: EnumCapability
+  aspect_ratios?: EnumCapability
+  resolutions?: EnumCapability
+  quality?: EnumCapability
+  output_formats?: EnumCapability
+  output_compression?: IntegerCapability
+  background?: EnumCapability
+  input_fidelity?: EnumCapability
 }
 
 export interface PluginConfig {
@@ -52,6 +71,13 @@ export interface GenerateRequest {
   size: string
   response_format: string
   output_count?: number
+  quality?: string
+  output_format?: string
+  output_compression?: number
+  background?: string
+  input_fidelity?: string
+  aspect_ratio?: string
+  resolution?: string
   reference_images?: ReferenceImageRequest[]
   inputs?: Record<string, unknown>
 }
@@ -132,6 +158,7 @@ export interface RequestSetting {
   modelLabel: string
   sizeLabel: string
   countLabel: string
+  detailsLabel?: string
 }
 
 export interface ChatMessage {

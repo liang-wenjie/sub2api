@@ -123,7 +123,9 @@ select { padding: 0 34px 0 10px; }
 .composer-select-width { height: 40px; min-width: 0; padding: 0 44px 0 16px; border: 1px solid transparent; font-size: 12px; line-height: 40px; visibility: hidden; white-space: nowrap; }
 .composer-tools select { height: 40px; padding-left: 16px; padding-right: 40px; border-radius: 9999px; font-size: 12px; }
 .composer-select select { position: absolute; inset: 0; width: 100%; min-width: 0; }
-.send-button { display: grid; width: 44px; height: 44px; min-height: 44px; margin-left: auto; padding: 0; border: 0; border-radius: 50%; background: #0f172a; color: #fff; place-items: center; }
+.compression-control { display: grid; grid-template-columns: auto minmax(84px, 120px); align-items: center; gap: 8px; height: 40px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; white-space: nowrap; }
+.compression-control input { width: 100%; min-width: 84px; }
+.send-button { display: grid; flex: 0 0 auto; width: 44px; height: 44px; min-height: 44px; margin-left: auto; padding: 0; border: 0; border-radius: 50%; background: #0f172a; color: #fff; place-items: center; }
 .stop-icon { width: 12px; height: 12px; border-radius: 2px; background: currentColor; }
 .inline-error { width: min(calc(100% - 32px), 980px); margin: 0 auto 8px; color: #b42318; font-size: 13px; }
 .dialog-overlay { position: fixed; inset: 0; z-index: 50; display: grid; padding: 16px; background: rgba(23,32,51,.48); place-items: center; }

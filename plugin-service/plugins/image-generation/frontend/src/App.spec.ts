@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
 import ChatThread from './components/ChatThread.vue'
@@ -10,7 +10,14 @@ vi.mock('./api/client', () => ({
   pluginApiBase: () => '/plugins/image-generation/api',
   loadImageKeys: vi.fn().mockResolvedValue([]),
   createPluginApi: () => ({
-    getConfig: vi.fn().mockResolvedValue({ image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16 } } }),
+    getConfig: vi.fn().mockResolvedValue({ image_model_capabilities: { 'gpt-image-2': {
+      max_reference_images: 16, max_output_images: 10,
+      sizes: { values: ['1024x1024'], default: '1024x1024' },
+      quality: { values: ['auto', 'high'], default: 'auto' },
+      output_formats: { values: ['png', 'webp'], default: 'png' },
+    } } }),
+    getImageGenerationPreference: vi.fn().mockResolvedValue({ last_api_key_id: null }),
+    saveImageGenerationPreference: vi.fn().mockResolvedValue({ last_api_key_id: null }),
     uploadReference: vi.fn(),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
@@ -46,5 +53,15 @@ describe('image generation app sidebar', () => {
 
     expect(wrapper.getComponent(PromptComposer).props('prompt')).toBe('Improve the old dog prompt')
     expect(generate).not.toHaveBeenCalled()
+  })
+
+  it('wires model capability options into the prompt composer', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+
+    const composer = wrapper.getComponent(PromptComposer)
+    expect(composer.props('sizeOptions')).toEqual(['1024x1024'])
+    expect(composer.props('qualityOptions')).toEqual(['auto', 'high'])
+    expect(composer.props('outputFormatOptions')).toEqual(['png', 'webp'])
   })
 })

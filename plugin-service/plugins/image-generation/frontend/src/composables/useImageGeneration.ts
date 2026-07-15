@@ -9,6 +9,7 @@ import type {
   GeneratedImagePayload,
   HistoryRecord,
   ImageApiKey,
+  EnumCapability,
   ImageModelCapability,
   ImageReference,
 } from '../types'
@@ -30,6 +31,11 @@ interface SubmitOptions {
 
 const defaultModels = ['gpt-image-2', 'gpt-image-1', 'gemini-2.5-flash-image']
 
+function selectSupported(current: string, descriptor?: EnumCapability): string {
+  if (!descriptor) return ''
+  return descriptor.values.includes(current) ? current : descriptor.default
+}
+
 function supportsImageGeneration(key: ImageApiKey): boolean {
   if (key.status !== 'active' || !key.group?.allow_image_generation) return false
   const config = key.group.models_list_config
@@ -49,6 +55,13 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const model = ref(defaultModels[0])
   const size = ref('1024x1024')
   const outputCount = ref(1)
+  const quality = ref('')
+  const outputFormat = ref('')
+  const outputCompression = ref<number | null>(null)
+  const background = ref('')
+  const inputFidelity = ref('')
+  const aspectRatio = ref('')
+  const resolution = ref('')
   const prompt = ref('')
   const conversations = ref<Conversation[]>([])
   const activeConversationId = ref('')
@@ -72,10 +85,36 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   })
   const maxReferenceImages = computed(() => modelCapabilities.value[model.value]?.max_reference_images ?? 1)
   const maxOutputImages = computed(() => modelCapabilities.value[model.value]?.max_output_images ?? 1)
+  const activeCapability = computed(() => modelCapabilities.value[model.value])
+  const availableSizes = computed(() => activeCapability.value?.sizes?.values ?? [])
+  const availableAspectRatios = computed(() => activeCapability.value?.aspect_ratios?.values ?? [])
+  const availableResolutions = computed(() => activeCapability.value?.resolutions?.values ?? [])
+  const availableQualities = computed(() => activeCapability.value?.quality?.values ?? [])
+  const availableOutputFormats = computed(() => activeCapability.value?.output_formats?.values ?? [])
+  const availableBackgrounds = computed(() => activeCapability.value?.background?.values ?? [])
+  const availableInputFidelities = computed(() => activeCapability.value?.input_fidelity?.values ?? [])
+  const compressionCapability = computed(() => activeCapability.value?.output_compression)
+  const supportsOutputCompression = computed(() => Boolean(compressionCapability.value && ['jpeg', 'webp'].includes(outputFormat.value)))
   const referenceLimitExceeded = computed(() => (activeConversation.value?.referenceImages.length ?? 0) > maxReferenceImages.value)
 
   watch(maxOutputImages, limit => {
     outputCount.value = Math.min(Math.max(outputCount.value, 1), limit)
+  })
+
+  watch(activeCapability, (capability) => {
+    size.value = capability ? selectSupported(size.value, capability.sizes) : '1024x1024'
+    aspectRatio.value = selectSupported(aspectRatio.value, capability?.aspect_ratios)
+    resolution.value = selectSupported(resolution.value, capability?.resolutions)
+    quality.value = selectSupported(quality.value, capability?.quality)
+    outputFormat.value = selectSupported(outputFormat.value, capability?.output_formats)
+    background.value = selectSupported(background.value, capability?.background)
+    inputFidelity.value = selectSupported(inputFidelity.value, capability?.input_fidelity)
+    outputCompression.value = capability?.output_compression?.default ?? null
+  }, { immediate: true })
+
+  watch(supportsOutputCompression, supported => {
+    if (supported && outputCompression.value == null) outputCompression.value = compressionCapability.value?.default ?? null
+    if (!supported) outputCompression.value = null
   })
 
   watch(selectedKeyId, async (next, previous) => {
@@ -254,6 +293,19 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }))
   }
 
+  function activeParameterSummary(hasReferences: boolean): string {
+    const details = [
+      aspectRatio.value ? `比例: ${aspectRatio.value}` : '',
+      resolution.value ? `分辨率: ${resolution.value}` : '',
+      quality.value ? `画质: ${quality.value}` : '',
+      outputFormat.value ? `格式: ${outputFormat.value}` : '',
+      supportsOutputCompression.value && outputCompression.value != null ? `压缩: ${outputCompression.value}%` : '',
+      background.value ? `背景: ${background.value}` : '',
+      hasReferences && inputFidelity.value ? `保真度: ${inputFidelity.value}` : '',
+    ]
+    return details.filter(Boolean).join(' | ')
+  }
+
   async function submit(submitOptions: SubmitOptions = {}): Promise<void> {
     if (generationStatus.value !== 'idle') return
     const conversation = activeConversation.value
@@ -272,7 +324,12 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       content: userPrompt,
       createdAt,
       referenceImages: references.map(reference => ({ ...reference })),
-      requestSettings: [{ modelLabel: model.value, sizeLabel: size.value, countLabel: `数量: ${requestedOutputCount}` }],
+      requestSettings: [{
+        modelLabel: model.value,
+        sizeLabel: size.value || aspectRatio.value,
+        countLabel: `数量: ${requestedOutputCount}`,
+        detailsLabel: activeParameterSummary(references.length > 0),
+      }],
     }
     const pendingMessage: ChatMessage = {
       id: pendingId,
@@ -301,6 +358,13 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         size: size.value,
         response_format: 'b64_json',
         output_count: requestedOutputCount,
+        ...(quality.value ? { quality: quality.value } : {}),
+        ...(outputFormat.value ? { output_format: outputFormat.value } : {}),
+        ...(supportsOutputCompression.value && outputCompression.value != null ? { output_compression: outputCompression.value } : {}),
+        ...(background.value ? { background: background.value } : {}),
+        ...(references.length > 0 && inputFidelity.value ? { input_fidelity: inputFidelity.value } : {}),
+        ...(aspectRatio.value ? { aspect_ratio: aspectRatio.value } : {}),
+        ...(resolution.value ? { resolution: resolution.value } : {}),
         reference_images: referencesToRequest(references),
         inputs: {
           display_prompt: userPrompt,
@@ -497,6 +561,22 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     referenceLimitExceeded,
     model,
     size,
+    quality,
+    outputFormat,
+    outputCompression,
+    background,
+    inputFidelity,
+    aspectRatio,
+    resolution,
+    availableSizes,
+    availableAspectRatios,
+    availableResolutions,
+    availableQualities,
+    availableOutputFormats,
+    availableBackgrounds,
+    availableInputFidelities,
+    compressionCapability,
+    supportsOutputCompression,
     outputCount,
     prompt,
     conversations,

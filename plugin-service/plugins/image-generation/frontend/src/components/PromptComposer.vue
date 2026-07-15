@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import type { ImageReference } from '../types'
 
@@ -9,6 +9,23 @@ const props = withDefaults(defineProps<{
   size: string
   outputCount?: number
   maxOutputImages?: number
+  sizeOptions?: string[]
+  aspectRatio?: string
+  aspectRatioOptions?: string[]
+  resolution?: string
+  resolutionOptions?: string[]
+  quality?: string
+  qualityOptions?: string[]
+  outputFormat?: string
+  outputFormatOptions?: string[]
+  outputCompression?: number | null
+  compressionMin?: number
+  compressionMax?: number
+  supportsOutputCompression?: boolean
+  background?: string
+  backgroundOptions?: string[]
+  inputFidelity?: string
+  inputFidelityOptions?: string[]
   models: string[]
   busy: boolean
   references?: ImageReference[]
@@ -20,6 +37,14 @@ const props = withDefaults(defineProps<{
   maxOutputImages: 1,
   maxReferenceImages: 1,
   referenceLimitExceeded: false,
+  sizeOptions: () => [],
+  aspectRatio: '', aspectRatioOptions: () => [],
+  resolution: '', resolutionOptions: () => [],
+  quality: '', qualityOptions: () => [],
+  outputFormat: '', outputFormatOptions: () => [],
+  outputCompression: null, compressionMin: 0, compressionMax: 100, supportsOutputCompression: false,
+  background: '', backgroundOptions: () => [],
+  inputFidelity: '', inputFidelityOptions: () => [],
 })
 
 const emit = defineEmits<{
@@ -27,6 +52,13 @@ const emit = defineEmits<{
   'update:model': [value: string]
   'update:size': [value: string]
   'update:outputCount': [value: number]
+  'update:aspectRatio': [value: string]
+  'update:resolution': [value: string]
+  'update:quality': [value: string]
+  'update:outputFormat': [value: string]
+  'update:outputCompression': [value: number]
+  'update:background': [value: string]
+  'update:inputFidelity': [value: string]
   submit: []
   stop: []
   referenceFiles: [value: File[]]
@@ -35,6 +67,7 @@ const emit = defineEmits<{
 }>()
 
 const fanExpanded = ref(false)
+const effectiveSizeOptions = computed(() => props.sizeOptions.length ? props.sizeOptions : props.size ? [props.size] : [])
 let preserveFanFocus = false
 
 watch(() => props.references.length, (count) => {
@@ -213,13 +246,57 @@ function readReference(event: Event) {
           <option v-for="item in models" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
-      <label class="composer-select">
+      <label v-if="effectiveSizeOptions.length" class="composer-select">
         <span class="sr-only">尺寸</span>
         <span class="composer-select-width" data-testid="image-size-width" aria-hidden="true">{{ size.replace('x', ' × ') }}</span>
         <select :value="size" data-testid="image-size-select" @change="emit('update:size', ($event.target as HTMLSelectElement).value)">
-          <option value="1024x1024">1024 × 1024</option>
-          <option value="1536x1024">1536 × 1024</option>
-          <option value="1024x1536">1024 × 1536</option>
+          <option v-for="item in effectiveSizeOptions" :key="item" :value="item">{{ item.replace('x', ' × ') }}</option>
+        </select>
+      </label>
+      <label v-if="aspectRatioOptions.length" class="composer-select">
+        <span class="sr-only">图片比例</span>
+        <span class="composer-select-width" aria-hidden="true">{{ aspectRatio }}</span>
+        <select :value="aspectRatio" data-testid="image-aspect-ratio-select" @change="emit('update:aspectRatio', ($event.target as HTMLSelectElement).value)">
+          <option v-for="item in aspectRatioOptions" :key="item" :value="item">{{ item }}</option>
+        </select>
+      </label>
+      <label v-if="resolutionOptions.length" class="composer-select">
+        <span class="sr-only">分辨率</span>
+        <span class="composer-select-width" aria-hidden="true">{{ resolution }}</span>
+        <select :value="resolution" data-testid="image-resolution-select" @change="emit('update:resolution', ($event.target as HTMLSelectElement).value)">
+          <option v-for="item in resolutionOptions" :key="item" :value="item">{{ item }}</option>
+        </select>
+      </label>
+      <label v-if="qualityOptions.length" class="composer-select">
+        <span class="sr-only">画质</span>
+        <span class="composer-select-width" aria-hidden="true">{{ quality }}</span>
+        <select :value="quality" data-testid="image-quality-select" @change="emit('update:quality', ($event.target as HTMLSelectElement).value)">
+          <option v-for="item in qualityOptions" :key="item" :value="item">{{ item }}</option>
+        </select>
+      </label>
+      <label v-if="outputFormatOptions.length" class="composer-select">
+        <span class="sr-only">输出格式</span>
+        <span class="composer-select-width" aria-hidden="true">{{ outputFormat }}</span>
+        <select :value="outputFormat" data-testid="image-output-format-select" @change="emit('update:outputFormat', ($event.target as HTMLSelectElement).value)">
+          <option v-for="item in outputFormatOptions" :key="item" :value="item">{{ item }}</option>
+        </select>
+      </label>
+      <label v-if="supportsOutputCompression && outputCompression !== null" class="compression-control">
+        <span>压缩 {{ outputCompression }}%</span>
+        <input :value="outputCompression" :min="compressionMin" :max="compressionMax" type="range" data-testid="image-output-compression" @input="emit('update:outputCompression', Number(($event.target as HTMLInputElement).value))">
+      </label>
+      <label v-if="backgroundOptions.length" class="composer-select">
+        <span class="sr-only">背景</span>
+        <span class="composer-select-width" aria-hidden="true">{{ background }}</span>
+        <select :value="background" data-testid="image-background-select" @change="emit('update:background', ($event.target as HTMLSelectElement).value)">
+          <option v-for="item in backgroundOptions" :key="item" :value="item">{{ item }}</option>
+        </select>
+      </label>
+      <label v-if="references.length && inputFidelityOptions.length" class="composer-select">
+        <span class="sr-only">参考图保真度</span>
+        <span class="composer-select-width" aria-hidden="true">{{ inputFidelity }}</span>
+        <select :value="inputFidelity" data-testid="image-input-fidelity-select" @change="emit('update:inputFidelity', ($event.target as HTMLSelectElement).value)">
+          <option v-for="item in inputFidelityOptions" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
       <label class="composer-select">

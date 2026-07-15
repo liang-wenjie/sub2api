@@ -23,9 +23,29 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
   return {
     getConfig: vi.fn().mockResolvedValue({
       image_model_capabilities: {
-        'gpt-image-2': { max_reference_images: 16, max_output_images: 10 },
-        'gpt-image-1': { max_reference_images: 16, max_output_images: 10 },
-        'gemini-2.5-flash-image': { max_reference_images: 10, max_output_images: 4 },
+        'gpt-image-2': {
+          max_reference_images: 16, max_output_images: 10,
+          sizes: { values: ['1024x1024', '1536x1024', '1024x1536'], default: '1024x1024' },
+          quality: { values: ['auto', 'low', 'medium', 'high'], default: 'auto' },
+          output_formats: { values: ['png', 'jpeg', 'webp'], default: 'png' },
+          output_compression: { min: 0, max: 100, default: 100 },
+          background: { values: ['auto', 'transparent', 'opaque'], default: 'auto' },
+          input_fidelity: { values: ['low', 'high'], default: 'high' },
+        },
+        'gpt-image-1': {
+          max_reference_images: 16, max_output_images: 10,
+          sizes: { values: ['1024x1024', '1536x1024', '1024x1536'], default: '1024x1024' },
+          quality: { values: ['auto', 'low', 'medium', 'high'], default: 'auto' },
+          output_formats: { values: ['png', 'jpeg', 'webp'], default: 'png' },
+          output_compression: { min: 0, max: 100, default: 100 },
+          background: { values: ['auto', 'transparent', 'opaque'], default: 'auto' },
+          input_fidelity: { values: ['low', 'high'], default: 'high' },
+        },
+        'gemini-2.5-flash-image': {
+          max_reference_images: 10, max_output_images: 4,
+          aspect_ratios: { values: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'], default: '1:1' },
+          resolutions: { values: ['1K', '2K', '4K'], default: '1K' },
+        },
       },
     }),
     getImageGenerationPreference: vi.fn().mockResolvedValue({ last_api_key_id: null }),
@@ -148,6 +168,78 @@ describe('useImageGeneration', () => {
     state.prompt.value = 'four variations'
     await state.submit()
     expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({ output_count: 4 }))
+  })
+
+  it('derives parameter options and defaults from the selected model', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    await state.initialize()
+
+    expect(state.availableSizes.value).toEqual(['1024x1024', '1536x1024', '1024x1536'])
+    expect(state.availableQualities.value).toEqual(['auto', 'low', 'medium', 'high'])
+    expect(state.quality.value).toBe('auto')
+    expect(state.outputFormat.value).toBe('png')
+    expect(state.background.value).toBe('auto')
+  })
+
+  it('uses all advertised Gemini ratios and clears GPT-only settings', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+    state.quality.value = 'high'
+
+    state.model.value = 'gemini-2.5-flash-image'
+    await nextTick()
+
+    expect(state.availableAspectRatios.value).toEqual(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'])
+    expect(state.aspectRatio.value).toBe('1:1')
+    expect(state.resolution.value).toBe('1K')
+    expect(state.quality.value).toBe('')
+    expect(state.size.value).toBe('')
+  })
+
+  it('hides advanced settings and omits stale values for an unconfigured model', async () => {
+    const customKey: ImageApiKey = {
+      ...key,
+      group: { allow_image_generation: true, models_list_config: { enabled: true, models: ['gpt-image-custom'] } },
+    }
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [customKey] })
+    await state.initialize()
+    state.quality.value = 'high'
+    state.model.value = 'gpt-image-custom'
+    await nextTick()
+    state.prompt.value = 'draw a lamp'
+
+    await state.submit()
+
+    expect(state.availableQualities.value).toEqual([])
+    expect(state.quality.value).toBe('')
+    const request = api.generate.mock.calls[0][0] as Record<string, unknown>
+    expect(request).not.toHaveProperty('quality')
+    expect(request).not.toHaveProperty('aspect_ratio')
+  })
+
+  it('serializes only active model parameters', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+    state.outputFormat.value = 'webp'
+    await nextTick()
+    state.quality.value = 'high'
+    state.outputCompression.value = 82
+    state.background.value = 'transparent'
+    state.prompt.value = 'draw a lamp'
+
+    await state.submit()
+
+    expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({
+      size: '1024x1024', quality: 'high', output_format: 'webp', output_compression: 82, background: 'transparent',
+    }))
+    expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('画质: high')
+    expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('格式: webp')
+    expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('压缩: 82%')
   })
 
   it('submits the selected API key id without the key secret or duplicate metadata', async () => {

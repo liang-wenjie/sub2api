@@ -103,6 +103,7 @@ describe('image generation components', () => {
         prompt: '',
         model: 'gpt-image-2',
         size: '1536x1024',
+        sizeOptions: ['1024x1024', '1536x1024', '1024x1536'],
         outputCount: 3,
         maxOutputImages: 4,
         models: ['gpt-image-2', 'image-model-with-a-long-name'],
@@ -121,6 +122,54 @@ describe('image generation components', () => {
     expect(wrapper.emitted('update:model')?.[0]).toEqual(['image-model-with-a-long-name'])
     expect(wrapper.emitted('update:size')?.[0]).toEqual(['1024x1536'])
     expect(wrapper.emitted('update:outputCount')?.[0]).toEqual([4])
+  })
+
+  it('renders only the parameter controls advertised by the selected model', async () => {
+    const ratios = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: '', model: 'gemini-2.5-flash-image', size: '', models: ['gemini-2.5-flash-image'], busy: false,
+        sizeOptions: [], aspectRatio: '1:1', aspectRatioOptions: ratios, resolution: '1K', resolutionOptions: ['1K', '2K', '4K'],
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="image-aspect-ratio-select"] option')).toHaveLength(10)
+    expect(wrapper.find('[data-testid="image-size-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="image-quality-select"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="image-aspect-ratio-select"]').setValue('21:9')
+    expect(wrapper.emitted('update:aspectRatio')?.[0]).toEqual(['21:9'])
+  })
+
+  it('shows GPT quality, format, compression, background, and edit fidelity controls', async () => {
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: '', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], busy: false,
+        sizeOptions: ['1024x1024'], quality: 'high', qualityOptions: ['auto', 'low', 'medium', 'high'],
+        outputFormat: 'webp', outputFormatOptions: ['png', 'jpeg', 'webp'], outputCompression: 82,
+        compressionMin: 0, compressionMax: 100, supportsOutputCompression: true,
+        background: 'transparent', backgroundOptions: ['auto', 'transparent', 'opaque'],
+        inputFidelity: 'high', inputFidelityOptions: ['low', 'high'],
+        references: [{ id: 'ref', dataUrl: 'data:image/png;base64,cG5n', fileName: 'ref.png', mimeType: 'image/png' }],
+      },
+    })
+
+    expect(wrapper.get('[data-testid="image-quality-select"]').element).toBeTruthy()
+    expect(wrapper.get('[data-testid="image-output-format-select"]').element).toBeTruthy()
+    expect(wrapper.get('[data-testid="image-output-compression"]').attributes('min')).toBe('0')
+    expect(wrapper.get('[data-testid="image-background-select"]').element).toBeTruthy()
+    expect(wrapper.get('[data-testid="image-input-fidelity-select"]').element).toBeTruthy()
+    await wrapper.get('[data-testid="image-output-compression"]').setValue(75)
+    expect(wrapper.emitted('update:outputCompression')?.[0]).toEqual([75])
+  })
+
+  it('hides unsupported advanced controls for an unconfigured model', () => {
+    const wrapper = mount(PromptComposer, {
+      props: { prompt: '', model: 'gpt-image-custom', size: '1024x1024', models: ['gpt-image-custom'], busy: false },
+    })
+
+    expect(wrapper.find('[data-testid="image-quality-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="image-aspect-ratio-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="image-output-compression"]').exists()).toBe(false)
   })
 
   it('renders the original Chinese generation actions', () => {
@@ -277,7 +326,7 @@ describe('image generation components', () => {
             content: '生成一只小狗',
             createdAt: 'now',
             referenceImages: [{ id: 'ref-1', dataUrl: 'data:image/png;base64,abc', fileName: 'dog.png', mimeType: 'image/png' }],
-            requestSettings: [{ modelLabel: 'gpt-image-2', sizeLabel: '1024x1024', countLabel: '1' }],
+            requestSettings: [{ modelLabel: 'gpt-image-2', sizeLabel: '1024x1024', countLabel: '1', detailsLabel: '画质: high | 格式: webp' }],
           }],
         },
       },
@@ -287,6 +336,7 @@ describe('image generation components', () => {
     expect(wrapper.text()).toContain('创作描述')
     expect(wrapper.text()).toContain('生成一只小狗')
     expect(wrapper.text()).toContain('生成参数')
+    expect(wrapper.text()).toContain('画质: high | 格式: webp')
     expect(wrapper.text()).toContain('Prompt')
     expect(wrapper.text()).toContain('GPT Image 2 | 1024 × 1024 | 数量: 1')
   })

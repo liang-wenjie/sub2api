@@ -41,11 +41,29 @@ export function projectConversationMessages(records: HistoryRecord[]): ChatMessa
       const user: ChatMessage = {
         id: `${record.id}-user`, role: 'user', content: record.prompt,
         createdAt: new Date(record.created_at).toLocaleString(), referenceImages: references(record),
-        requestSettings: [{ modelLabel: String(record.request.model ?? ''), sizeLabel: String(record.request.size ?? ''), countLabel: `数量: ${Number(record.request.output_count) || 1}` }],
+        requestSettings: [{
+          modelLabel: String(record.request.model ?? ''),
+          sizeLabel: String(record.request.size ?? record.request.aspect_ratio ?? ''),
+          countLabel: `数量: ${Number(record.request.output_count) || 1}`,
+          detailsLabel: historyParameterSummary(record.request),
+        }],
       }
       if (record.status === 'pending') return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...', createdAt: new Date(record.updated_at).toLocaleString(), status: 'pending' } as ChatMessage]
       if (record.status === 'failed' || record.status === 'canceled') return [user, { id: `${record.id}-assistant`, role: 'assistant', content: record.error_message || (record.status === 'canceled' ? '生成已取消' : '图片生成失败'), createdAt: new Date(record.updated_at).toLocaleString(), status: record.status } as ChatMessage]
       const generated = images(record)
       return generated.length ? [user, { id: `${record.id}-assistant`, role: 'assistant', content: '生成结果', createdAt: new Date(record.updated_at).toLocaleString(), images: generated } as ChatMessage] : [user]
     })
+}
+
+function historyParameterSummary(request: Record<string, unknown>): string {
+  const details = [
+    request.aspect_ratio ? `比例: ${request.aspect_ratio}` : '',
+    request.resolution ? `分辨率: ${request.resolution}` : '',
+    request.quality ? `画质: ${request.quality}` : '',
+    request.output_format ? `格式: ${request.output_format}` : '',
+    request.output_compression !== undefined ? `压缩: ${request.output_compression}%` : '',
+    request.background ? `背景: ${request.background}` : '',
+    request.input_fidelity ? `保真度: ${request.input_fidelity}` : '',
+  ]
+  return details.filter(Boolean).join(' | ')
 }
