@@ -411,10 +411,17 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     return details.join('\n')
   }
 
-  function presetPrompt(userPrompt: string): string {
-    const description = presetDescription(presetSelection.value)
-    if (!description || userPrompt.includes(description)) return userPrompt
-    return `${userPrompt}\n${description}`
+  function presetPrompt(userPrompt: string, includeAngles = true): string {
+    const fullDescription = presetDescription(presetSelection.value)
+    const basePrompt = fullDescription && userPrompt.includes(fullDescription)
+      ? userPrompt.replace(fullDescription, '').trimEnd()
+      : userPrompt
+    const selection = includeAngles
+      ? presetSelection.value
+      : { ...presetSelection.value, angles: [] }
+    const description = presetDescription(selection)
+    if (!description || basePrompt.includes(description)) return basePrompt
+    return `${basePrompt}\n${description}`
   }
 
   function applyPresetSelection(selection: ImagePresetSelection): void {
@@ -483,7 +490,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const key = selectedKey.value
     const userPrompt = (submitOptions.prompt ?? prompt.value).trim()
     const references = submitOptions.references ?? conversation?.referenceImages ?? []
-    const composedPrompt = presetPrompt(userPrompt)
+    const hasMultipleAngles = presetSelection.value.angles.length > 1
+    const composedPrompt = presetPrompt(userPrompt, !hasMultipleAngles)
     const variants = angleVariants(composedPrompt)
     const requestedOutputCount = variants?.length ?? Math.min(Math.max(submitOptions.outputCount ?? outputCount.value, 1), maxOutputImages.value)
     if (!conversation || !key || !userPrompt || references.length > maxReferenceImages.value) return

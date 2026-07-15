@@ -518,6 +518,12 @@ describe('useImageGeneration', () => {
       output_count: 1,
       prompt: expect.stringContaining('角度：背面'),
     }))
+    const frontPrompt = api.generate.mock.calls[0][0].prompt
+    const backPrompt = api.generate.mock.calls[1][0].prompt
+    expect(frontPrompt).not.toContain('背面')
+    expect(frontPrompt).not.toContain('分别生成独立图片')
+    expect(backPrompt).not.toContain('正面')
+    expect(backPrompt).not.toContain('分别生成独立图片')
     expect(api.generate.mock.calls[0][0]).not.toHaveProperty('variants')
     expect(api.generate.mock.calls[1][0]).not.toHaveProperty('variants')
     expect(state.activeConversation.value?.messages.filter(message => message.role === 'assistant')).toHaveLength(2)
