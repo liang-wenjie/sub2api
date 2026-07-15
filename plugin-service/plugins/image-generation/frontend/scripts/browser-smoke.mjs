@@ -22,13 +22,32 @@ async function preparePage(viewport) {
     contentType: 'application/json',
     body: JSON.stringify({ code: 0, data: { items: [{
       id: 1, key: 'sk-test', name: 'Browser test key', status: 'active',
-      group: { allow_image_generation: true, models_list_config: { enabled: true, models: ['gpt-image-2'] } },
+      group: { allow_image_generation: true, models_list_config: { enabled: true, models: ['gpt-image-2', 'gemini-2.5-flash-image'] } },
     }] } }),
+  }))
+  await page.route('**/api/v1/user/preferences/image-generation', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ code: 0, data: { last_api_key_id: 1 } }),
   }))
   await page.route('**/plugins/image-generation/api/**', async route => {
     const url = new URL(route.request().url())
     if (url.pathname.endsWith('/config')) return route.fulfill({ json: {
-      image_model_capabilities: { 'gpt-image-2': { max_reference_images: 16, max_output_images: 10 } },
+      image_model_capabilities: {
+        'gpt-image-2': {
+          max_reference_images: 16, max_output_images: 10,
+          sizes: { values: ['1024x1024', '1536x1024', '1024x1536'], default: '1024x1024' },
+          quality: { values: ['auto', 'low', 'medium', 'high'], default: 'auto' },
+          output_formats: { values: ['png', 'jpeg', 'webp'], default: 'png' },
+          output_compression: { min: 0, max: 100, default: 100 },
+          background: { values: ['auto', 'transparent', 'opaque'], default: 'auto' },
+          input_fidelity: { values: ['low', 'high'], default: 'high' },
+        },
+        'gemini-2.5-flash-image': {
+          max_reference_images: 10, max_output_images: 4,
+          aspect_ratios: { values: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'], default: '1:1' },
+          resolutions: { values: ['1K', '2K', '4K'], default: '1K' },
+        },
+      },
     } })
     if (url.pathname.endsWith('/references') && route.request().method() === 'POST') {
       uploadIndex += 1
@@ -47,7 +66,8 @@ async function preparePage(viewport) {
     if (url.pathname.endsWith('/conversations')) return route.fulfill({ json: { items: [] } })
     if (url.pathname.includes('/conversations/') && url.pathname.endsWith('/messages')) return route.fulfill({ json: { items: [] } })
     if (url.pathname.endsWith('/generate')) {
-      if (route.request().postDataJSON()?.output_count !== 3) throw new Error('Generation request is missing output_count=3')
+      const generationPayload = route.request().postDataJSON()
+      if (generationPayload?.output_count !== 3) throw new Error('Generation request is missing output_count=3')
       return route.fulfill({ status: 201, json: {
       job_id: 'browser-job', status: 'succeeded',
       result: { images: [{
@@ -65,6 +85,13 @@ async function preparePage(viewport) {
 try {
   const desktop = await preparePage({ width: 1440, height: 900 })
   await desktop.goto(baseURL, { waitUntil: 'networkidle' })
+  if (await desktop.getByTestId('image-quality-select').count() !== 1) throw new Error('GPT quality control is missing')
+  await desktop.getByTestId('image-output-format-select').selectOption('webp')
+  if (await desktop.getByTestId('image-output-compression').count() !== 1) throw new Error('WebP compression control is missing')
+  await desktop.getByTestId('image-model-select').selectOption('gemini-2.5-flash-image')
+  if (await desktop.getByTestId('image-aspect-ratio-select').locator('option').count() !== 10) throw new Error('Gemini ratio list is incomplete')
+  if (await desktop.getByTestId('image-quality-select').count() !== 0) throw new Error('GPT controls remain visible for Gemini')
+  await desktop.getByTestId('image-model-select').selectOption('gpt-image-2')
   await desktop.getByTestId('reference-image-input').setInputFiles([1, 2].map(index => ({
     name: `reference-${index}.png`, mimeType: 'image/png', buffer: referenceImage,
   })))
@@ -106,7 +133,13 @@ try {
   await desktop.getByTestId('image-prompt-input').fill('Create a browser smoke image')
   await desktop.getByTestId('image-output-count').selectOption('3')
   await desktop.getByTestId('image-send-button').click()
-  await desktop.getByTestId('message-attachments').getByText('Browser smoke result').waitFor()
+  try {
+    await desktop.getByTestId('message-attachments').getByText('Browser smoke result').waitFor()
+  } catch (error) {
+    console.error('Browser smoke page text:', await desktop.locator('body').innerText())
+    console.error('Browser smoke console errors:', errors)
+    throw error
+  }
   const visualContract = await desktop.evaluate(() => {
     const style = (selector) => getComputedStyle(document.querySelector(selector))
     return {
