@@ -82,6 +82,21 @@ export interface GenerateRequest {
   inputs?: Record<string, unknown>
 }
 
+export interface OptimizePromptRequest {
+  prompt: string
+  api_key_id: number
+  model: string
+}
+
+export interface OptimizePromptResponse {
+  prompt: string
+  model: string
+}
+
+export interface PromptModelsResponse {
+  models: string[]
+}
+
 export interface GeneratedImagePayload {
   url?: string
   preview_url?: string

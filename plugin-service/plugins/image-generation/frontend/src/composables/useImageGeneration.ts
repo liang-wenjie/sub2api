@@ -63,6 +63,9 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const aspectRatio = ref('')
   const resolution = ref('')
   const prompt = ref('')
+  const promptOptimizerModel = ref('')
+  const promptOptimizerModels = ref<string[]>([])
+  const optimizingPrompt = ref(false)
   const conversations = ref<Conversation[]>([])
   const activeConversationId = ref('')
   const generationStatus = ref<GenerationStatus>('idle')
@@ -72,6 +75,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const conversationNextCursor = ref<Record<string, string>>({})
   const loadingConversation = ref(false)
   let conversationRequestSequence = 0
+  let promptModelRequestSequence = 0
+  let promptOptimizationController: AbortController | null = null
   let pollTimer: ReturnType<typeof setTimeout> | undefined
   let initializedKeySelection = false
 
@@ -124,7 +129,12 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     } catch (error) {
       errorMessage.value = error instanceof Error ? error.message : String(error)
     }
+    await loadPromptOptimizerModels(next)
   })
+
+  watch(promptOptimizerModels, models => {
+    promptOptimizerModel.value = models.includes(promptOptimizerModel.value) ? promptOptimizerModel.value : models[0] ?? ''
+  }, { immediate: true })
 
   function timestamp(): string {
     return now().toLocaleString()
@@ -157,6 +167,26 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     conversations.value = [conversation, ...conversations.value.filter(item => item.id !== id)]
   }
 
+  async function loadPromptOptimizerModels(apiKeyID: number | null): Promise<void> {
+    const sequence = ++promptModelRequestSequence
+    if (!apiKeyID) {
+      promptOptimizerModels.value = []
+      promptOptimizerModel.value = ''
+      return
+    }
+    try {
+      const response = await options.api.listPromptModels(apiKeyID)
+      if (sequence !== promptModelRequestSequence) return
+      promptOptimizerModels.value = response.models
+      promptOptimizerModel.value = response.models.includes(promptOptimizerModel.value) ? promptOptimizerModel.value : response.models[0] ?? ''
+    } catch (error) {
+      if (sequence !== promptModelRequestSequence) return
+      promptOptimizerModels.value = []
+      promptOptimizerModel.value = ''
+      errorMessage.value = error instanceof Error ? error.message : String(error)
+    }
+  }
+
   async function initialize(): Promise<void> {
     if (!activeConversation.value) createConversation()
     const configPromise = options.api.getConfig().then((config) => {
@@ -184,6 +214,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         errorMessage.value = error instanceof Error ? error.message : String(error)
       }
     }
+    await loadPromptOptimizerModels(nextKeyID)
     await nextTick()
     initializedKeySelection = true
     await configPromise
@@ -260,6 +291,40 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       }
     }
     errorMessage.value = errors.join('\n')
+  }
+
+  async function optimizePrompt(selectedModel = promptOptimizerModel.value): Promise<void> {
+    const key = selectedKey.value
+    const userPrompt = prompt.value.trim()
+    const modelName = selectedModel.trim()
+    if (!key || !userPrompt || !modelName || optimizingPrompt.value) return
+    const controller = new AbortController()
+    promptOptimizationController = controller
+    optimizingPrompt.value = true
+    errorMessage.value = ''
+    try {
+      const response = await options.api.optimizePrompt({
+        prompt: userPrompt,
+        api_key_id: key.id,
+        model: modelName,
+      }, controller.signal)
+      const optimized = response.prompt.trim()
+      if (optimized) prompt.value = optimized
+    } catch (error) {
+      if (controller.signal.aborted) return
+      errorMessage.value = error instanceof Error ? error.message : String(error)
+    } finally {
+      if (promptOptimizationController === controller) {
+        promptOptimizationController = null
+        optimizingPrompt.value = false
+      }
+    }
+  }
+
+  function cancelPromptOptimization(): void {
+    promptOptimizationController?.abort()
+    promptOptimizationController = null
+    optimizingPrompt.value = false
   }
 
   function requestPrompt(userPrompt: string, references: ImageReference[]): string {
@@ -550,6 +615,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
 
   function dispose(): void {
     clearTimeout(pollTimer)
+    cancelPromptOptimization()
   }
 
   return {
@@ -579,6 +645,9 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     supportsOutputCompression,
     outputCount,
     prompt,
+    promptOptimizerModel,
+    promptOptimizerModels,
+    optimizingPrompt,
     conversations,
     activeConversationId,
     activeConversation,
@@ -592,6 +661,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     createConversation,
     selectConversation,
     loadOlderMessages,
+    optimizePrompt,
+    cancelPromptOptimization,
     submit,
     cancelGeneration,
     repeatFromImage,

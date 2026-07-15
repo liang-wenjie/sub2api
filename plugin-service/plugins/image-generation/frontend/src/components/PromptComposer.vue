@@ -27,6 +27,9 @@ const props = withDefaults(defineProps<{
   inputFidelity?: string
   inputFidelityOptions?: string[]
   models: string[]
+  promptOptimizerModel?: string
+  promptOptimizerModels?: string[]
+  optimizingPrompt?: boolean
   busy: boolean
   references?: ImageReference[]
   maxReferenceImages?: number
@@ -37,6 +40,9 @@ const props = withDefaults(defineProps<{
   maxOutputImages: 1,
   maxReferenceImages: 1,
   referenceLimitExceeded: false,
+  promptOptimizerModel: '',
+  promptOptimizerModels: () => [],
+  optimizingPrompt: false,
   sizeOptions: () => [],
   aspectRatio: '', aspectRatioOptions: () => [],
   resolution: '', resolutionOptions: () => [],
@@ -59,16 +65,30 @@ const emit = defineEmits<{
   'update:outputCompression': [value: number]
   'update:background': [value: string]
   'update:inputFidelity': [value: string]
+  'update:promptOptimizerModel': [value: string]
   submit: []
   stop: []
+  optimizePrompt: [model: string]
+  cancelPromptOptimization: []
   referenceFiles: [value: File[]]
   removeReference: [id: string]
   clearReferences: []
 }>()
 
 const fanExpanded = ref(false)
+const optimizeDialogOpen = ref(false)
+const selectedOptimizerModel = ref(props.promptOptimizerModel)
 const effectiveSizeOptions = computed(() => props.sizeOptions.length ? props.sizeOptions : props.size ? [props.size] : [])
+const canOptimizePrompt = computed(() => Boolean(props.prompt.trim() && props.promptOptimizerModels.length && !props.busy))
 let preserveFanFocus = false
+
+watch(() => props.promptOptimizerModel, (model) => {
+  selectedOptimizerModel.value = model
+})
+
+watch(() => props.promptOptimizerModels, (models) => {
+  if (!models.includes(selectedOptimizerModel.value)) selectedOptimizerModel.value = models[0] ?? ''
+})
 
 watch(() => props.references.length, (count) => {
   if (count < 2) fanExpanded.value = false
@@ -139,6 +159,27 @@ function readReference(event: Event) {
   if (!files.length) return
   emit('referenceFiles', files)
   input.value = ''
+}
+
+function openOptimizeDialog() {
+  if (!canOptimizePrompt.value) return
+  selectedOptimizerModel.value = props.promptOptimizerModel || props.promptOptimizerModels[0] || ''
+  optimizeDialogOpen.value = true
+}
+
+function handleMagicButton() {
+  if (props.optimizingPrompt) {
+    emit('cancelPromptOptimization')
+    return
+  }
+  openOptimizeDialog()
+}
+
+function confirmOptimizePrompt() {
+  if (!selectedOptimizerModel.value) return
+  emit('update:promptOptimizerModel', selectedOptimizerModel.value)
+  emit('optimizePrompt', selectedOptimizerModel.value)
+  optimizeDialogOpen.value = false
 }
 
 </script>
@@ -309,9 +350,39 @@ function readReference(event: Event) {
       <button v-if="busy" type="button" class="send-button stop-button" aria-label="停止生成" @click="emit('stop')">
         <span aria-hidden="true" class="stop-icon" />
       </button>
-      <button v-else type="submit" class="send-button" data-testid="image-send-button" :aria-label="referenceLimitExceeded ? `无法发送：当前模型最多支持 ${maxReferenceImages} 张参考图` : '发送图片提示词'" :disabled="!prompt.trim() || referenceLimitExceeded">
+      <button
+        v-if="!busy"
+        type="button"
+        class="magic-button"
+        :class="{ optimizing: optimizingPrompt }"
+        data-testid="prompt-optimize-button"
+        :aria-label="optimizingPrompt ? '停止优化提示词' : '优化提示词'"
+        :disabled="!optimizingPrompt && !canOptimizePrompt"
+        @click="handleMagicButton"
+      >
+        <span v-if="optimizingPrompt" aria-hidden="true" class="magic-spinner" />
+        <span v-else aria-hidden="true">✦</span>
+      </button>
+      <button v-if="!busy" type="submit" class="send-button" data-testid="image-send-button" :aria-label="referenceLimitExceeded ? `无法发送：当前模型最多支持 ${maxReferenceImages} 张参考图` : '发送图片提示词'" :disabled="!prompt.trim() || referenceLimitExceeded">
         <span aria-hidden="true">↑</span>
       </button>
+    </div>
+    <div v-if="optimizeDialogOpen" class="dialog-overlay" @keydown.esc="optimizeDialogOpen = false">
+      <section class="prompt-optimizer-dialog" role="dialog" aria-modal="true" aria-labelledby="prompt-optimizer-title">
+        <h2 id="prompt-optimizer-title">优化提示词</h2>
+        <label class="optimizer-model-field">
+          <span>思考模型</span>
+          <select v-model="selectedOptimizerModel" data-testid="prompt-optimizer-model">
+            <option v-for="item in promptOptimizerModels" :key="item" :value="item">{{ item }}</option>
+          </select>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" @click="optimizeDialogOpen = false">取消</button>
+          <button type="button" class="primary-button" :disabled="!selectedOptimizerModel || optimizingPrompt" @click="confirmOptimizePrompt">
+            {{ optimizingPrompt ? '优化中' : '优化' }}
+          </button>
+        </div>
+      </section>
     </div>
   </form>
 </template>

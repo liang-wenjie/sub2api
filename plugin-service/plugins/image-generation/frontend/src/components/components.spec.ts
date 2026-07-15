@@ -97,6 +97,28 @@ describe('image generation components', () => {
     expect(wrapper.get('[data-testid="image-send-button"]').attributes('aria-label')).toBeTruthy()
   })
 
+  it('shows a spinner and emits cancellation while optimizing a prompt', async () => {
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: 'orange cat',
+        model: 'gpt-image-2',
+        size: '1024x1024',
+        models: ['gpt-image-2'],
+        promptOptimizerModel: 'gpt-5.1',
+        promptOptimizerModels: ['gpt-5.1'],
+        optimizingPrompt: true,
+        busy: false,
+      },
+    })
+    const button = wrapper.get('[data-testid="prompt-optimize-button"]')
+
+    expect(button.attributes('aria-label')).toBe('停止优化提示词')
+    expect(button.find('.magic-spinner').exists()).toBe(true)
+    await button.trigger('click')
+
+    expect(wrapper.emitted('cancelPromptOptimization')).toHaveLength(1)
+  })
+
   it('sizes generation selects from their current visible values', async () => {
     const wrapper = mount(PromptComposer, {
       props: {

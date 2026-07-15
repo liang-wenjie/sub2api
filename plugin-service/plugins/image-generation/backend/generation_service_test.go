@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,10 +35,18 @@ type memoryMediaStorage struct {
 type fakeAPIKeyResolver struct {
 	secret string
 	calls  []int64
+	models []string
 }
 
-func (r *fakeAPIKeyResolver) Resolve(_ context.Context, _ *http.Request, _ model.CurrentPrincipal, _ string, keyID int64, _ string) (string, error) {
+func (r *fakeAPIKeyResolver) Resolve(_ context.Context, _ *http.Request, _ model.CurrentPrincipal, _ string, keyID int64, modelName string) (string, error) {
 	r.calls = append(r.calls, keyID)
+	r.models = append(r.models, modelName)
+	return r.secret, nil
+}
+
+func (r *fakeAPIKeyResolver) ResolveAny(_ context.Context, _ *http.Request, _ model.CurrentPrincipal, _ string, keyID int64) (string, error) {
+	r.calls = append(r.calls, keyID)
+	r.models = append(r.models, "")
 	return r.secret, nil
 }
 
@@ -70,6 +79,117 @@ func (s *memoryMediaStorage) Delete(_ context.Context, key string) error {
 
 func (s *memoryMediaStorage) PresignGet(_ context.Context, key string, _ time.Duration) (*url.URL, error) {
 	return url.Parse("https://minio.example/" + key)
+}
+
+func TestGenerationService_OptimizePromptUsesSelectedKeyAndModel(t *testing.T) {
+	var providerRequest struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-secret" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&providerRequest); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"A cinematic orange cat portrait, soft window light."}}]}`))
+	}))
+	defer upstream.Close()
+
+	resolver := &fakeAPIKeyResolver{secret: "provider-secret"}
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), APIKeyResolver: resolver})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	response, err := svc.OptimizePromptWithRequest(context.Background(), httptest.NewRequest(http.MethodPost, "/", nil), principal, upstream.URL, OptimizePromptRequest{
+		Prompt:   "orange cat",
+		APIKeyID: 42,
+		Model:    "gpt-5.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Prompt != "A cinematic orange cat portrait, soft window light." || response.Model != "gpt-5.1" {
+		t.Fatalf("response = %#v", response)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0] != 42 || resolver.models[0] != "" {
+		t.Fatalf("resolver calls = %#v models=%#v", resolver.calls, resolver.models)
+	}
+	if providerRequest.Model != "gpt-5.1" || len(providerRequest.Messages) != 2 || !strings.Contains(providerRequest.Messages[1].Content, "orange cat") {
+		t.Fatalf("provider request = %#v", providerRequest)
+	}
+}
+
+func TestGenerationService_OptimizePromptFallsBackWhenProviderReturnsEmptyContent(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""}}]}`))
+	}))
+	defer upstream.Close()
+
+	resolver := &fakeAPIKeyResolver{secret: "provider-secret"}
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), APIKeyResolver: resolver})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	response, err := svc.OptimizePromptWithRequest(context.Background(), httptest.NewRequest(http.MethodPost, "/", nil), principal, upstream.URL, OptimizePromptRequest{
+		Prompt: "一只橙色的猫", APIKeyID: 42, Model: "gpt-5.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(response.Prompt, "一只橙色的猫") || !strings.Contains(response.Prompt, "构图") {
+		t.Fatalf("fallback prompt = %q", response.Prompt)
+	}
+}
+
+func TestExtractOptimizedPromptSupportsContentParts(t *testing.T) {
+	prompt := extractOptimizedPrompt(map[string]any{
+		"choices": []any{
+			map[string]any{
+				"message": map[string]any{
+					"content": []any{
+						map[string]any{"type": "text", "text": "Detailed cinematic cat prompt"},
+					},
+				},
+			},
+		},
+	})
+	if prompt != "Detailed cinematic cat prompt" {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
+func TestGenerationService_PromptModelsUsesSelectedKeyV1Models(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-secret" {
+			t.Fatalf("authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-image-2"},{"id":"gpt-5.1"},{"id":"sora-2"},{"id":"claude-sonnet-4-5"},{"id":"gpt-5.1"}]}`))
+	}))
+	defer upstream.Close()
+
+	resolver := &fakeAPIKeyResolver{secret: "provider-secret"}
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), APIKeyResolver: resolver})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	response, err := svc.PromptModelsWithRequest(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil), principal, upstream.URL, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := response.Models, []string{"gpt-5.1", "claude-sonnet-4-5"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %#v, want %#v", got, want)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0] != 42 || resolver.models[0] != "" {
+		t.Fatalf("resolver calls = %#v models=%#v", resolver.calls, resolver.models)
+	}
 }
 
 func TestGenerationService_ArchivesBase64Result(t *testing.T) {

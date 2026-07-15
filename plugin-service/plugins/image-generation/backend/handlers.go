@@ -75,6 +75,8 @@ func NewHandler(deps HandlerDeps) *Handler {
 func RegisterRoutes(mux *http.ServeMux, authMiddleware *hostprincipal.Middleware, handler *Handler) {
 	mux.HandleFunc("GET "+apiBasePath+"/me", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Me))
 	mux.HandleFunc("GET "+apiBasePath+"/config", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Config))
+	mux.HandleFunc("GET "+apiBasePath+"/prompt-models", authMiddleware.RequirePlugin(imagemanifest.Key, handler.PromptModels))
+	mux.HandleFunc("POST "+apiBasePath+"/optimize-prompt", authMiddleware.RequirePlugin(imagemanifest.Key, handler.OptimizePrompt))
 	mux.HandleFunc("POST "+apiBasePath+"/generate", authMiddleware.RequirePlugin(imagemanifest.Key, handler.Generate))
 	mux.HandleFunc("POST "+apiBasePath+"/references", authMiddleware.RequirePlugin(imagemanifest.Key, handler.UploadReference))
 	mux.HandleFunc("GET "+apiBasePath+"/references/{upload_id}/{variant}", authMiddleware.RequirePlugin(imagemanifest.Key, handler.GetUploadedReference))
@@ -234,6 +236,54 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request, principal mod
 	}
 
 	httpx.WriteJSON(w, http.StatusCreated, compactGenerateResponse(resp))
+}
+
+func (h *Handler) OptimizePrompt(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	var req OptimizePromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	resp, err := h.generation.OptimizePromptWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), req)
+	if err != nil {
+		if errors.Is(err, ErrPromptRequired) || errors.Is(err, ErrPromptModelRequired) || errors.Is(err, ErrProviderKeyRequired) || errors.Is(err, ErrAPIKeyUnavailable) {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		var upstreamErr *UpstreamHTTPError
+		if errors.As(err, &upstreamErr) {
+			httpx.WriteError(w, upstreamErr.StatusCode, upstreamErr.Message)
+			return
+		}
+		log.Printf("[plugin-service] optimize prompt handler error user_id=%d err=%v", principal.UserID, err)
+		httpx.WriteError(w, http.StatusInternalServerError, "prompt optimization failed")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) PromptModels(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
+	apiKeyID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("api_key_id")), 10, 64)
+	if err != nil || apiKeyID <= 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "api_key_id is required")
+		return
+	}
+	resp, err := h.generation.PromptModelsWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), apiKeyID)
+	if err != nil {
+		if errors.Is(err, ErrAPIKeyUnavailable) || errors.Is(err, ErrProviderKeyRequired) {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		var upstreamErr *UpstreamHTTPError
+		if errors.As(err, &upstreamErr) {
+			httpx.WriteError(w, upstreamErr.StatusCode, upstreamErr.Message)
+			return
+		}
+		log.Printf("[plugin-service] prompt models handler error user_id=%d err=%v", principal.UserID, err)
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to list prompt models")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) ListCreations(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {

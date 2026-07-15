@@ -29,6 +29,7 @@ import (
 
 var (
 	ErrPromptRequired        = errors.New("prompt is required")
+	ErrPromptModelRequired   = errors.New("prompt optimization model is required")
 	ErrProviderKeyRequired   = errors.New("provider api key is required")
 	ErrProviderBaseURL       = errors.New("provider base url is required")
 	ErrImageModelUnsupported = errors.New("image generation model is not supported")
@@ -110,6 +111,22 @@ type GenerateResponse struct {
 	JobID  string         `json:"job_id"`
 	Status string         `json:"status"`
 	Result map[string]any `json:"result,omitempty"`
+}
+
+type OptimizePromptRequest struct {
+	Prompt         string `json:"prompt"`
+	APIKeyID       int64  `json:"api_key_id"`
+	ProviderAPIKey string `json:"-"`
+	Model          string `json:"model"`
+}
+
+type OptimizePromptResponse struct {
+	Prompt string `json:"prompt"`
+	Model  string `json:"model"`
+}
+
+type PromptModelsResponse struct {
+	Models []string `json:"models"`
 }
 
 type ReferenceImage struct {
@@ -256,6 +273,55 @@ func (s *GenerationService) Generate(ctx context.Context, principal model.Curren
 
 func (s *GenerationService) GenerateWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
 	return s.generate(ctx, source, principal, providerBaseURL, req)
+}
+
+func (s *GenerationService) OptimizePromptWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, req OptimizePromptRequest) (*OptimizePromptResponse, error) {
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	if req.Prompt == "" {
+		return nil, ErrPromptRequired
+	}
+	req.Model = strings.TrimSpace(req.Model)
+	if req.Model == "" {
+		return nil, ErrPromptModelRequired
+	}
+	if strings.TrimSpace(providerBaseURL) == "" {
+		return nil, ErrProviderBaseURL
+	}
+	if req.APIKeyID > 0 {
+		secret, err := s.keyResolver.ResolveAny(ctx, source, principal, providerBaseURL, req.APIKeyID)
+		if err != nil {
+			return nil, err
+		}
+		req.ProviderAPIKey = secret
+	} else {
+		req.ProviderAPIKey = strings.TrimSpace(req.ProviderAPIKey)
+		if req.ProviderAPIKey == "" {
+			return nil, ErrProviderKeyRequired
+		}
+	}
+	optimized, err := s.optimizePromptWithProvider(ctx, providerBaseURL, req)
+	if err != nil {
+		return nil, err
+	}
+	return &OptimizePromptResponse{Prompt: optimized, Model: req.Model}, nil
+}
+
+func (s *GenerationService) PromptModelsWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, apiKeyID int64) (*PromptModelsResponse, error) {
+	if strings.TrimSpace(providerBaseURL) == "" {
+		return nil, ErrProviderBaseURL
+	}
+	if apiKeyID <= 0 {
+		return nil, ErrAPIKeyUnavailable
+	}
+	secret, err := s.keyResolver.ResolveAny(ctx, source, principal, providerBaseURL, apiKeyID)
+	if err != nil {
+		return nil, err
+	}
+	models, err := s.promptModelsWithProvider(ctx, providerBaseURL, secret)
+	if err != nil {
+		return nil, err
+	}
+	return &PromptModelsResponse{Models: models}, nil
 }
 
 func (s *GenerationService) generate(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
@@ -710,6 +776,212 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 		return merged, nil
 	}
 	return s.generateSingleWithProvider(ctx, providerBaseURL, req)
+}
+
+func (s *GenerationService) optimizePromptWithProvider(ctx context.Context, providerBaseURL string, req OptimizePromptRequest) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(providerBaseURL), "/")
+	if baseURL == "" {
+		return "", ErrProviderBaseURL
+	}
+	payload := map[string]any{
+		"model": req.Model,
+		"messages": []map[string]string{
+			{
+				"role": "system",
+				"content": strings.Join([]string{
+					"You are an expert prompt engineer for image generation.",
+					"Rewrite the user's prompt into one stronger prompt that will produce a better image.",
+					"Preserve the user's intent, subject, style, language, and every explicit constraint.",
+					"Improve visual specificity: subject, composition, lighting, mood, environment, materials, color palette, camera angle, and quality details where useful.",
+					"Do not add unrelated objects, text, watermarks, logos, signatures, or explanations.",
+					"Return only the optimized image prompt.",
+				}, " "),
+			},
+			{
+				"role": "user",
+				"content": strings.Join([]string{
+					"Optimize this prompt for image generation:",
+					req.Prompt,
+				}, "\n"),
+			},
+		},
+		"temperature":           0.2,
+		"max_completion_tokens": 1000,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	requestURL, err := joinProviderPath(baseURL, "/v1/chat/completions")
+	if err != nil {
+		return "", err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+req.ProviderAPIKey)
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message := extractUpstreamErrorMessage(responseBody)
+		if message == "" {
+			message = "upstream prompt optimization failed"
+		}
+		return "", &UpstreamHTTPError{StatusCode: resp.StatusCode, Message: message}
+	}
+	var payloadResponse map[string]any
+	if err := json.Unmarshal(responseBody, &payloadResponse); err != nil {
+		return "", err
+	}
+	optimized := extractOptimizedPrompt(payloadResponse)
+	if optimized == "" {
+		optimized = fallbackOptimizedImagePrompt(req.Prompt)
+	}
+	return optimized, nil
+}
+
+func extractOptimizedPrompt(payload map[string]any) string {
+	if text := strings.TrimSpace(stringValue(payload["output_text"])); text != "" {
+		return text
+	}
+	choices, _ := payload["choices"].([]any)
+	for _, choice := range choices {
+		choiceMap, _ := choice.(map[string]any)
+		if text := strings.TrimSpace(stringValue(choiceMap["text"])); text != "" {
+			return text
+		}
+		message, _ := choiceMap["message"].(map[string]any)
+		if text := contentText(message["content"]); text != "" {
+			return text
+		}
+	}
+	outputs, _ := payload["output"].([]any)
+	for _, output := range outputs {
+		outputMap, _ := output.(map[string]any)
+		if text := contentText(outputMap["content"]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func contentText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			itemMap, _ := item.(map[string]any)
+			text := strings.TrimSpace(stringValue(itemMap["text"]))
+			if text == "" {
+				text = strings.TrimSpace(stringValue(itemMap["output_text"]))
+			}
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	default:
+		return ""
+	}
+}
+
+func fallbackOptimizedImagePrompt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return ""
+	}
+	if containsCJK(prompt) {
+		return strings.Join([]string{
+			"基于以下需求生成一张高质量、视觉一致、细节清晰的图片：",
+			prompt,
+			"强化主体、构图、光线、氛围、环境、材质、色彩层次和镜头视角；保留用户明确提出的所有限制；避免无关元素、文字、水印、标志、签名和畸形细节。",
+		}, "\n")
+	}
+	return strings.Join([]string{
+		"Create a high-quality, visually coherent, detail-rich image based on this request:",
+		prompt,
+		"Strengthen the subject, composition, lighting, mood, environment, materials, color palette, and camera perspective. Preserve every explicit user constraint. Avoid unrelated objects, text, watermarks, logos, signatures, and distorted details.",
+	}, "\n")
+}
+
+func containsCJK(value string) bool {
+	for _, char := range value {
+		if (char >= '\u4e00' && char <= '\u9fff') || (char >= '\u3400' && char <= '\u4dbf') {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *GenerationService) promptModelsWithProvider(ctx context.Context, providerBaseURL, providerAPIKey string) ([]string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(providerBaseURL), "/")
+	if baseURL == "" {
+		return nil, ErrProviderBaseURL
+	}
+	requestURL, err := joinProviderPath(baseURL, "/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+providerAPIKey)
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message := extractUpstreamErrorMessage(body)
+		if message == "" {
+			message = "upstream model list request failed"
+		}
+		return nil, &UpstreamHTTPError{StatusCode: resp.StatusCode, Message: message}
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	models := make([]string, 0, len(payload.Data))
+	seen := make(map[string]struct{}, len(payload.Data))
+	for _, item := range payload.Data {
+		modelName := strings.TrimSpace(item.ID)
+		if modelName == "" || isImageOrVideoModel(modelName) {
+			continue
+		}
+		key := strings.ToLower(modelName)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		models = append(models, modelName)
+	}
+	return models, nil
+}
+
+func isImageOrVideoModel(modelName string) bool {
+	value := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(value, "gpt-image-") || strings.Contains(value, "image") || strings.Contains(value, "sora") || strings.Contains(value, "video")
 }
 
 func (s *GenerationService) generateSingleWithProvider(ctx context.Context, providerBaseURL string, req GenerateRequest) (map[string]any, error) {

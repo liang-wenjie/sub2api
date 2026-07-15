@@ -51,8 +51,10 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
     getImageGenerationPreference: vi.fn().mockResolvedValue({ last_api_key_id: null }),
     saveImageGenerationPreference: vi.fn().mockResolvedValue({ last_api_key_id: null }),
     uploadReference: vi.fn(),
+    listPromptModels: vi.fn().mockResolvedValue({ models: ['gpt-5.1'] }),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
+    optimizePrompt: vi.fn().mockResolvedValue({ prompt: 'Optimized prompt', model: 'gpt-5.1' }),
     generate: vi.fn().mockResolvedValue(generateResult),
     retryHistory: vi.fn(),
     getStatus: vi.fn(),
@@ -487,6 +489,43 @@ describe('useImageGeneration', () => {
     state.refineFromImage({ id: 'image-1', src: 'data:image/png;base64,abc', revisedPrompt: '蓝色玻璃台灯', createdAt: 'now' })
 
     expect(state.prompt.value).toBe('蓝色玻璃台灯')
+  })
+
+  it('optimizes the current prompt with a model loaded from the selected key', async () => {
+    const api = createApi()
+    api.listPromptModels.mockResolvedValue({ models: ['gpt-5.1', 'claude-sonnet-4-5'] })
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = 'orange cat'
+
+    await state.optimizePrompt('gpt-5.1')
+
+    expect(api.listPromptModels).toHaveBeenCalledWith(7)
+    expect(state.promptOptimizerModels.value).toEqual(['gpt-5.1', 'claude-sonnet-4-5'])
+    expect(api.optimizePrompt).toHaveBeenCalledWith(
+      { prompt: 'orange cat', api_key_id: 7, model: 'gpt-5.1' },
+      expect.any(AbortSignal),
+    )
+    expect(state.prompt.value).toBe('Optimized prompt')
+  })
+
+  it('cancels an in-flight prompt optimization without showing an error', async () => {
+    const api = createApi()
+    api.optimizePrompt.mockImplementation((_request, signal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+    }))
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = 'orange cat'
+
+    const pending = state.optimizePrompt('gpt-5.1')
+    expect(state.optimizingPrompt.value).toBe(true)
+    state.cancelPromptOptimization()
+    await pending
+
+    expect(state.optimizingPrompt.value).toBe(false)
+    expect(state.prompt.value).toBe('orange cat')
+    expect(state.errorMessage.value).toBe('')
   })
 
   it('resubmits the user prompt when retrying a failed assistant message', async () => {

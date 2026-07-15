@@ -5,15 +5,20 @@ import type {
   ConversationMessages,
   HistoryRecord,
   ImageApiKey,
+  OptimizePromptRequest,
+  OptimizePromptResponse,
   PluginConfig,
+  PromptModelsResponse,
   UploadedReference,
 } from '../types'
 
 export interface PluginApi {
   getConfig(): Promise<PluginConfig>
   uploadReference(file: File): Promise<UploadedReference>
+  listPromptModels(apiKeyID: number): Promise<PromptModelsResponse>
   listConversations(cursor?: string): Promise<ConversationList>
   listConversationMessages(id: string, before?: string): Promise<ConversationMessages>
+  optimizePrompt(request: OptimizePromptRequest, signal?: AbortSignal): Promise<OptimizePromptResponse>
   generate(request: GenerateRequest): Promise<GenerateResponse>
   retryHistory(id: string): Promise<GenerateResponse>
   getStatus(id: string): Promise<GenerateResponse>
@@ -62,8 +67,15 @@ export function createPluginApi(base: string, fetcher: typeof fetch = window.fet
       body.append('image', file)
       return request('/references', { method: 'POST', body })
     },
+    listPromptModels: apiKeyID => request(`/prompt-models?api_key_id=${encodeURIComponent(String(apiKeyID))}`),
     listConversations: cursor => request(`/conversations?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
     listConversationMessages: (id, before) => request(`/conversations/${encodeURIComponent(id)}/messages?limit=20${before ? `&before=${encodeURIComponent(before)}` : ''}`),
+    optimizePrompt: (payload, signal) => request('/optimize-prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    }),
     generate: payload => request('/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
