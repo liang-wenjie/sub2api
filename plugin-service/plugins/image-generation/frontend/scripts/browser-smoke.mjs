@@ -236,6 +236,36 @@ try {
     throw new Error(`Mobile clear button is outside the viewport: ${JSON.stringify(mobileClearButton)}`)
   }
   await mobile.keyboard.press('Escape')
+  await mobile.getByTestId('image-quality-select').selectOption('high')
+  await mobile.getByTestId('image-output-format-select').selectOption('webp')
+  await mobile.getByTestId('image-output-compression').fill('82')
+  await mobile.getByTestId('image-background-select').selectOption('transparent')
+  await mobile.getByTestId('image-input-fidelity-select').selectOption('high')
+  await mobile.getByTestId('image-output-count').selectOption('3')
+  await mobile.getByTestId('image-prompt-input').fill('Create a narrow viewport parameter wrapping test')
+  await mobile.getByTestId('image-send-button').click()
+  await mobile.getByTestId('message-attachments').getByText('Browser smoke result').waitFor()
+  const mobileParameterLayout = await mobile.evaluate(() => {
+    const pill = document.querySelector('.message-user .request-settings span')
+    if (!pill) return { passed: false, reason: 'parameter pill missing' }
+    const rect = pill.getBoundingClientRect()
+    const style = getComputedStyle(pill)
+    return {
+      passed: style.whiteSpace === 'normal'
+        && rect.left >= 0
+        && rect.right <= innerWidth
+        && pill.scrollWidth <= Math.ceil(rect.width)
+        && document.documentElement.scrollWidth <= innerWidth,
+      whiteSpace: style.whiteSpace,
+      rect: { left: rect.left, right: rect.right, width: rect.width, height: rect.height },
+      scrollWidth: pill.scrollWidth,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      innerWidth,
+    }
+  })
+  if (!mobileParameterLayout.passed) throw new Error(`Mobile parameter wrapping failed: ${JSON.stringify(mobileParameterLayout)}`)
+  await mobile.locator('.message-user .request-settings span').scrollIntoViewIfNeeded()
+  await mobile.screenshot({ path: resolve(screenshotDir, 'parameter-wrap-mobile.png'), fullPage: true })
   await mobile.getByTestId('history-drawer-toggle').click()
   await mobile.getByTestId('image-key-select').waitFor({ state: 'visible' })
   await mobile.waitForTimeout(250)

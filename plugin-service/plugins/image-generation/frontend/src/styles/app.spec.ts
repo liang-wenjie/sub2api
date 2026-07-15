@@ -36,4 +36,9 @@ describe('implicit scrollbars', () => {
     expect(css).toMatch(/\.composer-select-width\s*\{[^}]*padding:\s*0\s+44px\s+0\s+16px;/s)
     expect(css).not.toMatch(/\.composer-select[^}]*max-width:\s*150px;/s)
   })
+
+  it('wraps long generation parameter summaries inside narrow message bubbles', () => {
+    expect(css).toMatch(/\.request-settings span\s*\{[^}]*max-width:\s*100%;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s)
+    expect(css).not.toMatch(/\.request-settings span\s*\{[^}]*white-space:\s*nowrap;/s)
+  })
 })
