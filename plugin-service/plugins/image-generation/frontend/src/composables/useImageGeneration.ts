@@ -9,6 +9,7 @@ import type {
   GeneratedImagePayload,
   HistoryRecord,
   ImageApiKey,
+  ImagePresetSelection,
   EnumCapability,
   ImageModelCapability,
   ImageReference,
@@ -29,7 +30,42 @@ interface SubmitOptions {
   outputCount?: number
 }
 
+interface ActiveGenerationTask {
+  conversationId: string
+  pendingId: string
+  prompt: string
+  label?: string
+  jobId: string
+  state: 'submitting' | 'polling' | 'cancelling'
+  timer?: ReturnType<typeof setTimeout>
+}
+
 const defaultModels = ['gpt-image-2', 'gpt-image-1', 'gemini-2.5-flash-image']
+const emptyPresetSelection = (): ImagePresetSelection => ({ styles: [], scenes: [], effects: [], angles: [] })
+
+const presetLabels: Record<string, string> = {
+  cinematic: '电影感',
+  photorealistic: '写实摄影',
+  anime: '动漫',
+  illustration: '插画',
+  product: '产品摄影',
+  studio: '摄影棚',
+  outdoor: '户外',
+  interior: '室内',
+  night: '夜景',
+  minimal: '极简背景',
+  soft_light: '柔和光线',
+  dramatic_light: '戏剧光',
+  depth_of_field: '景深',
+  volumetric_light: '体积光',
+  motion: '动态效果',
+  front: '正面',
+  back: '背面',
+  left: '左侧',
+  right: '右侧',
+  three_quarter: '45 度',
+  top: '俯视',
+}
 
 function selectSupported(current: string, descriptor?: EnumCapability): string {
   if (!descriptor) return ''
@@ -63,6 +99,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   const aspectRatio = ref('')
   const resolution = ref('')
   const prompt = ref('')
+  const presetSelection = ref<ImagePresetSelection>(emptyPresetSelection())
+  const appliedPresetText = ref('')
   const promptOptimizerModel = ref('')
   const promptOptimizerModels = ref<string[]>([])
   const optimizingPrompt = ref(false)
@@ -77,7 +115,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   let conversationRequestSequence = 0
   let promptModelRequestSequence = 0
   let promptOptimizationController: AbortController | null = null
-  let pollTimer: ReturnType<typeof setTimeout> | undefined
+  const activeTasks = new Map<string, ActiveGenerationTask>()
   let initializedKeySelection = false
 
   const selectedKey = computed(() => keys.value.find(key => key.id === selectedKeyId.value) ?? null)
@@ -140,6 +178,22 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     return now().toLocaleString()
   }
 
+  function syncGenerationState(): void {
+    const tasks = [...activeTasks.values()]
+    activeJobId.value = tasks.find(task => task.jobId)?.jobId ?? ''
+    if (tasks.some(task => task.state === 'cancelling')) generationStatus.value = 'cancelling'
+    else if (tasks.some(task => task.state === 'polling')) generationStatus.value = 'polling'
+    else if (tasks.length) generationStatus.value = 'submitting'
+    else generationStatus.value = 'idle'
+  }
+
+  function finishTask(pendingId: string): void {
+    const task = activeTasks.get(pendingId)
+    if (task?.timer) clearTimeout(task.timer)
+    activeTasks.delete(pendingId)
+    syncGenerationState()
+  }
+
   function createConversation(): Conversation {
     const id = `conversation-live-${now().getTime()}`
     const conversation: Conversation = {
@@ -154,6 +208,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     conversations.value.unshift(conversation)
     activeConversationId.value = id
     prompt.value = ''
+    appliedPresetText.value = ''
     return conversation
   }
 
@@ -236,8 +291,18 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         historyIds: before ? [...page.items.map(item => item.id), ...conversation.historyIds] : page.items.map(item => item.id),
       }))
       conversationNextCursor.value = { ...conversationNextCursor.value, [id]: page.next_cursor || '' }
-      const pending = page.items.find(record => record.status === 'pending')
-      if (pending) { activeJobId.value = pending.id; generationStatus.value = 'polling'; schedulePoll() }
+      for (const pending of page.items.filter(record => record.status === 'pending')) {
+        const pendingId = `${pending.id}-assistant`
+        activeTasks.set(pendingId, {
+          conversationId: id,
+          pendingId,
+          prompt: pending.prompt,
+          jobId: pending.id,
+          state: 'polling',
+        })
+        syncGenerationState()
+        schedulePoll(pendingId)
+      }
     } finally {
       if (sequence === conversationRequestSequence) loadingConversation.value = false
     }
@@ -336,13 +401,54 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     return lines.join('\n')
   }
 
-  function imagesFromResult(response: GenerateResponse, fallbackPrompt = ''): GeneratedImage[] {
+  function presetDescription(selected: ImagePresetSelection): string {
+    const details = [
+      selected.styles.length ? `风格：${selected.styles.map(item => presetLabels[item] ?? item).join('、')}` : '',
+      selected.scenes.length ? `场景：${selected.scenes.map(item => presetLabels[item] ?? item).join('、')}` : '',
+      selected.effects.length ? `特效：${selected.effects.map(item => presetLabels[item] ?? item).join('、')}` : '',
+      selected.angles.length ? `角度：${selected.angles.map(item => presetLabels[item] ?? item).join('、')}${selected.angles.length > 1 ? '（分别生成独立图片）' : ''}` : '',
+    ].filter(Boolean)
+    return details.join('\n')
+  }
+
+  function presetPrompt(userPrompt: string): string {
+    const description = presetDescription(presetSelection.value)
+    if (!description || userPrompt.includes(description)) return userPrompt
+    return `${userPrompt}\n${description}`
+  }
+
+  function applyPresetSelection(selection: ImagePresetSelection): void {
+    const previous = appliedPresetText.value
+    let basePrompt = prompt.value
+    if (previous) {
+      basePrompt = basePrompt.replace(`\n${previous}`, '').replace(previous, '').trimEnd()
+    }
+    presetSelection.value = selection
+    const next = presetDescription(selection)
+    appliedPresetText.value = next
+    prompt.value = next ? `${basePrompt.trimEnd()}\n${next}`.trimStart() : basePrompt
+  }
+
+  function angleVariants(basePrompt: string) {
+    const angles = presetSelection.value.angles.slice(0, maxOutputImages.value)
+    if (angles.length < 2) return undefined
+    return angles.map(angle => {
+      const label = presetLabels[angle] ?? angle
+      return {
+        label,
+        prompt: `${basePrompt}\n角度：${label}。只生成这个角度的一张独立图片；保持主体身份、服装、比例、材质、场景和光线与其他角度一致。`,
+      }
+    })
+  }
+
+  function imagesFromResult(response: GenerateResponse, fallbackPrompt = '', fallbackLabel?: string): GeneratedImage[] {
     const resultPrompt = response.result?.revised_prompt || fallbackPrompt
     return (response.result?.images ?? []).map((image, index) => ({
       id: `${response.job_id}-image-${index}`,
       src: image.preview_url ? authenticatedMediaUrl(image.preview_url) : sourceOf(image),
       originalSrc: sourceOf(image),
       revisedPrompt: image.revised_prompt || resultPrompt,
+      variantLabel: image.variant_label || fallbackLabel,
       createdAt: response.result?.created
         ? new Date(response.result.created * 1000).toLocaleString()
         : timestamp(),
@@ -377,12 +483,27 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const key = selectedKey.value
     const userPrompt = (submitOptions.prompt ?? prompt.value).trim()
     const references = submitOptions.references ?? conversation?.referenceImages ?? []
-    const requestedOutputCount = Math.min(Math.max(submitOptions.outputCount ?? outputCount.value, 1), maxOutputImages.value)
+    const composedPrompt = presetPrompt(userPrompt)
+    const variants = angleVariants(composedPrompt)
+    const requestedOutputCount = variants?.length ?? Math.min(Math.max(submitOptions.outputCount ?? outputCount.value, 1), maxOutputImages.value)
     if (!conversation || !key || !userPrompt || references.length > maxReferenceImages.value) return
 
     const createdAt = timestamp()
     const userId = `user-${now().getTime()}`
-    const pendingId = `assistant-pending-${now().getTime()}`
+    const independentGPTTasks = model.value.startsWith('gpt-image-') && requestedOutputCount > 1
+    const descriptors = independentGPTTasks
+      ? (variants ?? Array.from({ length: requestedOutputCount }, (_, index) => ({
+          label: `图片 ${index + 1}`,
+          prompt: composedPrompt,
+        })))
+      : [{ label: variants?.[0]?.label, prompt: variants?.[0]?.prompt ?? composedPrompt }]
+    const pendingMessages: ChatMessage[] = descriptors.map((descriptor, index) => ({
+      id: `assistant-pending-${now().getTime()}-${index}`,
+      role: 'assistant',
+      content: descriptor.label ? `正在生成图片（${descriptor.label}），请稍候...` : '正在生成图片，请稍候...',
+      createdAt,
+      status: 'pending',
+    }))
     const userMessage: ChatMessage = {
       id: userId,
       role: 'user',
@@ -396,33 +517,22 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         detailsLabel: activeParameterSummary(references.length > 0),
       }],
     }
-    const pendingMessage: ChatMessage = {
-      id: pendingId,
-      role: 'assistant',
-      content: '正在生成图片，请稍候...',
-      createdAt,
-      status: 'pending',
-    }
     updateConversation(conversation.id, current => ({
       ...current,
       title: current.messages.length === 0 ? userPrompt.slice(0, 24) : current.title,
-      preview: pendingMessage.content,
+      preview: pendingMessages[0].content,
       lastUsedAt: createdAt,
-      messages: [...current.messages, userMessage, pendingMessage],
+      messages: [...current.messages, userMessage, ...pendingMessages],
     }))
     promoteConversation(conversation.id)
     prompt.value = ''
-    generationStatus.value = 'submitting'
     errorMessage.value = ''
 
-    try {
-      const response = await options.api.generate({
-        prompt: requestPrompt(userPrompt, references),
+    const commonRequest = {
         api_key_id: key.id,
         model: model.value,
         size: size.value,
         response_format: 'b64_json',
-        output_count: requestedOutputCount,
         ...(quality.value ? { quality: quality.value } : {}),
         ...(outputFormat.value ? { output_format: outputFormat.value } : {}),
         ...(supportsOutputCompression.value && outputCompression.value != null ? { output_compression: outputCompression.value } : {}),
@@ -431,44 +541,63 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         ...(aspectRatio.value ? { aspect_ratio: aspectRatio.value } : {}),
         ...(resolution.value ? { resolution: resolution.value } : {}),
         reference_images: referencesToRequest(references),
+        ...(!independentGPTTasks && variants ? {
+          variants: variants.map(variant => ({ ...variant, prompt: requestPrompt(variant.prompt, references) })),
+        } : {}),
         inputs: {
           display_prompt: userPrompt,
           conversation_id: conversation.conversationId || conversation.id,
         },
-      })
-      activeJobId.value = response.job_id
-      if (response.status === 'pending') {
-        generationStatus.value = 'polling'
-        schedulePoll(conversation.id, pendingId)
-        return
-      }
-      const images = imagesFromResult(response, userPrompt)
-      if (images.length === 0) throw new Error('图片生成未返回可显示的图片')
-      replacePending(conversation.id, pendingId, {
-        id: `assistant-${now().getTime()}`,
-        role: 'assistant',
-        content: '生成结果',
-        createdAt: images[0].createdAt,
-        images,
-      })
-      generationStatus.value = 'idle'
-      activeJobId.value = ''
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      errorMessage.value = message
-      replacePending(conversation.id, pendingId, {
-        id: `assistant-failed-${now().getTime()}`,
-        role: 'assistant',
-        content: `图片生成失败\n${message}`,
-        createdAt: timestamp(),
-        status: 'failed',
-      })
-      generationStatus.value = 'idle'
-      activeJobId.value = ''
     }
+
+    const results = await Promise.all(descriptors.map(async (descriptor, index) => {
+      const pendingId = pendingMessages[index].id
+      const task: ActiveGenerationTask = {
+        conversationId: conversation.id,
+        pendingId,
+        prompt: userPrompt,
+        label: descriptor.label,
+        jobId: '',
+        state: 'submitting',
+      }
+      activeTasks.set(pendingId, task)
+      syncGenerationState()
+      try {
+        const response = await options.api.generate({
+          ...commonRequest,
+          prompt: requestPrompt(descriptor.prompt, references),
+          output_count: independentGPTTasks ? 1 : requestedOutputCount,
+        })
+        if (!activeTasks.has(pendingId)) return false
+        task.jobId = response.job_id
+        if (response.status === 'pending') {
+          task.state = 'polling'
+          syncGenerationState()
+          schedulePoll(pendingId)
+          return true
+        }
+        const message = terminalMessage(response, userPrompt, descriptor.label)
+        replacePending(conversation.id, pendingId, message)
+        finishTask(pendingId)
+        return message.status !== 'failed' && message.status !== 'canceled'
+      } catch (error) {
+        if (!activeTasks.has(pendingId)) return false
+        const message = error instanceof Error ? error.message : String(error)
+        replacePending(conversation.id, pendingId, {
+          id: `assistant-failed-${pendingId}`,
+          role: 'assistant',
+          content: `图片生成失败${descriptor.label ? `（${descriptor.label}）` : ''}\n${message}`,
+          createdAt: timestamp(),
+          status: 'failed',
+        })
+        finishTask(pendingId)
+        return false
+      }
+    }))
+    if (results.every(result => !result)) errorMessage.value = '所有图片生成任务均失败'
   }
 
-  function terminalMessage(record: GenerateResponse, fallbackPrompt = ''): ChatMessage {
+  function terminalMessage(record: GenerateResponse, fallbackPrompt = '', fallbackLabel?: string): ChatMessage {
     if (record.status === 'failed' || record.status === 'canceled') {
       return {
         id: `${record.job_id}-assistant`,
@@ -478,7 +607,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         status: record.status,
       }
     }
-    const images = imagesFromResult(record, fallbackPrompt)
+    const images = imagesFromResult(record, fallbackPrompt, fallbackLabel)
     return {
       id: `${record.job_id}-assistant`,
       role: 'assistant',
@@ -489,57 +618,53 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }
   }
 
-  function findPendingLocation(): { conversationId: string; messageId: string } | null {
-    for (const conversation of conversations.value) {
-      const message = [...conversation.messages].reverse().find(item => item.status === 'pending')
-      if (message) return { conversationId: conversation.id, messageId: message.id }
-    }
-    return null
-  }
-
-  function promptBeforePending(conversationId: string, messageId: string): string {
-    const conversation = conversations.value.find(item => item.id === conversationId)
-    const pendingIndex = conversation?.messages.findIndex(item => item.id === messageId) ?? -1
-    if (!conversation || pendingIndex < 1) return ''
-    for (let index = pendingIndex - 1; index >= 0; index -= 1) {
-      if (conversation.messages[index].role === 'user') return conversation.messages[index].content
-    }
-    return ''
-  }
-
-  function schedulePoll(conversationId?: string, pendingId?: string): void {
-    clearTimeout(pollTimer)
-    pollTimer = setTimeout(async () => {
-      if (!activeJobId.value) return
+  function schedulePoll(pendingId: string): void {
+    const task = activeTasks.get(pendingId)
+    if (!task?.jobId) return
+    if (task.timer) clearTimeout(task.timer)
+    task.timer = setTimeout(async () => {
+      const current = activeTasks.get(pendingId)
+      if (!current?.jobId) return
       try {
-        const record = await options.api.getStatus(activeJobId.value)
+        const record = await options.api.getStatus(current.jobId)
         if (record.status === 'pending') {
-          schedulePoll(conversationId, pendingId)
+          schedulePoll(pendingId)
           return
         }
-        const location = conversationId && pendingId ? { conversationId, messageId: pendingId } : findPendingLocation()
-        if (location) replacePending(location.conversationId, location.messageId, terminalMessage(record, promptBeforePending(location.conversationId, location.messageId)))
-        generationStatus.value = 'idle'
-        activeJobId.value = ''
+        replacePending(current.conversationId, pendingId, terminalMessage(record, current.prompt, current.label))
+        finishTask(pendingId)
       } catch (error) {
         errorMessage.value = error instanceof Error ? error.message : String(error)
-        schedulePoll(conversationId, pendingId)
+        schedulePoll(pendingId)
       }
     }, pollInterval)
   }
 
   async function cancelGeneration(): Promise<void> {
-    if (!activeJobId.value) return
-    generationStatus.value = 'cancelling'
-    clearTimeout(pollTimer)
-    try {
-      const record = await options.api.cancel(activeJobId.value)
-      const location = findPendingLocation()
-      if (location) replacePending(location.conversationId, location.messageId, terminalMessage(record))
-    } finally {
-      generationStatus.value = 'idle'
-      activeJobId.value = ''
+    const tasks = [...activeTasks.values()]
+    if (!tasks.length) return
+    for (const task of tasks) {
+      task.state = 'cancelling'
+      if (task.timer) clearTimeout(task.timer)
     }
+    syncGenerationState()
+    await Promise.all(tasks.map(async task => {
+      let message: ChatMessage
+      if (task.jobId) {
+        try {
+          message = terminalMessage(await options.api.cancel(task.jobId), task.prompt, task.label)
+        } catch (error) {
+          message = {
+            id: `${task.pendingId}-canceled`, role: 'assistant', status: 'canceled', createdAt: timestamp(),
+            content: error instanceof Error ? error.message : '生成已取消',
+          }
+        }
+      } else {
+        message = { id: `${task.pendingId}-canceled`, role: 'assistant', status: 'canceled', createdAt: timestamp(), content: '生成已取消' }
+      }
+      replacePending(task.conversationId, task.pendingId, message)
+      finishTask(task.pendingId)
+    }))
   }
 
   async function repeatFromImage(image: GeneratedImage, repeatPrompt: string): Promise<void> {
@@ -614,7 +739,11 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   }
 
   function dispose(): void {
-    clearTimeout(pollTimer)
+    for (const task of activeTasks.values()) {
+      if (task.timer) clearTimeout(task.timer)
+    }
+    activeTasks.clear()
+    syncGenerationState()
     cancelPromptOptimization()
   }
 
@@ -645,6 +774,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     supportsOutputCompression,
     outputCount,
     prompt,
+    presetSelection,
+    applyPresetSelection,
     promptOptimizerModel,
     promptOptimizerModels,
     optimizingPrompt,

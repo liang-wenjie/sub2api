@@ -30,6 +30,7 @@ function images(record: HistoryRecord): GeneratedImage[] {
     src: authenticatedMediaUrl(image.preview_url || source(image)),
     originalSrc: source(image),
     revisedPrompt: image.revised_prompt || resultPrompt,
+    variantLabel: image.variant_label,
     createdAt: new Date(record.updated_at).toLocaleString(),
   })).filter(image => image.src)
 }

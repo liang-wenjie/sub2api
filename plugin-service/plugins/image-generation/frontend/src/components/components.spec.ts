@@ -119,6 +119,33 @@ describe('image generation components', () => {
     expect(wrapper.emitted('cancelPromptOptimization')).toHaveLength(1)
   })
 
+  it('opens image presets and emits selected styles and angles', async () => {
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: 'character',
+        model: 'gpt-image-2',
+        size: '1024x1024',
+        models: ['gpt-image-2'],
+        maxOutputImages: 4,
+        busy: false,
+      },
+    })
+
+    await wrapper.get('[data-testid="image-preset-button"]').trigger('click')
+    expect(wrapper.get('[aria-label="关闭图片预设"]').attributes('aria-label')).toBe('关闭图片预设')
+    const checkboxes = wrapper.findAll('.preset-option input')
+    await checkboxes[0].setValue(true)
+    await checkboxes[15].setValue(true)
+
+    expect(wrapper.find('.preset-dialog').exists()).toBe(true)
+    expect(wrapper.emitted('update:presetSelection')?.[0]?.[0]).toEqual({
+      styles: ['cinematic'], scenes: [], effects: [], angles: [],
+    })
+    expect(wrapper.emitted('update:presetSelection')?.[1]?.[0]).toEqual({
+      styles: [], scenes: [], effects: [], angles: ['front'],
+    })
+  })
+
   it('sizes generation selects from their current visible values', async () => {
     const wrapper = mount(PromptComposer, {
       props: {

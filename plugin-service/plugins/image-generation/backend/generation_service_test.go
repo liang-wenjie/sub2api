@@ -126,6 +126,38 @@ func TestGenerationService_OptimizePromptUsesSelectedKeyAndModel(t *testing.T) {
 	}
 }
 
+func TestGenerationService_GenerateVariantsUsesIndependentPrompts(t *testing.T) {
+	var prompts []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		prompts = append(prompts, stringValue(payload["prompt"]))
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"aW1hZ2U="}]}`))
+	}))
+	defer upstream.Close()
+
+	svc := NewGenerationService(nil, GenerationServiceOptions{HTTPClient: upstream.Client()})
+	result, err := svc.generateWithProvider(context.Background(), upstream.URL, GenerateRequest{
+		Prompt: "character", ProviderAPIKey: "key", Model: "gpt-image-1", Size: "1024x1024", ResponseFormat: "b64_json",
+		Variants: []GenerateVariant{
+			{Label: "正面", Prompt: "character front view"},
+			{Label: "背面", Prompt: "character back view"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prompts, []string{"character front view", "character back view"}) {
+		t.Fatalf("prompts = %#v", prompts)
+	}
+	images := imageMapsValue(result["images"])
+	if len(images) != 2 || images[0]["variant_label"] != "正面" || images[1]["variant_label"] != "背面" {
+		t.Fatalf("images = %#v", images)
+	}
+}
+
 func TestGenerationService_OptimizePromptFallsBackWhenProviderReturnsEmptyContent(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""}}]}`))

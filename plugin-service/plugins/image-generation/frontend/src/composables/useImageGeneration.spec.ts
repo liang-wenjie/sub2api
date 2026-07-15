@@ -19,6 +19,16 @@ function completedResponse(): GenerateResponse {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function createApi(generateResult: GenerateResponse = completedResponse()) {
   return {
     getConfig: vi.fn().mockResolvedValue({
@@ -476,10 +486,128 @@ describe('useImageGeneration', () => {
 
     await state.repeatFromImage(image, 'Try another')
 
-    expect(api.generate).toHaveBeenLastCalledWith(expect.objectContaining({
-      output_count: 3,
-      reference_images: [expect.objectContaining({ data_url: image.originalSrc })],
+    expect(api.generate.mock.calls.slice(-3)).toHaveLength(3)
+    for (const [request] of api.generate.mock.calls.slice(-3)) {
+      expect(request).toEqual(expect.objectContaining({
+        output_count: 1,
+        reference_images: [expect.objectContaining({ data_url: image.originalSrc })],
+      }))
+    }
+  })
+
+  it('submits selected angle variants as independent single-image tasks', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = '红色夹克角色'
+    state.presetSelection.value = {
+      styles: ['cinematic'],
+      scenes: ['studio'],
+      effects: ['dramatic_light'],
+      angles: ['front', 'back'],
+    }
+
+    await state.submit()
+
+    expect(api.generate).toHaveBeenCalledTimes(2)
+    expect(api.generate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      output_count: 1,
+      prompt: expect.stringContaining('角度：正面'),
     }))
+    expect(api.generate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      output_count: 1,
+      prompt: expect.stringContaining('角度：背面'),
+    }))
+    expect(api.generate.mock.calls[0][0]).not.toHaveProperty('variants')
+    expect(api.generate.mock.calls[1][0]).not.toHaveProperty('variants')
+    expect(state.activeConversation.value?.messages.filter(message => message.role === 'assistant')).toHaveLength(2)
+  })
+
+  it('shows an independently completed GPT image while a sibling task is still running', async () => {
+    const first = deferred<GenerateResponse>()
+    const second = deferred<GenerateResponse>()
+    const api = createApi()
+    api.generate.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.outputCount.value = 2
+    state.prompt.value = 'Create two lamps'
+
+    const submission = state.submit()
+    await vi.waitFor(() => expect(api.generate).toHaveBeenCalledTimes(2))
+    first.resolve({
+      job_id: 'job-first', status: 'succeeded',
+      result: { images: [{ url: '/plugins/image-generation/api/assets/job-first/result/0', preview_url: '/plugins/image-generation/api/assets/job-first/result/0/preview' }] },
+    })
+
+    await vi.waitFor(() => {
+      const assistants = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
+      expect(assistants.some(message => message.images?.[0].src.includes('job-first'))).toBe(true)
+      expect(assistants.some(message => message.status === 'pending')).toBe(true)
+    })
+
+    second.resolve({
+      job_id: 'job-second', status: 'succeeded',
+      result: { images: [{ url: '/plugins/image-generation/api/assets/job-second/result/0', preview_url: '/plugins/image-generation/api/assets/job-second/result/0/preview' }] },
+    })
+    await submission
+  })
+
+  it('keeps a successful GPT image when a sibling task fails', async () => {
+    const api = createApi()
+    api.generate
+      .mockResolvedValueOnce({
+        job_id: 'job-success', status: 'succeeded',
+        result: { images: [{ url: '/plugins/image-generation/api/assets/job-success/result/0', preview_url: '/plugins/image-generation/api/assets/job-success/result/0/preview' }] },
+      })
+      .mockRejectedValueOnce(new Error('second image failed'))
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.outputCount.value = 2
+    state.prompt.value = 'Create two lamps'
+
+    await state.submit()
+
+    const assistants = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
+    expect(assistants.some(message => message.images?.[0].src.includes('job-success'))).toBe(true)
+    expect(assistants.some(message => message.status === 'failed' && message.content.includes('second image failed'))).toBe(true)
+  })
+
+  it('cancels every unfinished GPT image task and preserves completed results', async () => {
+    const api = createApi({ job_id: 'unused', status: 'pending' })
+    api.generate
+      .mockResolvedValueOnce({ job_id: 'job-complete', status: 'succeeded', result: { images: [{ url: '/plugins/image-generation/api/assets/job-complete/result/0' }] } })
+      .mockResolvedValueOnce({ job_id: 'job-pending-1', status: 'pending' })
+      .mockResolvedValueOnce({ job_id: 'job-pending-2', status: 'pending' })
+    api.cancel.mockImplementation(async (id: string) => ({ job_id: id, status: 'canceled' as const, error_message: 'stopped' }))
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 60_000 })
+    await state.initialize()
+    state.outputCount.value = 3
+    state.prompt.value = 'Create three lamps'
+
+    await state.submit()
+    await state.cancelGeneration()
+
+    expect(api.cancel).toHaveBeenCalledTimes(2)
+    expect(api.cancel).toHaveBeenCalledWith('job-pending-1')
+    expect(api.cancel).toHaveBeenCalledWith('job-pending-2')
+    const assistants = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
+    expect(assistants.some(message => message.images?.[0].src.includes('job-complete'))).toBe(true)
+    expect(assistants.filter(message => message.status === 'canceled')).toHaveLength(2)
+  })
+
+  it('applies presets visibly to the prompt and replaces the previous preset text', async () => {
+    const state = useImageGeneration({ api: createApi(), loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = '红色夹克角色'
+
+    state.applyPresetSelection({ styles: ['cinematic'], scenes: [], effects: [], angles: ['front', 'back'] })
+    expect(state.prompt.value).toContain('风格：电影感')
+    expect(state.prompt.value).toContain('角度：正面、背面（分别生成独立图片）')
+
+    state.applyPresetSelection({ styles: ['anime'], scenes: ['night'], effects: [], angles: [] })
+    expect(state.prompt.value).toBe('红色夹克角色\n风格：动漫\n场景：夜景')
+    expect(state.prompt.value).not.toContain('电影感')
   })
 
   it('copies the revised prompt back for continued refinement', async () => {
@@ -541,10 +669,12 @@ describe('useImageGeneration', () => {
 
     await state.retryMessage(failedId)
 
-    expect(api.generate).toHaveBeenLastCalledWith(expect.objectContaining({
-      output_count: 3,
-      inputs: expect.objectContaining({ display_prompt: '生成一盏台灯' }),
-    }))
+    for (const [request] of api.generate.mock.calls.slice(-3)) {
+      expect(request).toEqual(expect.objectContaining({
+        output_count: 1,
+        inputs: expect.objectContaining({ display_prompt: '生成一盏台灯' }),
+      }))
+    }
     expect(state.activeConversation.value?.messages.at(-1)?.images).toHaveLength(1)
   })
 })

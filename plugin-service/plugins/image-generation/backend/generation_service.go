@@ -89,22 +89,28 @@ func (e *UpstreamHTTPError) Error() string {
 }
 
 type GenerateRequest struct {
-	Prompt            string           `json:"prompt"`
-	APIKeyID          int64            `json:"api_key_id"`
-	ProviderAPIKey    string           `json:"-"`
-	Model             string           `json:"model,omitempty"`
-	Size              string           `json:"size,omitempty"`
-	ResponseFormat    string           `json:"response_format,omitempty"`
-	OutputCount       int              `json:"output_count,omitempty"`
-	Quality           string           `json:"quality,omitempty"`
-	OutputFormat      string           `json:"output_format,omitempty"`
-	OutputCompression *int             `json:"output_compression,omitempty"`
-	Background        string           `json:"background,omitempty"`
-	InputFidelity     string           `json:"input_fidelity,omitempty"`
-	AspectRatio       string           `json:"aspect_ratio,omitempty"`
-	Resolution        string           `json:"resolution,omitempty"`
-	ReferenceImages   []ReferenceImage `json:"reference_images,omitempty"`
-	Inputs            map[string]any   `json:"inputs,omitempty"`
+	Prompt            string            `json:"prompt"`
+	APIKeyID          int64             `json:"api_key_id"`
+	ProviderAPIKey    string            `json:"-"`
+	Model             string            `json:"model,omitempty"`
+	Size              string            `json:"size,omitempty"`
+	ResponseFormat    string            `json:"response_format,omitempty"`
+	OutputCount       int               `json:"output_count,omitempty"`
+	Quality           string            `json:"quality,omitempty"`
+	OutputFormat      string            `json:"output_format,omitempty"`
+	OutputCompression *int              `json:"output_compression,omitempty"`
+	Background        string            `json:"background,omitempty"`
+	InputFidelity     string            `json:"input_fidelity,omitempty"`
+	AspectRatio       string            `json:"aspect_ratio,omitempty"`
+	Resolution        string            `json:"resolution,omitempty"`
+	ReferenceImages   []ReferenceImage  `json:"reference_images,omitempty"`
+	Variants          []GenerateVariant `json:"variants,omitempty"`
+	Inputs            map[string]any    `json:"inputs,omitempty"`
+}
+
+type GenerateVariant struct {
+	Label  string `json:"label"`
+	Prompt string `json:"prompt"`
 }
 
 type GenerateResponse struct {
@@ -339,6 +345,10 @@ func (s *GenerationService) generate(ctx context.Context, source *http.Request, 
 	if err := validateReferenceImageCount(req.Model, req.ReferenceImages); err != nil {
 		return nil, err
 	}
+	req.Variants = normalizeGenerateVariants(req.Variants)
+	if len(req.Variants) > 0 {
+		req.OutputCount = len(req.Variants)
+	}
 	outputCount, err := validateOutputCount(req.Model, req.OutputCount)
 	if err != nil {
 		return nil, err
@@ -466,17 +476,32 @@ func (s *GenerationService) submitBatch(ctx context.Context, record *model.Histo
 		_ = s.history.Update(ctx, record)
 		return nil, err
 	}
+	batchItems := []batchSubmitItem{{
+		CustomID:        customID,
+		Prompt:          req.Prompt,
+		OutputCount:     req.OutputCount,
+		ReferenceImages: references,
+	}}
+	variantLabels := map[string]string{}
+	if len(req.Variants) > 0 {
+		batchItems = make([]batchSubmitItem, 0, len(req.Variants))
+		for index, variant := range req.Variants {
+			variantID := customID + "-" + strconv.Itoa(index+1)
+			batchItems = append(batchItems, batchSubmitItem{
+				CustomID:        variantID,
+				Prompt:          variant.Prompt,
+				OutputCount:     1,
+				ReferenceImages: references,
+			})
+			variantLabels[variantID] = variant.Label
+		}
+	}
 	payload := batchSubmitRequest{
 		Model:            req.Model,
 		TaskName:         "plugin-image-" + record.ID,
 		ResponseMimeType: "image/png",
-		Items: []batchSubmitItem{{
-			CustomID:        customID,
-			Prompt:          req.Prompt,
-			OutputCount:     req.OutputCount,
-			ReferenceImages: references,
-		}},
-		Metadata: map[string]string{"plugin_history_id": record.ID},
+		Items:            batchItems,
+		Metadata:         map[string]string{"plugin_history_id": record.ID},
 	}
 	payload.AspectRatio = req.AspectRatio
 	payload.ImageSize = req.Resolution
@@ -492,6 +517,9 @@ func (s *GenerationService) submitBatch(ctx context.Context, record *model.Histo
 	}
 	record.Request["batch_id"] = job.ID
 	record.Request["batch_custom_id"] = customID
+	if len(variantLabels) > 0 {
+		record.Request["batch_variant_labels"] = variantLabels
+	}
 	record.Result = map[string]any{
 		"type":         "image_generation",
 		"provider":     "batch",
@@ -533,6 +561,7 @@ func (s *GenerationService) retry(ctx context.Context, source *http.Request, pri
 		AspectRatio:       stringValue(record.Request["aspect_ratio"]),
 		Resolution:        stringValue(record.Request["resolution"]),
 		ReferenceImages:   referenceImagesValue(record.Request["reference_images"]),
+		Variants:          generateVariantsValue(record.Request["variants"]),
 		Inputs:            copyMap(record.Request),
 	}
 	if retryReq.APIKeyID <= 0 {
@@ -613,35 +642,46 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 		return err
 	}
 	customID := stringValue(record.Request["batch_custom_id"])
-	var found *batchItem
-	for index := range items.Data {
-		if items.Data[index].CustomID == customID {
-			found = &items.Data[index]
-			break
+	variantLabels := stringMapValue(record.Request["batch_variant_labels"])
+	selected := make([]batchItem, 0, len(items.Data))
+	for _, item := range items.Data {
+		if item.CustomID == customID || variantLabels[item.CustomID] != "" {
+			selected = append(selected, item)
 		}
 	}
-	if found == nil || found.Status != "completed" || found.ImageCount < 1 {
+	if len(selected) == 0 {
 		return errors.New("completed batch image item is missing")
 	}
-	images := make([]map[string]any, 0, found.ImageCount)
-	for imageIndex := 0; imageIndex < found.ImageCount; imageIndex++ {
-		content, mimeType, err := s.batchClient.GetItemContent(ctx, providerBaseURL, apiKey, batchID, customID, imageIndex)
-		if err != nil {
-			return err
+	images := make([]map[string]any, 0)
+	archiveIndex := 0
+	for _, item := range selected {
+		if item.Status != "completed" || item.ImageCount < 1 {
+			return errors.New("completed batch image item is missing")
 		}
-		image := map[string]any{
-			"url":            "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
-			"b64_json":       base64.StdEncoding.EncodeToString(content),
-			"revised_prompt": "",
-		}
-		if s.mediaStorage != nil {
-			stored, err := s.archiveImage(ctx, record.ID, imageIndex, mimeType, content)
+		for imageIndex := 0; imageIndex < item.ImageCount; imageIndex++ {
+			content, mimeType, err := s.batchClient.GetItemContent(ctx, providerBaseURL, apiKey, batchID, item.CustomID, imageIndex)
 			if err != nil {
 				return err
 			}
-			image = stored
+			label := variantLabels[item.CustomID]
+			image := map[string]any{
+				"url":            "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
+				"b64_json":       base64.StdEncoding.EncodeToString(content),
+				"revised_prompt": label,
+				"variant_label":  label,
+			}
+			if s.mediaStorage != nil {
+				stored, err := s.archiveImage(ctx, record.ID, archiveIndex, mimeType, content)
+				if err != nil {
+					return err
+				}
+				stored["revised_prompt"] = label
+				stored["variant_label"] = label
+				image = stored
+			}
+			images = append(images, image)
+			archiveIndex++
 		}
-		images = append(images, image)
 	}
 	record.Result = map[string]any{
 		"type":         "image_generation",
@@ -753,6 +793,32 @@ func (s *GenerationService) ListCreations(ctx context.Context, principal model.C
 }
 
 func (s *GenerationService) generateWithProvider(ctx context.Context, providerBaseURL string, req GenerateRequest) (map[string]any, error) {
+	if len(req.Variants) > 0 {
+		var merged map[string]any
+		images := make([]map[string]any, 0, len(req.Variants))
+		for _, variant := range req.Variants {
+			single := req
+			single.Prompt = variant.Prompt
+			single.OutputCount = 1
+			single.Variants = nil
+			result, err := s.generateSingleWithProvider(ctx, providerBaseURL, single)
+			if err != nil {
+				return nil, err
+			}
+			if merged == nil {
+				merged = result
+			}
+			for _, image := range imageMapsValue(result["images"]) {
+				image["variant_label"] = variant.Label
+				if strings.TrimSpace(stringValue(image["revised_prompt"])) == "" {
+					image["revised_prompt"] = variant.Label
+				}
+				images = append(images, image)
+			}
+		}
+		merged["images"] = images
+		return merged, nil
+	}
 	count := req.OutputCount
 	if count < 1 {
 		count = 1
@@ -776,6 +842,19 @@ func (s *GenerationService) generateWithProvider(ctx context.Context, providerBa
 		return merged, nil
 	}
 	return s.generateSingleWithProvider(ctx, providerBaseURL, req)
+}
+
+func normalizeGenerateVariants(variants []GenerateVariant) []GenerateVariant {
+	normalized := make([]GenerateVariant, 0, len(variants))
+	for _, variant := range variants {
+		label := strings.TrimSpace(variant.Label)
+		prompt := strings.TrimSpace(variant.Prompt)
+		if label == "" || prompt == "" {
+			continue
+		}
+		normalized = append(normalized, GenerateVariant{Label: label, Prompt: prompt})
+	}
+	return normalized
 }
 
 func (s *GenerationService) optimizePromptWithProvider(ctx context.Context, providerBaseURL string, req OptimizePromptRequest) (string, error) {
@@ -1220,6 +1299,7 @@ func (s *GenerationService) archiveResultImages(ctx context.Context, historyID s
 			return err
 		}
 		stored["revised_prompt"] = stringValue(image["revised_prompt"])
+		stored["variant_label"] = stringValue(image["variant_label"])
 		archived = append(archived, stored)
 	}
 	result["images"] = archived
@@ -1608,7 +1688,37 @@ func requestPayload(req GenerateRequest) map[string]any {
 		}
 		payload["reference_images"] = references
 	}
+	if len(req.Variants) > 0 {
+		payload["variants"] = req.Variants
+	}
 	return payload
+}
+
+func generateVariantsValue(value any) []GenerateVariant {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var variants []GenerateVariant
+	if err := json.Unmarshal(encoded, &variants); err != nil {
+		return nil
+	}
+	return normalizeGenerateVariants(variants)
+}
+
+func stringMapValue(value any) map[string]string {
+	result := map[string]string{}
+	switch typed := value.(type) {
+	case map[string]string:
+		return typed
+	case map[string]any:
+		for key, item := range typed {
+			if text := strings.TrimSpace(stringValue(item)); text != "" {
+				result[key] = text
+			}
+		}
+	}
+	return result
 }
 
 func referenceImagesValue(value any) []ReferenceImage {

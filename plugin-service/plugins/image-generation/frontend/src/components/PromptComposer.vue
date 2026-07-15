@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
-import type { ImageReference } from '../types'
+import type { ImagePresetSelection, ImageReference } from '../types'
 
 const props = withDefaults(defineProps<{
   prompt: string
@@ -30,6 +30,7 @@ const props = withDefaults(defineProps<{
   promptOptimizerModel?: string
   promptOptimizerModels?: string[]
   optimizingPrompt?: boolean
+  presetSelection?: ImagePresetSelection
   busy: boolean
   references?: ImageReference[]
   maxReferenceImages?: number
@@ -43,6 +44,7 @@ const props = withDefaults(defineProps<{
   promptOptimizerModel: '',
   promptOptimizerModels: () => [],
   optimizingPrompt: false,
+  presetSelection: () => ({ styles: [], scenes: [], effects: [], angles: [] }),
   sizeOptions: () => [],
   aspectRatio: '', aspectRatioOptions: () => [],
   resolution: '', resolutionOptions: () => [],
@@ -66,6 +68,8 @@ const emit = defineEmits<{
   'update:background': [value: string]
   'update:inputFidelity': [value: string]
   'update:promptOptimizerModel': [value: string]
+  'update:presetSelection': [value: ImagePresetSelection]
+  applyPresetSelection: [value: ImagePresetSelection]
   submit: []
   stop: []
   optimizePrompt: [model: string]
@@ -77,10 +81,27 @@ const emit = defineEmits<{
 
 const fanExpanded = ref(false)
 const optimizeDialogOpen = ref(false)
+const presetDialogOpen = ref(false)
 const selectedOptimizerModel = ref(props.promptOptimizerModel)
 const effectiveSizeOptions = computed(() => props.sizeOptions.length ? props.sizeOptions : props.size ? [props.size] : [])
 const canOptimizePrompt = computed(() => Boolean(props.prompt.trim() && props.promptOptimizerModels.length && !props.busy))
+const presetCount = computed(() => Object.values(props.presetSelection).reduce((total, items) => total + items.length, 0))
 let preserveFanFocus = false
+
+const presetGroups = [
+  { key: 'styles', label: '风格', options: [
+    ['cinematic', '电影感'], ['photorealistic', '写实摄影'], ['anime', '动漫'], ['illustration', '插画'], ['product', '产品摄影'],
+  ] },
+  { key: 'scenes', label: '场景', options: [
+    ['studio', '摄影棚'], ['outdoor', '户外'], ['interior', '室内'], ['night', '夜景'], ['minimal', '极简背景'],
+  ] },
+  { key: 'effects', label: '特效', options: [
+    ['soft_light', '柔和光线'], ['dramatic_light', '戏剧光'], ['depth_of_field', '景深'], ['volumetric_light', '体积光'], ['motion', '动态效果'],
+  ] },
+  { key: 'angles', label: '角度', options: [
+    ['front', '正面'], ['back', '背面'], ['left', '左侧'], ['right', '右侧'], ['three_quarter', '45 度'], ['top', '俯视'],
+  ] },
+] as const
 
 watch(() => props.promptOptimizerModel, (model) => {
   selectedOptimizerModel.value = model
@@ -180,6 +201,21 @@ function confirmOptimizePrompt() {
   emit('update:promptOptimizerModel', selectedOptimizerModel.value)
   emit('optimizePrompt', selectedOptimizerModel.value)
   optimizeDialogOpen.value = false
+}
+
+function togglePreset(group: keyof ImagePresetSelection, value: string) {
+  const current = props.presetSelection[group]
+  const next = current.includes(value) ? current.filter(item => item !== value) : [...current, value]
+  emit('update:presetSelection', { ...props.presetSelection, [group]: next })
+}
+
+function clearPresets() {
+  emit('update:presetSelection', { styles: [], scenes: [], effects: [], angles: [] })
+}
+
+function confirmPresets() {
+  emit('applyPresetSelection', props.presetSelection)
+  presetDialogOpen.value = false
 }
 
 </script>
@@ -347,6 +383,17 @@ function confirmOptimizePrompt() {
           <option v-for="count in maxOutputImages" :key="count" :value="count">{{ count }} 张</option>
         </select>
       </label>
+      <button
+        v-if="!busy"
+        type="button"
+        class="preset-button"
+        data-testid="image-preset-button"
+        :aria-label="`图片预设，已选择 ${presetCount} 项`"
+        @click="presetDialogOpen = true"
+      >
+        <span aria-hidden="true">☷</span>
+        <span>预设<template v-if="presetCount"> {{ presetCount }}</template></span>
+      </button>
       <button v-if="busy" type="button" class="send-button stop-button" aria-label="停止生成" @click="emit('stop')">
         <span aria-hidden="true" class="stop-icon" />
       </button>
@@ -366,6 +413,37 @@ function confirmOptimizePrompt() {
       <button v-if="!busy" type="submit" class="send-button" data-testid="image-send-button" :aria-label="referenceLimitExceeded ? `无法发送：当前模型最多支持 ${maxReferenceImages} 张参考图` : '发送图片提示词'" :disabled="!prompt.trim() || referenceLimitExceeded">
         <span aria-hidden="true">↑</span>
       </button>
+    </div>
+    <div v-if="presetDialogOpen" class="dialog-overlay" @keydown.esc="presetDialogOpen = false">
+      <section class="preset-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-dialog-title">
+        <div class="preset-dialog-heading">
+          <h2 id="preset-dialog-title">图片预设</h2>
+          <button type="button" class="preset-close-button" aria-label="关闭图片预设" @click="presetDialogOpen = false">
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+        <fieldset v-for="group in presetGroups" :key="group.key" class="preset-group">
+          <legend>{{ group.label }}</legend>
+          <div class="preset-options">
+            <label v-for="[value, label] in group.options" :key="value" class="preset-option">
+              <input
+                type="checkbox"
+                :checked="presetSelection[group.key].includes(value)"
+                :disabled="group.key === 'angles' && !presetSelection.angles.includes(value) && presetSelection.angles.length >= maxOutputImages"
+                @change="togglePreset(group.key, value)"
+              >
+              <span>{{ label }}</span>
+            </label>
+          </div>
+        </fieldset>
+        <p v-if="presetSelection.angles.length > 1" class="preset-angle-note">
+          将创建 {{ presetSelection.angles.length }} 个独立角度任务，每个角度生成一张图片。
+        </p>
+        <div class="dialog-actions">
+          <button type="button" :disabled="!presetCount" @click="clearPresets">清空</button>
+          <button type="button" class="primary-button" @click="confirmPresets">应用到提示词</button>
+        </div>
+      </section>
     </div>
     <div v-if="optimizeDialogOpen" class="dialog-overlay" @keydown.esc="optimizeDialogOpen = false">
       <section class="prompt-optimizer-dialog" role="dialog" aria-modal="true" aria-labelledby="prompt-optimizer-title">

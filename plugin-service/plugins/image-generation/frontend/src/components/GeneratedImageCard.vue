@@ -15,7 +15,7 @@ function fallbackToOriginal(event: Event, image: GeneratedImage) {
     <button type="button" class="generated-image-open" aria-label="查看原图" @click="$emit('view', image)">
       <img :src="image.src" :alt="image.revisedPrompt || 'Generated image'" @error="fallbackToOriginal($event, image)">
     </button>
-    <figcaption v-if="image.revisedPrompt">{{ image.revisedPrompt }}</figcaption>
+    <figcaption v-if="image.variantLabel || image.revisedPrompt">{{ image.variantLabel || image.revisedPrompt }}</figcaption>
     <div class="image-actions">
       <button type="button" @click="$emit('reference', image)">设为参考图</button>
       <button type="button" @click="$emit('refine', image)">优化提示词</button>

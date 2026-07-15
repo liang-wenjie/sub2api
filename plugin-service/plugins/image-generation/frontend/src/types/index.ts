@@ -79,7 +79,20 @@ export interface GenerateRequest {
   aspect_ratio?: string
   resolution?: string
   reference_images?: ReferenceImageRequest[]
+  variants?: GenerateVariant[]
   inputs?: Record<string, unknown>
+}
+
+export interface GenerateVariant {
+  label: string
+  prompt: string
+}
+
+export interface ImagePresetSelection {
+  styles: string[]
+  scenes: string[]
+  effects: string[]
+  angles: string[]
 }
 
 export interface OptimizePromptRequest {
@@ -101,6 +114,7 @@ export interface GeneratedImagePayload {
   url?: string
   preview_url?: string
   revised_prompt?: string
+  variant_label?: string
 }
 
 export interface GenerationResult {
@@ -166,6 +180,7 @@ export interface GeneratedImage {
   src: string
   originalSrc?: string
   revisedPrompt: string
+  variantLabel?: string
   createdAt: string
 }
 

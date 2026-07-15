@@ -49,6 +49,7 @@ async function preparePage(viewport) {
         },
       },
     } })
+    if (url.pathname.endsWith('/prompt-models')) return route.fulfill({ json: { models: ['gpt-5.1'] } })
     if (url.pathname.endsWith('/references') && route.request().method() === 'POST') {
       uploadIndex += 1
       return route.fulfill({ status: 201, json: {
@@ -85,6 +86,19 @@ async function preparePage(viewport) {
 try {
   const desktop = await preparePage({ width: 1440, height: 900 })
   await desktop.goto(baseURL, { waitUntil: 'networkidle' })
+  await desktop.getByTestId('image-preset-button').click()
+  await desktop.locator('.preset-option').filter({ hasText: '电影感' }).getByRole('checkbox').check()
+  await desktop.locator('.preset-option').filter({ hasText: '正面' }).getByRole('checkbox').check()
+  await desktop.locator('.preset-option').filter({ hasText: '背面' }).getByRole('checkbox').check()
+  await desktop.getByText('将创建 2 个独立角度任务').waitFor()
+  const presetDialogLayout = await desktop.evaluate(() => {
+    const dialog = document.querySelector('.preset-dialog')?.getBoundingClientRect()
+    return Boolean(dialog && dialog.left >= 0 && dialog.right <= innerWidth && dialog.top >= 0 && dialog.bottom <= innerHeight)
+  })
+  if (!presetDialogLayout) throw new Error('Desktop preset dialog is outside the viewport')
+  await desktop.screenshot({ path: resolve(screenshotDir, 'image-presets-desktop.png'), fullPage: false })
+  await desktop.getByRole('button', { name: '清空' }).click()
+  await desktop.getByRole('button', { name: '应用到提示词' }).click()
   if (await desktop.getByTestId('image-quality-select').count() !== 1) throw new Error('GPT quality control is missing')
   await desktop.getByTestId('image-output-format-select').selectOption('webp')
   if (await desktop.getByTestId('image-output-compression').count() !== 1) throw new Error('WebP compression control is missing')
@@ -196,6 +210,17 @@ try {
 
   const mobile = await preparePage({ width: 390, height: 844 })
   await mobile.goto(baseURL, { waitUntil: 'networkidle' })
+  await mobile.getByTestId('image-preset-button').click()
+  await mobile.locator('.preset-option').filter({ hasText: '正面' }).getByRole('checkbox').check()
+  await mobile.locator('.preset-option').filter({ hasText: '背面' }).getByRole('checkbox').check()
+  const mobilePresetLayout = await mobile.evaluate(() => {
+    const dialog = document.querySelector('.preset-dialog')?.getBoundingClientRect()
+    return Boolean(dialog && dialog.left >= 0 && dialog.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth)
+  })
+  if (!mobilePresetLayout) throw new Error('Mobile preset dialog overflows the viewport')
+  await mobile.screenshot({ path: resolve(screenshotDir, 'image-presets-mobile.png'), fullPage: false })
+  await mobile.getByRole('button', { name: '清空' }).click()
+  await mobile.getByRole('button', { name: '应用到提示词' }).click()
   await mobile.getByTestId('reference-image-input').setInputFiles([1, 2].map(index => ({
     name: `mobile-reference-${index}.png`, mimeType: 'image/png', buffer: referenceImage,
   })))
