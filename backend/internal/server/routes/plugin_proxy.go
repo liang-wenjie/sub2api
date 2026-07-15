@@ -81,10 +81,13 @@ func newPluginReverseProxy(baseURL string) (*httputil.ReverseProxy, error) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
+		target = refreshPluginProxyTarget(target)
 		originalHost := forwardedHost(req)
 		originalProto := forwardedProto(req)
 		clientIP := realIP(req.RemoteAddr)
 		originalDirector(req)
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
 		req.Host = target.Host
 		req.Header.Set("X-Forwarded-Host", originalHost)
 		req.Header.Set("X-Forwarded-Proto", originalProto)
@@ -92,6 +95,17 @@ func newPluginReverseProxy(baseURL string) (*httputil.ReverseProxy, error) {
 		appendForwardedFor(req, clientIP)
 	}
 	return proxy, nil
+}
+
+func refreshPluginProxyTarget(target *url.URL) *url.URL {
+	if target == nil || target.Hostname() != "plugin-service" {
+		return target
+	}
+	refreshed, err := url.Parse(resolvePluginServiceBaseURL(""))
+	if err != nil || refreshed.Host == "" {
+		return target
+	}
+	return refreshed
 }
 
 func forwardedHost(req *http.Request) string {

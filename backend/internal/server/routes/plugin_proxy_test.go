@@ -157,6 +157,45 @@ func TestResolvePluginServiceBaseURLPrefersReachableLocalhost(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:"+port, resolvePluginServiceBaseURL(""))
 }
 
+func TestPluginProxyRoutesReResolvesLocalPluginServiceWhenDefaultHostFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalLocalReachable := localhostPluginServiceReachableFunc
+	originalDockerHostReachable := dockerHostPluginServiceReachableFunc
+	localhostPluginServiceReachableFunc = func(string) bool { return false }
+	dockerHostPluginServiceReachableFunc = func(string) bool { return false }
+	t.Cleanup(func() {
+		localhostPluginServiceReachableFunc = originalLocalReachable
+		dockerHostPluginServiceReachableFunc = originalDockerHostReachable
+	})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("proxied"))
+	}))
+	defer upstream.Close()
+
+	port := strings.TrimPrefix(upstream.URL, "http://127.0.0.1:")
+	if strings.Contains(port, ":") {
+		t.Fatalf("test server URL %q did not use IPv4 localhost", upstream.URL)
+	}
+
+	router := gin.New()
+	t.Setenv("PLUGIN_SERVICE_BASE_URL", "")
+	t.Setenv("PLUGIN_SERVER_PORT", port)
+	RegisterPluginProxyRoutes(router, "", nil)
+
+	localhostPluginServiceReachableFunc = func(string) bool { return true }
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/image-generation", nil)
+	w := &closeNotifyRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "proxied", w.Body.String())
+}
+
 func TestResolvePluginServiceBaseURLPrefersReachableDockerHost(t *testing.T) {
 	originalLocalReachable := localhostPluginServiceReachableFunc
 	originalDockerHostReachable := dockerHostPluginServiceReachableFunc
