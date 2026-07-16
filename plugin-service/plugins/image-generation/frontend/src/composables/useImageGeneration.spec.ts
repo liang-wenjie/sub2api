@@ -862,4 +862,31 @@ describe('useImageGeneration', () => {
     activeGeneration.resolve(completedResponse())
     await pendingSubmit
   })
+
+  it('advances slot progress while a history retry is submitting', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = createApi({ job_id: 'failed-job', status: 'succeeded', result: { images: [] } })
+      const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 60_000 })
+      await state.initialize()
+      state.prompt.value = 'Retry this image'
+      await state.submit()
+      const failedId = state.activeConversation.value!.messages[1].id
+      const retry = deferred<GenerateResponse>()
+      api.retryHistory.mockImplementationOnce(() => retry.promise)
+
+      const pendingRetry = state.retryMessage(failedId)
+      await Promise.resolve()
+      expect(state.activeConversation.value!.messages[1].generationSlots?.[0].progress).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(700)
+
+      expect(state.activeConversation.value!.messages[1].generationSlots?.[0].progress).toBeGreaterThan(1)
+      retry.resolve(completedResponse())
+      await pendingRetry
+      state.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

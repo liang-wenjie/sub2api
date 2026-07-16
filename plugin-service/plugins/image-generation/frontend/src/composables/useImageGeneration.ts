@@ -898,6 +898,12 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         state: 'submitting',
       }
       activeTasks.set(taskID, task)
+      task.progressTimer = setInterval(() => {
+        if (!activeTasks.has(taskID) || task.state === 'cancelling') return
+        updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => slotIndexes.includes(slotIndex) && slot.status === 'pending'
+          ? { ...slot, progress: Math.min(99, slot.progress + 2) }
+          : slot))
+      }, 700)
       syncGenerationState()
       try {
         const response = await options.api.retryHistory(historyID, { generation_group_id: generationGroupID })
