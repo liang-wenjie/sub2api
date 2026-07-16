@@ -300,10 +300,10 @@ class HelperTests(unittest.TestCase):
 
         plan = remote_deploy.get_deploy_plan(config, reuse_existing_data_services=True)
 
-        self.assertEqual(plan.services, ("sub2api-plugin-server",))
+        self.assertEqual(plan.services, ("minio", "sub2api-plugin-server"))
         self.assertTrue(plan.force_recreate)
-        self.assertTrue(plan.no_deps)
-        self.assertEqual(plan.health_checks, (("sub2api-plugin-server", "sub2api-plugin-server"),))
+        self.assertFalse(plan.no_deps)
+        self.assertEqual(plan.health_checks, (("minio", "sub2api-minio"), ("sub2api-plugin-server", "sub2api-plugin-server")))
 
     def test_get_deploy_plan_local_image_without_plugin_asset_recreates_only_sub2api(self) -> None:
         config = remote_deploy.RemoteDeployConfig(

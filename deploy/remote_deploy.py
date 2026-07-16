@@ -308,10 +308,13 @@ def get_deploy_plan_with_assets(
 ) -> DeployPlan:
     if config.deploy_target == "plugin_service":
         return DeployPlan(
-            services=("sub2api-plugin-server",),
+            services=("minio", "sub2api-plugin-server"),
             force_recreate=True,
-            no_deps=True,
-            health_checks=(("sub2api-plugin-server", "sub2api-plugin-server"),),
+            no_deps=False,
+            health_checks=(
+                ("minio", "sub2api-minio"),
+                ("sub2api-plugin-server", "sub2api-plugin-server"),
+            ),
         )
 
     services = ("sub2api", "sub2api-plugin-server")
