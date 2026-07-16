@@ -8,7 +8,11 @@ const files = ['../../web/index.html', '../../web/assets/app.js', '../../web/ass
 async function hashes() {
   return new Map(await Promise.all(files.map(async relativePath => {
     const path = fileURLToPath(new URL(relativePath, import.meta.url))
-    const digest = createHash('sha256').update(await readFile(path)).digest('hex')
+    const content = await readFile(path)
+    const comparable = relativePath.endsWith('index.html')
+      ? Buffer.from(content.toString('utf8').replace(/\r\n/g, '\n'))
+      : content
+    const digest = createHash('sha256').update(comparable).digest('hex')
     return [relativePath, digest]
   })))
 }

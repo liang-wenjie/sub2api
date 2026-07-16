@@ -602,7 +602,7 @@ describe('useImageGeneration', () => {
     expect(assistant[0].content).toContain('背面')
   })
 
-  it('shows an independently completed GPT image while a sibling task is still running', async () => {
+  it('fills generation slots as independent GPT images complete or fail', async () => {
     const first = deferred<GenerateResponse>()
     const second = deferred<GenerateResponse>()
     const api = createApi()
@@ -614,6 +614,9 @@ describe('useImageGeneration', () => {
 
     const submission = state.submit()
     await vi.waitFor(() => expect(api.generate).toHaveBeenCalledTimes(2))
+    const pending = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
+    expect(pending).toHaveLength(1)
+    expect(pending[0].generationSlots?.map(slot => slot.progress)).toEqual([1, 1])
     first.resolve({
       job_id: 'job-first', status: 'succeeded',
       result: { images: [{ url: '/plugins/image-generation/api/assets/job-first/result/0', preview_url: '/plugins/image-generation/api/assets/job-first/result/0/preview' }] },
@@ -621,15 +624,16 @@ describe('useImageGeneration', () => {
 
     await vi.waitFor(() => {
       const assistants = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
-      expect(assistants.some(message => message.images?.[0].src.includes('job-first'))).toBe(true)
-      expect(assistants.some(message => message.status === 'pending')).toBe(true)
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0].generationSlots?.[0].image?.src).toContain('job-first')
+      expect(assistants[0].generationSlots?.[1].status).toBe('pending')
     })
 
-    second.resolve({
-      job_id: 'job-second', status: 'succeeded',
-      result: { images: [{ url: '/plugins/image-generation/api/assets/job-second/result/0', preview_url: '/plugins/image-generation/api/assets/job-second/result/0/preview' }] },
-    })
+    second.reject(new Error('second image failed'))
     await submission
+    const final = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
+    expect(final).toHaveLength(1)
+    expect(final[0].generationSlots?.[1]).toEqual(expect.objectContaining({ status: 'failed', error: 'second image failed' }))
   })
 
   it('keeps a successful GPT image when a sibling task fails', async () => {
@@ -648,8 +652,9 @@ describe('useImageGeneration', () => {
     await state.submit()
 
     const assistants = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
-    expect(assistants.some(message => message.images?.[0].src.includes('job-success'))).toBe(true)
-    expect(assistants.some(message => message.status === 'failed' && message.content.includes('second image failed'))).toBe(true)
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0].generationSlots?.[0].image?.src).toContain('job-success')
+    expect(assistants[0].generationSlots?.[1]).toEqual(expect.objectContaining({ status: 'failed', error: 'second image failed' }))
   })
 
   it('cancels every unfinished GPT image task and preserves completed results', async () => {
@@ -671,8 +676,9 @@ describe('useImageGeneration', () => {
     expect(api.cancel).toHaveBeenCalledWith('job-pending-1')
     expect(api.cancel).toHaveBeenCalledWith('job-pending-2')
     const assistants = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
-    expect(assistants.some(message => message.images?.[0].src.includes('job-complete'))).toBe(true)
-    expect(assistants.filter(message => message.status === 'canceled')).toHaveLength(2)
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0].generationSlots?.[0].image?.src).toContain('job-complete')
+    expect(assistants[0].generationSlots?.slice(1).every(slot => slot.status === 'canceled')).toBe(true)
   })
 
   it('applies presets visibly to the prompt and replaces the previous preset text', async () => {
@@ -754,6 +760,6 @@ describe('useImageGeneration', () => {
         inputs: expect.objectContaining({ display_prompt: '生成一盏台灯' }),
       }))
     }
-    expect(state.activeConversation.value?.messages.at(-1)?.images).toHaveLength(1)
+    expect(state.activeConversation.value?.messages.at(-1)?.generationSlots?.filter(slot => slot.image)).toHaveLength(3)
   })
 })

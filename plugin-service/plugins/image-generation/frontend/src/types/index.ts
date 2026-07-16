@@ -186,6 +186,15 @@ export interface GeneratedImage {
   createdAt: string
 }
 
+export interface GenerationSlot {
+  id: string
+  label?: string
+  status: 'pending' | 'succeeded' | 'failed' | 'canceled'
+  progress: number
+  image?: GeneratedImage
+  error?: string
+}
+
 export interface RequestSetting {
   modelLabel: string
   sizeLabel: string
@@ -200,6 +209,7 @@ export interface ChatMessage {
   createdAt: string
   status?: MessageStatus
   images?: GeneratedImage[]
+  generationSlots?: GenerationSlot[]
   referenceImages?: ImageReference[]
   requestSettings?: RequestSetting[]
 }

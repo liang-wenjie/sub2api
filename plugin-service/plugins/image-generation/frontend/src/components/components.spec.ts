@@ -416,6 +416,29 @@ describe('image generation components', () => {
     expect(wrapper.text()).toContain('Prompt')
     expect(wrapper.text()).toContain('GPT Image 2 | 1024 × 1024 | 数量: 1')
   })
+
+  it('renders fixed generation slots with loading progress and failures', () => {
+    const wrapper = mount(ChatThread, {
+      props: {
+        conversation: {
+          ...conversation,
+          messages: [{
+            id: 'assistant-1', role: 'assistant', content: '正在生成', createdAt: 'now', status: 'pending',
+            generationSlots: [
+              { id: 'front', label: '正面', status: 'pending', progress: 1 },
+              { id: 'back', label: '背面', status: 'failed', progress: 32, error: '上游服务拒绝请求' },
+            ],
+          }] as never,
+        },
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="generation-slot"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('1%')
+    expect(wrapper.text()).toContain('正面')
+    expect(wrapper.text()).toContain('背面')
+    expect(wrapper.text()).toContain('生成失败')
+  })
   it('emits a historical reference image from the action beside its thumbnail', async () => {
     const reference = { id: 'ref-1', dataUrl: '/preview.png', originalDataUrl: '/original.png', fileName: 'dog.png', mimeType: 'image/png' }
     const wrapper = mount(ChatThread, {

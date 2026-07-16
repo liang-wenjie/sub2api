@@ -14,6 +14,7 @@ import type {
   EnumCapability,
   ImageModelCapability,
   ImageReference,
+  GenerationSlot,
 } from '../types'
 
 type GenerationStatus = 'idle' | 'submitting' | 'polling' | 'cancelling'
@@ -34,16 +35,19 @@ interface SubmitOptions {
 interface ActiveGenerationTask {
   conversationId: string
   pendingId: string
+  slotIndexes: number[]
   prompt: string
   label?: string
   jobId: string
   state: 'submitting' | 'polling' | 'cancelling'
   timer?: ReturnType<typeof setTimeout>
+  progressTimer?: ReturnType<typeof setInterval>
 }
 
 interface GenerationDescriptor {
   label?: string
   prompt: string
+  slotIndexes: number[]
 }
 
 const defaultModels = ['gpt-image-2', 'gpt-image-1', 'gemini-2.5-flash-image']
@@ -196,6 +200,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   function finishTask(pendingId: string): void {
     const task = activeTasks.get(pendingId)
     if (task?.timer) clearTimeout(task.timer)
+    if (task?.progressTimer) clearInterval(task.progressTimer)
     activeTasks.delete(pendingId)
     syncGenerationState()
   }
@@ -302,6 +307,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         activeTasks.set(pendingId, {
           conversationId: id,
           pendingId,
+          slotIndexes: [0],
           prompt: pending.prompt,
           jobId: pending.id,
           state: 'polling',
@@ -483,6 +489,40 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }))
   }
 
+  function updateGenerationSlots(conversationId: string, pendingId: string, update: (slots: GenerationSlot[]) => GenerationSlot[]): void {
+    updateConversation(conversationId, conversation => ({
+      ...conversation,
+      messages: conversation.messages.map(message => message.id === pendingId
+        ? (() => {
+            const generationSlots = update(message.generationSlots ?? [])
+            return { ...message, generationSlots, images: generationSlots.flatMap(slot => slot.image ? [slot.image] : []) }
+          })()
+        : message),
+    }))
+  }
+
+  function finalizeGenerationMessage(conversationId: string, pendingId: string): void {
+    const hasPending = [...activeTasks.values()].some(task => task.conversationId === conversationId && task.pendingId === pendingId)
+    if (hasPending) return
+    updateConversation(conversationId, conversation => ({
+      ...conversation,
+      messages: conversation.messages.map(message => message.id === pendingId
+        ? (() => {
+            const slots = message.generationSlots ?? []
+            const hasImages = slots.some(slot => slot.image)
+            const failedSlots = slots.filter(slot => slot.status === 'failed' || slot.status === 'canceled')
+            return {
+              ...message,
+              status: hasImages ? undefined : failedSlots.every(slot => slot.status === 'canceled') ? 'canceled' : 'failed',
+              content: hasImages
+                ? `生成结果${failedSlots.length ? `\n生成失败：${failedSlots.map(slot => slot.label || '图片').join('、')}` : ''}`
+                : failedSlots[0]?.error || '图片生成未返回可显示的图片',
+            }
+          })()
+        : message),
+    }))
+  }
+
   function activeParameterSummary(hasReferences: boolean): string {
     const details = [
       aspectRatio.value ? `比例: ${aspectRatio.value}` : '',
@@ -521,15 +561,23 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       ? (variants ?? Array.from({ length: requestedOutputCount }, (_, index) => ({
           label: `图片 ${index + 1}`,
           prompt: composedPrompt,
-        })))
-      : [{ prompt: composedPrompt }]
-    const pendingMessages: ChatMessage[] = descriptors.map((descriptor, index) => ({
-      id: `assistant-pending-${now().getTime()}-${index}`,
+        }))).map((descriptor, index) => ({ ...descriptor, slotIndexes: [index] }))
+      : [{ prompt: composedPrompt, slotIndexes: Array.from({ length: requestedOutputCount }, (_, index) => index) }]
+    const pendingId = `assistant-pending-${now().getTime()}`
+    const generationSlots: GenerationSlot[] = Array.from({ length: requestedOutputCount }, (_, index) => ({
+      id: `${pendingId}-slot-${index}`,
+      label: variants?.[index]?.label ?? descriptors[index]?.label,
+      status: 'pending',
+      progress: 1,
+    }))
+    const pendingMessage: ChatMessage = {
+      id: pendingId,
       role: 'assistant',
-      content: descriptor.label ? `正在生成图片（${descriptor.label}），请稍候...` : '正在生成图片，请稍候...',
+      content: '正在生成图片，请稍候...',
       createdAt,
       status: 'pending',
-    }))
+      generationSlots,
+    }
     const userMessage: ChatMessage = {
       id: userId,
       role: 'user',
@@ -546,9 +594,9 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     updateConversation(conversation.id, current => ({
       ...current,
       title: current.messages.length === 0 ? userPrompt.slice(0, 24) : current.title,
-      preview: pendingMessages[0].content,
+      preview: pendingMessage.content,
       lastUsedAt: createdAt,
-      messages: [...current.messages, userMessage, ...pendingMessages],
+      messages: [...current.messages, userMessage, pendingMessage],
     }))
     promoteConversation(conversation.id)
     prompt.value = ''
@@ -577,16 +625,23 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }
 
     const results = await Promise.all(descriptors.map(async (descriptor, index) => {
-      const pendingId = pendingMessages[index].id
+      const taskId = `${pendingId}-task-${index}`
       const task: ActiveGenerationTask = {
         conversationId: conversation.id,
         pendingId,
+        slotIndexes: descriptor.slotIndexes,
         prompt: userPrompt,
         label: descriptor.label,
         jobId: '',
         state: 'submitting',
       }
-      activeTasks.set(pendingId, task)
+      activeTasks.set(taskId, task)
+      task.progressTimer = setInterval(() => {
+        if (!activeTasks.has(taskId) || task.state === 'cancelling') return
+        updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => descriptor.slotIndexes.includes(slotIndex) && slot.status === 'pending'
+          ? { ...slot, progress: Math.min(99, slot.progress + 2) }
+          : slot))
+      }, 700)
       syncGenerationState()
       try {
         const response = await options.api.generate({
@@ -594,29 +649,36 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
           prompt: requestPrompt(descriptor.prompt, references),
           output_count: independentGPTTasks ? 1 : requestedOutputCount,
         })
-        if (!activeTasks.has(pendingId)) return false
+        if (!activeTasks.has(taskId)) return false
         task.jobId = response.job_id
         if (response.status === 'pending') {
           task.state = 'polling'
           syncGenerationState()
-          schedulePoll(pendingId)
+          schedulePoll(taskId)
           return true
         }
-        const message = terminalMessage(response, userPrompt, descriptor.label)
-        replacePending(conversation.id, pendingId, message)
-        finishTask(pendingId)
-        return message.status !== 'failed' && message.status !== 'canceled'
+        const images = imagesFromResult(response, userPrompt, descriptor.label)
+        const failedVariants = new Set(response.result?.failed_variants ?? [])
+        updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => {
+          const imageIndex = descriptor.slotIndexes.indexOf(slotIndex)
+          if (imageIndex < 0) return slot
+          const image = images[imageIndex]
+          if (slot.label && failedVariants.has(slot.label)) return { ...slot, status: 'failed', progress: 100, error: '图片生成失败' }
+          return image
+            ? { ...slot, status: 'succeeded', progress: 100, image: { ...image, variantLabel: image.variantLabel || slot.label } }
+            : { ...slot, status: 'failed', progress: 100, error: response.error_message || '图片生成未返回可显示的图片' }
+        }))
+        finishTask(taskId)
+        finalizeGenerationMessage(conversation.id, pendingId)
+        return images.length > 0
       } catch (error) {
-        if (!activeTasks.has(pendingId)) return false
+        if (!activeTasks.has(taskId)) return false
         const message = error instanceof Error ? error.message : String(error)
-        replacePending(conversation.id, pendingId, {
-          id: `assistant-failed-${pendingId}`,
-          role: 'assistant',
-          content: `图片生成失败${descriptor.label ? `（${descriptor.label}）` : ''}\n${message}`,
-          createdAt: timestamp(),
-          status: 'failed',
-        })
-        finishTask(pendingId)
+        updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => descriptor.slotIndexes.includes(slotIndex)
+          ? { ...slot, status: 'failed', error: message }
+          : slot))
+        finishTask(taskId)
+        finalizeGenerationMessage(conversation.id, pendingId)
         return false
       }
     }))
@@ -660,8 +722,14 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
           schedulePoll(pendingId)
           return
         }
-        replacePending(current.conversationId, pendingId, terminalMessage(record, current.prompt, current.label))
+        const images = imagesFromResult(record, current.prompt, current.label)
+        updateGenerationSlots(current.conversationId, current.pendingId, slots => slots.map((slot, slotIndex) => current.slotIndexes.includes(slotIndex)
+          ? (images[current.slotIndexes.indexOf(slotIndex)]
+              ? { ...slot, status: 'succeeded', progress: 100, image: images[current.slotIndexes.indexOf(slotIndex)] }
+              : { ...slot, status: 'failed', progress: 100, error: record.error_message || '图片生成未返回可显示的图片' })
+          : slot))
         finishTask(pendingId)
+        finalizeGenerationMessage(current.conversationId, current.pendingId)
       } catch (error) {
         errorMessage.value = error instanceof Error ? error.message : String(error)
         schedulePoll(pendingId)
@@ -678,21 +746,26 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }
     syncGenerationState()
     await Promise.all(tasks.map(async task => {
-      let message: ChatMessage
       if (task.jobId) {
         try {
-          message = terminalMessage(await options.api.cancel(task.jobId), task.prompt, task.label)
+          const response = await options.api.cancel(task.jobId)
+          updateGenerationSlots(task.conversationId, task.pendingId, slots => slots.map((slot, slotIndex) => task.slotIndexes.includes(slotIndex)
+            ? { ...slot, status: 'canceled', progress: 100, error: response.error_message || '生成已取消' }
+            : slot))
         } catch (error) {
-          message = {
-            id: `${task.pendingId}-canceled`, role: 'assistant', status: 'canceled', createdAt: timestamp(),
-            content: error instanceof Error ? error.message : '生成已取消',
-          }
+          const message = error instanceof Error ? error.message : '生成已取消'
+          updateGenerationSlots(task.conversationId, task.pendingId, slots => slots.map((slot, slotIndex) => task.slotIndexes.includes(slotIndex)
+            ? { ...slot, status: 'canceled', progress: 100, error: message }
+            : slot))
         }
       } else {
-        message = { id: `${task.pendingId}-canceled`, role: 'assistant', status: 'canceled', createdAt: timestamp(), content: '生成已取消' }
+        updateGenerationSlots(task.conversationId, task.pendingId, slots => slots.map((slot, slotIndex) => task.slotIndexes.includes(slotIndex)
+          ? { ...slot, status: 'canceled', progress: 100, error: '生成已取消' }
+          : slot))
       }
-      replacePending(task.conversationId, task.pendingId, message)
-      finishTask(task.pendingId)
+      const taskID = [...activeTasks.entries()].find(([, current]) => current === task)?.[0]
+      if (taskID) finishTask(taskID)
+      finalizeGenerationMessage(task.conversationId, task.pendingId)
     }))
   }
 

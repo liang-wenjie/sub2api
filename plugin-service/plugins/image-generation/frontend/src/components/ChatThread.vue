@@ -97,12 +97,37 @@ function formatSizeLabel(value: string): string {
           <p v-else>{{ message.content }}</p>
           <time>{{ message.createdAt }}</time>
           <div
-            v-if="message.images?.length"
+            v-if="message.images?.length || message.generationSlots?.length"
             class="image-grid"
-            :class="{ 'single-image': message.images.length === 1 }"
+            :class="{ 'single-image': (message.generationSlots?.length ?? message.images?.length) === 1 }"
             data-testid="message-attachments"
           >
+            <template v-if="message.generationSlots?.length">
+              <template v-for="slot in message.generationSlots" :key="slot.id">
+                <GeneratedImageCard
+                  v-if="slot.image"
+                  :image="slot.image"
+                  @reference="$emit('reference', $event)"
+                  @refine="$emit('refine', $event)"
+                  @repeat="$emit('repeat', $event, message.content)"
+                  @view="$emit('view', $event.originalSrc || $event.src, $event.revisedPrompt || '生成图片')"
+                />
+                <figure v-else class="generation-slot" :class="`generation-slot-${slot.status}`" data-testid="generation-slot">
+                  <div class="generation-slot-label">{{ slot.label || '图片' }}</div>
+                  <template v-if="slot.status === 'pending'">
+                    <div class="generation-progress" :style="{ '--generation-progress': `${slot.progress}%` }" aria-hidden="true" />
+                    <strong>{{ slot.progress }}%</strong>
+                    <figcaption>正在生成</figcaption>
+                  </template>
+                  <template v-else>
+                    <strong>{{ slot.status === 'canceled' ? '已取消' : '生成失败' }}</strong>
+                    <figcaption>{{ slot.error || '图片生成失败' }}</figcaption>
+                  </template>
+                </figure>
+              </template>
+            </template>
             <GeneratedImageCard
+              v-else
               v-for="image in message.images"
               :key="image.id"
               :image="image"
