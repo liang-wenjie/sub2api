@@ -1,6 +1,6 @@
 import { authenticatedMediaUrl } from '../api/client'
 import { imageParameterLabel } from '../parameterLabels'
-import type { ChatMessage, GenerateVariant, GeneratedImage, GeneratedImagePayload, HistoryRecord, ReferenceImageRequest } from '../types'
+import type { ChatMessage, GenerateVariant, GeneratedImage, GeneratedImagePayload, GenerationSlot, HistoryRecord, ReferenceImageRequest } from '../types'
 
 function references(record: HistoryRecord) {
   const raw = record.request.reference_images
@@ -36,6 +36,28 @@ function images(record: HistoryRecord): GeneratedImage[] {
     variantLabel: image.variant_label || variants[index]?.label,
     createdAt: new Date(record.updated_at).toLocaleString(),
   })).filter(image => image.src)
+}
+
+function generationSlots(record: HistoryRecord): GenerationSlot[] {
+  const generated = images(record)
+  const variants = Array.isArray(record.request.variants) ? record.request.variants as GenerateVariant[] : []
+  const outputCount = Number(record.request.output_count) || variants.length || Math.max(generated.length, 1)
+  const failedVariants = new Set(record.result?.failed_variants ?? [])
+  const unusedImages = [...generated]
+
+  return Array.from({ length: outputCount }, (_, index) => {
+    const label = variants[index]?.label
+    const matchingIndex = label ? unusedImages.findIndex(image => image.variantLabel === label) : 0
+    const image = matchingIndex >= 0 ? unusedImages.splice(matchingIndex, 1)[0] : undefined
+    const base = { id: `${record.id}-slot-${index}`, label, progress: 100 }
+    if (image) return { ...base, status: 'succeeded' as const, image }
+    if (record.status === 'canceled') return { ...base, status: 'canceled' as const, error: record.error_message || '生成已取消' }
+    return {
+      ...base,
+      status: 'failed' as const,
+      error: record.error_message || (label && failedVariants.has(label) ? `${label}生成失败` : '图片生成未返回可显示的图片'),
+    }
+  })
 }
 
 export function projectConversationMessages(records: HistoryRecord[]): ChatMessage[] {
@@ -74,7 +96,16 @@ export function projectConversationMessages(records: HistoryRecord[]): ChatMessa
       }
       if (group.some(item => item.status === 'pending')) return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...', createdAt: new Date(latest.updated_at).toLocaleString(), status: 'pending', historyIds: group.map(item => item.id) } as ChatMessage]
       const generated = group.flatMap(images)
-      if (generated.length) return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '生成结果', createdAt: new Date(latest.updated_at).toLocaleString(), images: generated, historyIds: group.map(item => item.id) } as ChatMessage]
+      if (generated.length) {
+        const slots = group.flatMap(generationSlots)
+        const hasIncompleteSlots = slots.some(slot => slot.status !== 'succeeded')
+        return [user, {
+          id: `${record.id}-assistant`, role: 'assistant', content: '生成结果',
+          createdAt: new Date(latest.updated_at).toLocaleString(), images: generated,
+          generationSlots: hasIncompleteSlots ? slots : undefined,
+          historyIds: group.map(item => item.id),
+        } as ChatMessage]
+      }
       if (group.every(item => item.status === 'succeeded')) return [user]
       const status = group.every(item => item.status === 'canceled') ? 'canceled' : 'failed'
       const failed = group.find(item => item.status === 'failed')

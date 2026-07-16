@@ -422,6 +422,31 @@ describe('useImageGeneration', () => {
     expect(state.conversations.value[0].messages[1]).toEqual(expect.objectContaining({ status: 'canceled', content: '生成已取消' }))
   })
 
+  it('restores successful and failed slots from a partially completed history group', async () => {
+    const api = createApi()
+    api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Partial', status: 'failed', updated_at: '2026-07-16T10:00:00Z' }] })
+    api.listConversationMessages.mockResolvedValue({ items: [
+      {
+        id: 'history-success', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create two lamps', status: 'succeeded',
+        request: { model: 'gpt-image-2', size: '1024x1024', output_count: 1, generation_group_id: 'group-1' },
+        result: { images: [{ url: '/success.png' }] }, created_at: '2026-07-16T09:59:00Z', updated_at: '2026-07-16T10:00:00Z',
+      },
+      {
+        id: 'history-failed', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create two lamps', status: 'failed',
+        request: { model: 'gpt-image-2', size: '1024x1024', output_count: 1, generation_group_id: 'group-1' },
+        error_message: 'second image failed', created_at: '2026-07-16T09:59:01Z', updated_at: '2026-07-16T10:00:01Z',
+      },
+    ] })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    await state.initialize()
+
+    const assistant = state.conversations.value[0].messages[1]
+    expect(assistant.generationSlots).toHaveLength(2)
+    expect(assistant.generationSlots?.[0].image?.src).toContain('/success.png')
+    expect(assistant.generationSlots?.[1]).toEqual(expect.objectContaining({ status: 'failed', error: 'second image failed' }))
+  })
+
   it('keeps the latest reference when older messages are loaded', async () => {
     const api = createApi()
     api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })
