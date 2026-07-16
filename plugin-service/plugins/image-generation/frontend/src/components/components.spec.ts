@@ -139,10 +139,10 @@ describe('image generation components', () => {
 
     expect(wrapper.find('.preset-dialog').exists()).toBe(true)
     expect(wrapper.emitted('update:presetSelection')?.[0]?.[0]).toEqual({
-      styles: ['cinematic'], scenes: [], effects: [], angles: [], separateAngleImages: false,
+      styles: ['cinematic'], scenes: [], effects: [], angles: [], separateAngleImages: false, keepAngleConsistency: false,
     })
     expect(wrapper.emitted('update:presetSelection')?.[1]?.[0]).toEqual({
-      styles: [], scenes: [], effects: [], angles: ['front'], separateAngleImages: false,
+      styles: [], scenes: [], effects: [], angles: ['front'], separateAngleImages: false, keepAngleConsistency: false,
     })
   })
 
@@ -150,7 +150,7 @@ describe('image generation components', () => {
     const wrapper = mount(PromptComposer, {
       props: {
         prompt: 'character', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], maxOutputImages: 4, busy: false,
-        presetSelection: { styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: false } as never,
+        presetSelection: { styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: false, keepAngleConsistency: false } as never,
       },
     })
 
@@ -159,13 +159,19 @@ describe('image generation components', () => {
     expect((separate.element as HTMLInputElement).checked).toBe(false)
     await separate.setValue(true)
     expect(wrapper.emitted('update:presetSelection')?.[0]?.[0]).toEqual({
-      styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: true,
+      styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: true, keepAngleConsistency: false,
+    })
+    const consistency = wrapper.get('[data-testid="keep-angle-consistency"]')
+    expect((consistency.element as HTMLInputElement).checked).toBe(false)
+    await consistency.setValue(true)
+    expect(wrapper.emitted('update:presetSelection')?.[1]?.[0]).toEqual({
+      styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: false, keepAngleConsistency: true,
     })
 
     const singleAngle = mount(PromptComposer, {
       props: {
         prompt: 'character', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], maxOutputImages: 4, busy: false,
-        presetSelection: { styles: [], scenes: [], effects: [], angles: ['front'], separateAngleImages: false } as never,
+        presetSelection: { styles: [], scenes: [], effects: [], angles: ['front'], separateAngleImages: false, keepAngleConsistency: false } as never,
       },
     })
     await singleAngle.get('[data-testid="image-preset-button"]').trigger('click')

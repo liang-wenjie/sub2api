@@ -51,7 +51,7 @@ interface GenerationDescriptor {
 }
 
 const defaultModels = ['gpt-image-2', 'gpt-image-1', 'gemini-2.5-flash-image']
-const emptyPresetSelection = (): ImagePresetSelection => ({ styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false })
+const emptyPresetSelection = (): ImagePresetSelection => ({ styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false, keepAngleConsistency: false })
 
 const presetLabels: Record<string, string> = {
   cinematic: '电影感',
@@ -413,6 +413,14 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     return lines.join('\n')
   }
 
+  function editablePrompt(value: string): string {
+    const userRequest = value.match(/(?:^|\n)User request:\s*([\s\S]*)$/)
+    const prompt = (userRequest?.[1] ?? value)
+      .replace(/。?只生成这个角度的一张独立图片；[^\n]*/g, '')
+      .trim()
+    return prompt
+  }
+
   function presetDescription(selected: ImagePresetSelection): string {
     const details = [
       selected.styles.length ? `风格：${selected.styles.map(item => presetLabels[item] ?? item).join('、')}` : '',
@@ -453,9 +461,12 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     if (angles.length < 2) return undefined
     return angles.map(angle => {
       const label = presetLabels[angle] ?? angle
+      const consistency = presetSelection.value.keepAngleConsistency
+        ? '；保持主体身份、服装、比例、材质、场景和光线与其他角度一致'
+        : ''
       return {
         label,
-        prompt: `${basePrompt}\n角度：${label}。只生成这个角度的一张独立图片；保持主体身份、服装、比例、材质、场景和光线与其他角度一致。`,
+        prompt: `${basePrompt}\n角度：${label}。只生成这个角度的一张独立图片${consistency}。`,
       }
     })
   }
@@ -780,11 +791,15 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const conversation = activeConversation.value
     const assistantIndex = conversation?.messages.findIndex(message => message.images?.some(item => item.id === image.id)) ?? -1
     const sourceMessage = assistantIndex > 0 ? conversation?.messages.slice(0, assistantIndex).reverse().find(message => message.role === 'user') : undefined
-    await submit({ prompt: repeatPrompt || image.revisedPrompt, references: [reference], outputCount: messageOutputCount(sourceMessage) })
+    await submit({
+      prompt: editablePrompt(repeatPrompt) || sourceMessage?.content || editablePrompt(image.revisedPrompt),
+      references: [reference],
+      outputCount: messageOutputCount(sourceMessage),
+    })
   }
 
   function refineFromImage(image: GeneratedImage): void {
-    prompt.value = image.revisedPrompt || prompt.value
+    prompt.value = editablePrompt(image.revisedPrompt) || prompt.value
   }
 
   async function retryMessage(messageId: string): Promise<void> {

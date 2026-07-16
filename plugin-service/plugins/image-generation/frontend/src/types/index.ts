@@ -94,6 +94,7 @@ export interface ImagePresetSelection {
   effects: string[]
   angles: string[]
   separateAngleImages: boolean
+  keepAngleConsistency: boolean
 }
 
 export interface OptimizePromptRequest {

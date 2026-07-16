@@ -45,7 +45,7 @@ const props = withDefaults(defineProps<{
   promptOptimizerModel: '',
   promptOptimizerModels: () => [],
   optimizingPrompt: false,
-  presetSelection: () => ({ styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false }),
+  presetSelection: () => ({ styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false, keepAngleConsistency: false }),
   sizeOptions: () => [],
   aspectRatio: '', aspectRatioOptions: () => [],
   resolution: '', resolutionOptions: () => [],
@@ -211,11 +211,15 @@ function togglePreset(group: 'styles' | 'scenes' | 'effects' | 'angles', value: 
 }
 
 function clearPresets() {
-  emit('update:presetSelection', { styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false })
+  emit('update:presetSelection', { styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false, keepAngleConsistency: false })
 }
 
 function toggleSeparateAngleImages(value: boolean) {
   emit('update:presetSelection', { ...props.presetSelection, separateAngleImages: value })
+}
+
+function toggleAngleConsistency(value: boolean) {
+  emit('update:presetSelection', { ...props.presetSelection, keepAngleConsistency: value })
 }
 
 function confirmPresets() {
@@ -440,6 +444,15 @@ function confirmPresets() {
             @change="toggleSeparateAngleImages(($event.target as HTMLInputElement).checked)"
           >
           <span>每个角度单独生成一张</span>
+        </label>
+        <label v-if="presetSelection.angles.length > 1" class="preset-angle-output-option">
+          <input
+            type="checkbox"
+            data-testid="keep-angle-consistency"
+            :checked="presetSelection.keepAngleConsistency"
+            @change="toggleAngleConsistency(($event.target as HTMLInputElement).checked)"
+          >
+          <span>保持各角度主体与风格一致</span>
         </label>
         <p v-if="presetSelection.angles.length > 1" class="preset-angle-note">
           {{ presetSelection.separateAngleImages

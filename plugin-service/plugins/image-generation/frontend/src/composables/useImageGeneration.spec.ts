@@ -525,6 +525,35 @@ describe('useImageGeneration', () => {
     }
   })
 
+  it('keeps internal generation instructions out of the editable refinement prompt', () => {
+    const state = useImageGeneration({ api: createApi(), loadKeys: async () => [key], pollInterval: 1 })
+
+    state.refineFromImage({
+      id: 'image-1', src: '/image.png', createdAt: 'now',
+      revisedPrompt: 'Follow the user request with highest priority.\nUser request: 蓝色玻璃台灯。只生成这个角度的一张独立图片；保持主体身份、服装、比例、材质、场景和光线与其他角度一致。',
+    })
+
+    expect(state.prompt.value).toBe('蓝色玻璃台灯')
+  })
+
+  it('adds cross-angle consistency only when the preset option is enabled', async () => {
+    const api = createApi()
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = '红色夹克角色'
+    state.presetSelection.value = {
+      styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: true, keepAngleConsistency: false,
+    } as never
+
+    await state.submit()
+    expect(api.generate.mock.calls[0][0].variants[0].prompt).not.toContain('保持主体身份')
+
+    state.prompt.value = '红色夹克角色'
+    state.presetSelection.value = { ...state.presetSelection.value, keepAngleConsistency: true } as never
+    await state.submit()
+    expect(api.generate.mock.calls[1][0].variants[0].prompt).toContain('保持主体身份')
+  })
+
   it('submits selected angles as one multi-view collage by default', async () => {
     const api = createApi()
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
@@ -536,6 +565,7 @@ describe('useImageGeneration', () => {
       effects: ['dramatic_light'],
       angles: ['front', 'back'],
       separateAngleImages: false,
+      keepAngleConsistency: false,
     }
 
     await state.submit()
@@ -563,6 +593,7 @@ describe('useImageGeneration', () => {
     state.prompt.value = '红色夹克角色'
     state.presetSelection.value = {
       styles: ['cinematic'], scenes: ['studio'], effects: [], angles: ['front', 'back'], separateAngleImages: true,
+      keepAngleConsistency: false,
     }
 
     await state.submit()
@@ -592,6 +623,7 @@ describe('useImageGeneration', () => {
     state.prompt.value = '红色夹克角色'
     state.presetSelection.value = {
       styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: true,
+      keepAngleConsistency: false,
     }
 
     await state.submit()
@@ -686,11 +718,11 @@ describe('useImageGeneration', () => {
     await state.initialize()
     state.prompt.value = '红色夹克角色'
 
-    state.applyPresetSelection({ styles: ['cinematic'], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: false })
+    state.applyPresetSelection({ styles: ['cinematic'], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: false, keepAngleConsistency: false })
     expect(state.prompt.value).toContain('风格：电影感')
     expect(state.prompt.value).toContain('角度：正面、背面')
 
-    state.applyPresetSelection({ styles: ['anime'], scenes: ['night'], effects: [], angles: [], separateAngleImages: false })
+    state.applyPresetSelection({ styles: ['anime'], scenes: ['night'], effects: [], angles: [], separateAngleImages: false, keepAngleConsistency: false })
     expect(state.prompt.value).toBe('红色夹克角色\n风格：动漫\n场景：夜景')
     expect(state.prompt.value).not.toContain('电影感')
   })
