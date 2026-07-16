@@ -45,7 +45,7 @@ const props = withDefaults(defineProps<{
   promptOptimizerModel: '',
   promptOptimizerModels: () => [],
   optimizingPrompt: false,
-  presetSelection: () => ({ styles: [], scenes: [], effects: [], angles: [] }),
+  presetSelection: () => ({ styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false }),
   sizeOptions: () => [],
   aspectRatio: '', aspectRatioOptions: () => [],
   resolution: '', resolutionOptions: () => [],
@@ -86,7 +86,7 @@ const presetDialogOpen = ref(false)
 const selectedOptimizerModel = ref(props.promptOptimizerModel)
 const effectiveSizeOptions = computed(() => props.sizeOptions.length ? props.sizeOptions : props.size ? [props.size] : [])
 const canOptimizePrompt = computed(() => Boolean(props.prompt.trim() && props.promptOptimizerModels.length && !props.busy))
-const presetCount = computed(() => Object.values(props.presetSelection).reduce((total, items) => total + items.length, 0))
+const presetCount = computed(() => props.presetSelection.styles.length + props.presetSelection.scenes.length + props.presetSelection.effects.length + props.presetSelection.angles.length)
 let preserveFanFocus = false
 
 const presetGroups = [
@@ -204,14 +204,18 @@ function confirmOptimizePrompt() {
   optimizeDialogOpen.value = false
 }
 
-function togglePreset(group: keyof ImagePresetSelection, value: string) {
+function togglePreset(group: 'styles' | 'scenes' | 'effects' | 'angles', value: string) {
   const current = props.presetSelection[group]
   const next = current.includes(value) ? current.filter(item => item !== value) : [...current, value]
   emit('update:presetSelection', { ...props.presetSelection, [group]: next })
 }
 
 function clearPresets() {
-  emit('update:presetSelection', { styles: [], scenes: [], effects: [], angles: [] })
+  emit('update:presetSelection', { styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false })
+}
+
+function toggleSeparateAngleImages(value: boolean) {
+  emit('update:presetSelection', { ...props.presetSelection, separateAngleImages: value })
 }
 
 function confirmPresets() {
@@ -428,8 +432,19 @@ function confirmPresets() {
             </label>
           </div>
         </fieldset>
+        <label v-if="presetSelection.angles.length > 1" class="preset-angle-output-option">
+          <input
+            type="checkbox"
+            data-testid="separate-angle-images"
+            :checked="presetSelection.separateAngleImages"
+            @change="toggleSeparateAngleImages(($event.target as HTMLInputElement).checked)"
+          >
+          <span>每个角度单独生成一张</span>
+        </label>
         <p v-if="presetSelection.angles.length > 1" class="preset-angle-note">
-          将创建 {{ presetSelection.angles.length }} 个独立角度任务，每个角度生成一张图片。
+          {{ presetSelection.separateAngleImages
+            ? `将为 ${presetSelection.angles.length} 个角度分别生成一张图片，结果显示在同一条消息中。`
+            : '将生成一张包含所选角度的多视角拼图。' }}
         </p>
         <div class="dialog-actions">
           <button type="button" :disabled="!presetCount" @click="clearPresets">清空</button>

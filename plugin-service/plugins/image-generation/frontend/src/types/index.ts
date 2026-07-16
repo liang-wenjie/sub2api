@@ -93,6 +93,7 @@ export interface ImagePresetSelection {
   scenes: string[]
   effects: string[]
   angles: string[]
+  separateAngleImages: boolean
 }
 
 export interface OptimizePromptRequest {
@@ -121,6 +122,7 @@ export interface GenerationResult {
   created?: number
   images?: GeneratedImagePayload[]
   revised_prompt?: string
+  failed_variants?: string[]
   [key: string]: unknown
 }
 

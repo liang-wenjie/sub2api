@@ -1,6 +1,6 @@
 import { authenticatedMediaUrl } from '../api/client'
 import { imageParameterLabel } from '../parameterLabels'
-import type { ChatMessage, GeneratedImage, GeneratedImagePayload, HistoryRecord, ReferenceImageRequest } from '../types'
+import type { ChatMessage, GenerateVariant, GeneratedImage, GeneratedImagePayload, HistoryRecord, ReferenceImageRequest } from '../types'
 
 function references(record: HistoryRecord) {
   const raw = record.request.reference_images
@@ -26,12 +26,13 @@ function source(image: GeneratedImagePayload): string {
 
 function images(record: HistoryRecord): GeneratedImage[] {
   const resultPrompt = record.result?.revised_prompt || record.prompt
+  const variants = Array.isArray(record.request.variants) ? record.request.variants as GenerateVariant[] : []
   return (record.result?.images ?? []).map((image, index) => ({
     id: `${record.id}-image-${index}`,
     src: authenticatedMediaUrl(image.preview_url || source(image)),
     originalSrc: source(image),
     revisedPrompt: image.revised_prompt || resultPrompt,
-    variantLabel: image.variant_label,
+    variantLabel: image.variant_label || variants[index]?.label,
     createdAt: new Date(record.updated_at).toLocaleString(),
   })).filter(image => image.src)
 }

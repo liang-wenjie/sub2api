@@ -41,8 +41,13 @@ interface ActiveGenerationTask {
   timer?: ReturnType<typeof setTimeout>
 }
 
+interface GenerationDescriptor {
+  label?: string
+  prompt: string
+}
+
 const defaultModels = ['gpt-image-2', 'gpt-image-1', 'gemini-2.5-flash-image']
-const emptyPresetSelection = (): ImagePresetSelection => ({ styles: [], scenes: [], effects: [], angles: [] })
+const emptyPresetSelection = (): ImagePresetSelection => ({ styles: [], scenes: [], effects: [], angles: [], separateAngleImages: false })
 
 const presetLabels: Record<string, string> = {
   cinematic: '电影感',
@@ -407,7 +412,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       selected.styles.length ? `风格：${selected.styles.map(item => presetLabels[item] ?? item).join('、')}` : '',
       selected.scenes.length ? `场景：${selected.scenes.map(item => presetLabels[item] ?? item).join('、')}` : '',
       selected.effects.length ? `特效：${selected.effects.map(item => presetLabels[item] ?? item).join('、')}` : '',
-      selected.angles.length ? `角度：${selected.angles.map(item => presetLabels[item] ?? item).join('、')}${selected.angles.length > 1 ? '（分别生成独立图片）' : ''}` : '',
+      selected.angles.length ? `角度：${selected.angles.map(item => presetLabels[item] ?? item).join('、')}` : '',
     ].filter(Boolean)
     return details.join('\n')
   }
@@ -447,6 +452,12 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         prompt: `${basePrompt}\n角度：${label}。只生成这个角度的一张独立图片；保持主体身份、服装、比例、材质、场景和光线与其他角度一致。`,
       }
     })
+  }
+
+  function collagePrompt(basePrompt: string): string {
+    const labels = presetSelection.value.angles.slice(0, maxOutputImages.value).map(angle => presetLabels[angle] ?? angle)
+    if (labels.length < 2) return basePrompt
+    return `${basePrompt}\n角度：${labels.join('、')}。生成一张多视角拼图，按上述顺序排列；每个分区只展示对应角度。`
   }
 
   function imagesFromResult(response: GenerateResponse, fallbackPrompt = '', fallbackLabel?: string): GeneratedImage[] {
@@ -492,20 +503,26 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const userPrompt = (submitOptions.prompt ?? prompt.value).trim()
     const references = submitOptions.references ?? conversation?.referenceImages ?? []
     const hasMultipleAngles = presetSelection.value.angles.length > 1
-    const composedPrompt = presetPrompt(userPrompt, !hasMultipleAngles)
-    const variants = angleVariants(composedPrompt)
-    const requestedOutputCount = variants?.length ?? Math.min(Math.max(submitOptions.outputCount ?? outputCount.value, 1), maxOutputImages.value)
+    const useSeparateAngleImages = hasMultipleAngles && presetSelection.value.separateAngleImages
+    const basePrompt = presetPrompt(userPrompt, !hasMultipleAngles)
+    const composedPrompt = hasMultipleAngles ? collagePrompt(basePrompt) : basePrompt
+    const variants = useSeparateAngleImages ? angleVariants(basePrompt) : undefined
+    const requestedOutputCount = useSeparateAngleImages
+      ? variants!.length
+      : hasMultipleAngles
+        ? 1
+        : Math.min(Math.max(submitOptions.outputCount ?? outputCount.value, 1), maxOutputImages.value)
     if (!conversation || !key || !userPrompt || references.length > maxReferenceImages.value) return
 
     const createdAt = timestamp()
     const userId = `user-${now().getTime()}`
-    const independentGPTTasks = model.value.startsWith('gpt-image-') && requestedOutputCount > 1
-    const descriptors = independentGPTTasks
+    const independentGPTTasks = !useSeparateAngleImages && !hasMultipleAngles && model.value.startsWith('gpt-image-') && requestedOutputCount > 1
+    const descriptors: GenerationDescriptor[] = independentGPTTasks
       ? (variants ?? Array.from({ length: requestedOutputCount }, (_, index) => ({
           label: `图片 ${index + 1}`,
           prompt: composedPrompt,
         })))
-      : [{ label: variants?.[0]?.label, prompt: variants?.[0]?.prompt ?? composedPrompt }]
+      : [{ prompt: composedPrompt }]
     const pendingMessages: ChatMessage[] = descriptors.map((descriptor, index) => ({
       id: `assistant-pending-${now().getTime()}-${index}`,
       role: 'assistant',
@@ -550,7 +567,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         ...(aspectRatio.value ? { aspect_ratio: aspectRatio.value } : {}),
         ...(resolution.value ? { resolution: resolution.value } : {}),
         reference_images: referencesToRequest(references),
-        ...(!independentGPTTasks && variants ? {
+        ...(variants ? {
           variants: variants.map(variant => ({ ...variant, prompt: requestPrompt(variant.prompt, references) })),
         } : {}),
         inputs: {
@@ -617,10 +634,13 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       }
     }
     const images = imagesFromResult(record, fallbackPrompt, fallbackLabel)
+    const failedVariants = record.result?.failed_variants ?? []
     return {
       id: `${record.job_id}-assistant`,
       role: 'assistant',
-      content: images.length ? '生成结果' : '图片生成未返回可显示的图片',
+      content: images.length
+        ? `生成结果${failedVariants.length ? `\n生成失败的角度：${failedVariants.join('、')}` : ''}`
+        : '图片生成未返回可显示的图片',
       createdAt: timestamp(),
       status: images.length ? undefined : 'failed',
       images: images.length ? images : undefined,

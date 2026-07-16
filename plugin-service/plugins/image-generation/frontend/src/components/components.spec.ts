@@ -139,11 +139,37 @@ describe('image generation components', () => {
 
     expect(wrapper.find('.preset-dialog').exists()).toBe(true)
     expect(wrapper.emitted('update:presetSelection')?.[0]?.[0]).toEqual({
-      styles: ['cinematic'], scenes: [], effects: [], angles: [],
+      styles: ['cinematic'], scenes: [], effects: [], angles: [], separateAngleImages: false,
     })
     expect(wrapper.emitted('update:presetSelection')?.[1]?.[0]).toEqual({
-      styles: [], scenes: [], effects: [], angles: ['front'],
+      styles: [], scenes: [], effects: [], angles: ['front'], separateAngleImages: false,
     })
+  })
+
+  it('offers separate images only when multiple angles are selected', async () => {
+    const wrapper = mount(PromptComposer, {
+      props: {
+        prompt: 'character', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], maxOutputImages: 4, busy: false,
+        presetSelection: { styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: false } as never,
+      },
+    })
+
+    await wrapper.get('[data-testid="image-preset-button"]').trigger('click')
+    const separate = wrapper.get('[data-testid="separate-angle-images"]')
+    expect((separate.element as HTMLInputElement).checked).toBe(false)
+    await separate.setValue(true)
+    expect(wrapper.emitted('update:presetSelection')?.[0]?.[0]).toEqual({
+      styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: true,
+    })
+
+    const singleAngle = mount(PromptComposer, {
+      props: {
+        prompt: 'character', model: 'gpt-image-2', size: '1024x1024', models: ['gpt-image-2'], maxOutputImages: 4, busy: false,
+        presetSelection: { styles: [], scenes: [], effects: [], angles: ['front'], separateAngleImages: false } as never,
+      },
+    })
+    await singleAngle.get('[data-testid="image-preset-button"]').trigger('click')
+    expect(singleAngle.find('[data-testid="separate-angle-images"]').exists()).toBe(false)
   })
 
   it('keeps native generation selects in normal document flow', async () => {

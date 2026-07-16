@@ -653,9 +653,14 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 		return errors.New("completed batch image item is missing")
 	}
 	images := make([]map[string]any, 0)
+	failedVariants := make([]string, 0)
 	archiveIndex := 0
 	for _, item := range selected {
 		if item.Status != "completed" || item.ImageCount < 1 {
+			if label := variantLabels[item.CustomID]; label != "" {
+				failedVariants = append(failedVariants, label)
+				continue
+			}
 			return errors.New("completed batch image item is missing")
 		}
 		for imageIndex := 0; imageIndex < item.ImageCount; imageIndex++ {
@@ -683,6 +688,9 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 			archiveIndex++
 		}
 	}
+	if len(images) == 0 {
+		return errors.New("completed batch image item is missing")
+	}
 	record.Result = map[string]any{
 		"type":         "image_generation",
 		"provider":     "batch",
@@ -690,6 +698,9 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 		"size":         stringValue(record.Request["size"]),
 		"batch_status": "completed",
 		"images":       images,
+	}
+	if len(failedVariants) > 0 {
+		record.Result["failed_variants"] = failedVariants
 	}
 	return nil
 }

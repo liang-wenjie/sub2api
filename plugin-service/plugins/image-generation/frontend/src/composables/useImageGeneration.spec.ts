@@ -383,6 +383,27 @@ describe('useImageGeneration', () => {
     expect(state.conversations.value[0].messages[1].images?.[0].revisedPrompt).toBe('Create a lamp')
   })
 
+  it('restores variant labels for angle images from history requests', async () => {
+    const api = createApi()
+    api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Character', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })
+    api.listConversationMessages.mockResolvedValue({ items: [{
+      id: 'history-angles', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create a character', status: 'succeeded',
+      request: {
+        model: 'gpt-image-2', size: '1024x1024',
+        variants: [{ label: '正面', prompt: 'front' }, { label: '背面', prompt: 'back' }],
+      },
+      result: { images: [{ url: '/front.png' }, { url: '/back.png' }] },
+      created_at: '2026-07-11T09:59:00Z', updated_at: '2026-07-11T10:00:00Z',
+    }] })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    await state.initialize()
+
+    const assistants = state.conversations.value[0].messages.filter(message => message.role === 'assistant')
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0].images?.map(image => image.variantLabel)).toEqual(['正面', '背面'])
+  })
+
   it('keeps the latest reference when older messages are loaded', async () => {
     const api = createApi()
     api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })
@@ -504,7 +525,7 @@ describe('useImageGeneration', () => {
     }
   })
 
-  it('submits selected angle variants as independent single-image tasks', async () => {
+  it('submits selected angles as one multi-view collage by default', async () => {
     const api = createApi()
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
     await state.initialize()
@@ -514,28 +535,71 @@ describe('useImageGeneration', () => {
       scenes: ['studio'],
       effects: ['dramatic_light'],
       angles: ['front', 'back'],
+      separateAngleImages: false,
     }
 
     await state.submit()
 
-    expect(api.generate).toHaveBeenCalledTimes(2)
-    expect(api.generate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(api.generate).toHaveBeenCalledTimes(1)
+    expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({
       output_count: 1,
-      prompt: expect.stringContaining('角度：正面'),
+      prompt: expect.stringContaining('多视角拼图'),
     }))
-    expect(api.generate).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      output_count: 1,
-      prompt: expect.stringContaining('角度：背面'),
-    }))
-    const frontPrompt = api.generate.mock.calls[0][0].prompt
-    const backPrompt = api.generate.mock.calls[1][0].prompt
-    expect(frontPrompt).not.toContain('背面')
-    expect(frontPrompt).not.toContain('分别生成独立图片')
-    expect(backPrompt).not.toContain('正面')
-    expect(backPrompt).not.toContain('分别生成独立图片')
     expect(api.generate.mock.calls[0][0]).not.toHaveProperty('variants')
-    expect(api.generate.mock.calls[1][0]).not.toHaveProperty('variants')
-    expect(state.activeConversation.value?.messages.filter(message => message.role === 'assistant')).toHaveLength(2)
+    expect(state.activeConversation.value?.messages.filter(message => message.role === 'assistant')).toHaveLength(1)
+  })
+
+  it('submits separate angle images as variants in one conversation message', async () => {
+    const api = createApi({
+      job_id: 'angle-set', status: 'succeeded', result: {
+        images: [
+          { url: '/plugins/image-generation/api/assets/angle-set/result/0', variant_label: '正面' },
+          { url: '/plugins/image-generation/api/assets/angle-set/result/1', variant_label: '背面' },
+        ],
+      },
+    })
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = '红色夹克角色'
+    state.presetSelection.value = {
+      styles: ['cinematic'], scenes: ['studio'], effects: [], angles: ['front', 'back'], separateAngleImages: true,
+    }
+
+    await state.submit()
+
+    expect(api.generate).toHaveBeenCalledTimes(1)
+    expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({
+      output_count: 2,
+      variants: [
+        expect.objectContaining({ label: '正面', prompt: expect.stringContaining('角度：正面') }),
+        expect.objectContaining({ label: '背面', prompt: expect.stringContaining('角度：背面') }),
+      ],
+    }))
+    const assistant = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
+    expect(assistant).toHaveLength(1)
+    expect(assistant[0].images?.map(image => image.variantLabel)).toEqual(['正面', '背面'])
+  })
+
+  it('keeps successful angle images and reports failed angles in the same message', async () => {
+    const api = createApi({
+      job_id: 'partial-angles', status: 'succeeded', result: {
+        images: [{ url: '/plugins/image-generation/api/assets/partial-angles/result/0', variant_label: '正面' }],
+        failed_variants: ['背面'],
+      },
+    })
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = '红色夹克角色'
+    state.presetSelection.value = {
+      styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: true,
+    }
+
+    await state.submit()
+
+    const assistant = state.activeConversation.value?.messages.filter(message => message.role === 'assistant') ?? []
+    expect(assistant).toHaveLength(1)
+    expect(assistant[0].images?.map(image => image.variantLabel)).toEqual(['正面'])
+    expect(assistant[0].content).toContain('背面')
   })
 
   it('shows an independently completed GPT image while a sibling task is still running', async () => {
@@ -616,11 +680,11 @@ describe('useImageGeneration', () => {
     await state.initialize()
     state.prompt.value = '红色夹克角色'
 
-    state.applyPresetSelection({ styles: ['cinematic'], scenes: [], effects: [], angles: ['front', 'back'] })
+    state.applyPresetSelection({ styles: ['cinematic'], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: false })
     expect(state.prompt.value).toContain('风格：电影感')
-    expect(state.prompt.value).toContain('角度：正面、背面（分别生成独立图片）')
+    expect(state.prompt.value).toContain('角度：正面、背面')
 
-    state.applyPresetSelection({ styles: ['anime'], scenes: ['night'], effects: [], angles: [] })
+    state.applyPresetSelection({ styles: ['anime'], scenes: ['night'], effects: [], angles: [], separateAngleImages: false })
     expect(state.prompt.value).toBe('红色夹克角色\n风格：动漫\n场景：夜景')
     expect(state.prompt.value).not.toContain('电影感')
   })

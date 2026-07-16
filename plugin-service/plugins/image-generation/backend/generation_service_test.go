@@ -958,6 +958,60 @@ func TestGenerationService_ReconcileCompletedBatch(t *testing.T) {
 	}
 }
 
+func TestGenerationService_BatchVariantsKeepSuccessfulImages(t *testing.T) {
+
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches":
+			_, _ = w.Write([]byte(`{"id":"imgbatch_variants","status":"queued"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_variants":
+			_, _ = w.Write([]byte(`{"id":"imgbatch_variants","status":"completed"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_variants/items":
+			_, _ = w.Write([]byte(`{"data":[{"custom_id":"variant-front","status":"completed","image_count":1},{"custom_id":"variant-back","status":"failed","image_count":0}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_variants/items/variant-front/content":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("png"))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: server.Client()})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(ctx, principal, server.URL, GenerateRequest{
+		Prompt: "character", ProviderAPIKey: "api-key", Model: "gemini-2.5-flash-image",
+		Variants: []GenerateVariant{{Label: "正面", Prompt: "front"}, {Label: "背面", Prompt: "back"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := history.Get(ctx, principal, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Request["batch_variant_labels"] = map[string]string{"variant-front": "正面", "variant-back": "背面"}
+	_ = history.Update(ctx, record)
+
+	completed, err := svc.Status(ctx, principal, server.URL, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != model.HistoryStatusSucceeded {
+		t.Fatalf("status = %q", completed.Status)
+	}
+	images := imageMapsValue(completed.Result["images"])
+	if len(images) != 1 || images[0]["variant_label"] != "正面" {
+		t.Fatalf("images = %#v", images)
+	}
+	failed, ok := completed.Result["failed_variants"].([]string)
+	if !ok || !reflect.DeepEqual(failed, []string{"背面"}) {
+		t.Fatalf("failed_variants = %#v", completed.Result["failed_variants"])
+	}
+}
+
 func TestGenerationService_CancelBatch(t *testing.T) {
 	ctx := context.Background()
 	cancelCalls := 0
