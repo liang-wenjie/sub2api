@@ -29,6 +29,7 @@ function images(record: HistoryRecord): GeneratedImage[] {
   const variants = Array.isArray(record.request.variants) ? record.request.variants as GenerateVariant[] : []
   return (record.result?.images ?? []).map((image, index) => ({
     id: `${record.id}-image-${index}`,
+    historyId: record.id,
     src: authenticatedMediaUrl(image.preview_url || source(image)),
     originalSrc: source(image),
     revisedPrompt: image.revised_prompt || resultPrompt,
@@ -59,23 +60,25 @@ export function projectConversationMessages(records: HistoryRecord[]): ChatMessa
     .flatMap((group) => {
       const record = group[0]
       const latest = group.reduce((current, item) => Date.parse(item.updated_at) > Date.parse(current.updated_at) ? item : current, record)
+      const totalOutputCount = group.reduce((total, item) => total + (Number(item.request.output_count) || 1), 0)
       const user: ChatMessage = {
         id: `${record.id}-user`, role: 'user', content: record.prompt,
         createdAt: new Date(record.created_at).toLocaleString(), referenceImages: references(record),
         requestSettings: [{
           modelLabel: String(record.request.model ?? ''),
           sizeLabel: String(record.request.size ?? record.request.aspect_ratio ?? ''),
-          countLabel: `数量: ${Number(record.request.output_count) || 1}`,
+          countLabel: `数量: ${totalOutputCount}`,
           detailsLabel: historyParameterSummary(record.request),
         }],
+        historyIds: group.map(item => item.id),
       }
-      if (group.some(item => item.status === 'pending')) return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...', createdAt: new Date(latest.updated_at).toLocaleString(), status: 'pending' } as ChatMessage]
+      if (group.some(item => item.status === 'pending')) return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...', createdAt: new Date(latest.updated_at).toLocaleString(), status: 'pending', historyIds: group.map(item => item.id) } as ChatMessage]
       const generated = group.flatMap(images)
-      if (generated.length) return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '生成结果', createdAt: new Date(latest.updated_at).toLocaleString(), images: generated } as ChatMessage]
+      if (generated.length) return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '生成结果', createdAt: new Date(latest.updated_at).toLocaleString(), images: generated, historyIds: group.map(item => item.id) } as ChatMessage]
       if (group.every(item => item.status === 'succeeded')) return [user]
       const status = group.every(item => item.status === 'canceled') ? 'canceled' : 'failed'
       const failed = group.find(item => item.status === 'failed')
-      return [user, { id: `${record.id}-assistant`, role: 'assistant', content: failed?.error_message || (status === 'canceled' ? '生成已取消' : '图片生成失败'), createdAt: new Date(latest.updated_at).toLocaleString(), status } as ChatMessage]
+      return [user, { id: `${record.id}-assistant`, role: 'assistant', content: failed?.error_message || (status === 'canceled' ? '生成已取消' : '图片生成失败'), createdAt: new Date(latest.updated_at).toLocaleString(), status, historyIds: group.map(item => item.id) } as ChatMessage]
     })
 }
 

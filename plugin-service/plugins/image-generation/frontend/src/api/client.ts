@@ -20,7 +20,7 @@ export interface PluginApi {
   listConversationMessages(id: string, before?: string): Promise<ConversationMessages>
   optimizePrompt(request: OptimizePromptRequest, signal?: AbortSignal): Promise<OptimizePromptResponse>
   generate(request: GenerateRequest): Promise<GenerateResponse>
-  retryHistory(id: string): Promise<GenerateResponse>
+  retryHistory(id: string, request?: { generation_group_id?: string }): Promise<GenerateResponse>
   getStatus(id: string): Promise<GenerateResponse>
   cancel(id: string): Promise<GenerateResponse>
   deleteConversation(id: string): Promise<void>
@@ -81,7 +81,11 @@ export function createPluginApi(base: string, fetcher: typeof fetch = window.fet
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
-    retryHistory: id => request(historyPath(id, '/retry'), { method: 'POST' }),
+    retryHistory: (id, retryRequest = {}) => request(historyPath(id, '/retry'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(retryRequest),
+    }),
     getStatus: id => request(historyPath(id, '/status')),
     cancel: id => request(historyPath(id, '/cancel'), { method: 'POST' }),
     deleteConversation: id => request(`/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),

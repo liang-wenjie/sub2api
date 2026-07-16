@@ -534,14 +534,14 @@ func (s *GenerationService) submitBatch(ctx context.Context, record *model.Histo
 }
 
 func (s *GenerationService) Retry(ctx context.Context, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
-	return s.retry(ctx, nil, principal, providerBaseURL, id)
+	return s.retry(ctx, nil, principal, providerBaseURL, id, "")
 }
 
-func (s *GenerationService) RetryWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
-	return s.retry(ctx, source, principal, providerBaseURL, id)
+func (s *GenerationService) RetryWithRequest(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string, generationGroupID string) (*GenerateResponse, error) {
+	return s.retry(ctx, source, principal, providerBaseURL, id, generationGroupID)
 }
 
-func (s *GenerationService) retry(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string) (*GenerateResponse, error) {
+func (s *GenerationService) retry(ctx context.Context, source *http.Request, principal model.CurrentPrincipal, providerBaseURL string, id string, generationGroupID string) (*GenerateResponse, error) {
 	record, err := s.history.Get(ctx, principal, id)
 	if err != nil {
 		return nil, err
@@ -572,6 +572,12 @@ func (s *GenerationService) retry(ctx context.Context, source *http.Request, pri
 	}
 	if strings.TrimSpace(retryReq.Prompt) == "" {
 		retryReq.Prompt = record.Prompt
+	}
+	if generationGroupID = strings.TrimSpace(generationGroupID); generationGroupID != "" {
+		if retryReq.Inputs == nil {
+			retryReq.Inputs = make(map[string]any)
+		}
+		retryReq.Inputs["generation_group_id"] = generationGroupID
 	}
 	return s.generate(ctx, source, principal, providerBaseURL, retryReq)
 }

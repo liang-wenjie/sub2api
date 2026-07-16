@@ -481,6 +481,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const resultPrompt = response.result?.revised_prompt || fallbackPrompt
     return (response.result?.images ?? []).map((image, index) => ({
       id: `${response.job_id}-image-${index}`,
+      historyId: response.job_id,
       src: image.preview_url ? authenticatedMediaUrl(image.preview_url) : sourceOf(image),
       originalSrc: sourceOf(image),
       revisedPrompt: image.revised_prompt || resultPrompt,
@@ -508,6 +509,16 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
             const generationSlots = update(message.generationSlots ?? [])
             return { ...message, generationSlots, images: generationSlots.flatMap(slot => slot.image ? [slot.image] : []) }
           })()
+        : message),
+    }))
+  }
+
+  function addMessageHistoryID(conversationId: string, messageId: string, historyID: string): void {
+    updateConversation(conversationId, conversation => ({
+      ...conversation,
+      historyIds: conversation.historyIds.includes(historyID) ? conversation.historyIds : [...conversation.historyIds, historyID],
+      messages: conversation.messages.map(message => message.id === messageId
+        ? { ...message, historyIds: message.historyIds?.includes(historyID) ? message.historyIds : [...(message.historyIds ?? []), historyID] }
         : message),
     }))
   }
@@ -664,6 +675,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         })
         if (!activeTasks.has(taskId)) return false
         task.jobId = response.job_id
+        addMessageHistoryID(conversation.id, pendingId, response.job_id)
         if (response.status === 'pending') {
           task.state = 'polling'
           syncGenerationState()
@@ -793,6 +805,10 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const conversation = activeConversation.value
     const assistantIndex = conversation?.messages.findIndex(message => message.images?.some(item => item.id === image.id)) ?? -1
     const sourceMessage = assistantIndex > 0 ? conversation?.messages.slice(0, assistantIndex).reverse().find(message => message.role === 'user') : undefined
+    if (image.historyId && sourceMessage) {
+      await retryStoredHistory(sourceMessage, [image.historyId])
+      return
+    }
     await submit({
       prompt: editablePrompt(repeatPrompt) || sourceMessage?.content || editablePrompt(image.revisedPrompt),
       references: [reference],
@@ -809,13 +825,109 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     if (!conversation) return
     const failedIndex = conversation.messages.findIndex(message => message.id === messageId)
     if (failedIndex < 0) return
+    const failedMessage = conversation.messages[failedIndex]
     const userMessage = conversation.messages.slice(0, failedIndex).reverse().find(message => message.role === 'user')
     if (!userMessage) return
+    const historyIDs = failedMessage.historyIds?.length ? failedMessage.historyIds : userMessage.historyIds ?? []
+    if (historyIDs.length) {
+      updateConversation(conversation.id, current => ({
+        ...current,
+        messages: current.messages.filter(message => message.id !== messageId && message.id !== userMessage.id),
+      }))
+      await retryStoredHistory(userMessage, historyIDs)
+      return
+    }
     updateConversation(conversation.id, current => ({
       ...current,
       messages: current.messages.filter(message => message.id !== messageId && message.id !== userMessage.id),
     }))
     await submit({ prompt: userMessage.content, references: userMessage.referenceImages ?? [], outputCount: messageOutputCount(userMessage) })
+  }
+
+  async function retryStoredHistory(userMessage: ChatMessage, historyIDs: string[]): Promise<void> {
+    if (generationStatus.value !== 'idle' || historyIDs.length === 0) return
+    const conversation = activeConversation.value
+    if (!conversation) return
+    const createdAt = timestamp()
+    const pendingId = `assistant-retry-${now().getTime()}`
+    const generationGroupID = `generation-${now().getTime()}`
+    const requestedOutputCount = messageOutputCount(userMessage)
+    const generationSlots: GenerationSlot[] = Array.from({ length: requestedOutputCount }, (_, index) => ({
+      id: `${pendingId}-slot-${index}`,
+      status: 'pending',
+      progress: 1,
+    }))
+    const retryUserMessage: ChatMessage = {
+      ...userMessage,
+      id: `user-retry-${now().getTime()}`,
+      createdAt,
+      historyIds: undefined,
+      referenceImages: userMessage.referenceImages?.map(reference => ({ ...reference })),
+    }
+    const pendingMessage: ChatMessage = {
+      id: pendingId,
+      role: 'assistant',
+      content: '正在生成图片，请稍候...',
+      createdAt,
+      status: 'pending',
+      generationSlots,
+      historyIds: [],
+    }
+    updateConversation(conversation.id, current => ({
+      ...current,
+      preview: pendingMessage.content,
+      lastUsedAt: createdAt,
+      messages: [...current.messages, retryUserMessage, pendingMessage],
+    }))
+    promoteConversation(conversation.id)
+    errorMessage.value = ''
+
+    const slotGroups = historyIDs.length === 1
+      ? [Array.from({ length: requestedOutputCount }, (_, index) => index)]
+      : historyIDs.map((_, index) => [index]).filter(group => group[0] < requestedOutputCount)
+    await Promise.all(historyIDs.slice(0, slotGroups.length).map(async (historyID, index) => {
+      const slotIndexes = slotGroups[index]
+      const taskID = `${pendingId}-task-${index}`
+      const task: ActiveGenerationTask = {
+        conversationId: conversation.id,
+        pendingId,
+        slotIndexes,
+        prompt: userMessage.content,
+        jobId: '',
+        state: 'submitting',
+      }
+      activeTasks.set(taskID, task)
+      syncGenerationState()
+      try {
+        const response = await options.api.retryHistory(historyID, { generation_group_id: generationGroupID })
+        if (!activeTasks.has(taskID)) return
+        task.jobId = response.job_id
+        addMessageHistoryID(conversation.id, pendingId, response.job_id)
+        if (response.status === 'pending') {
+          task.state = 'polling'
+          syncGenerationState()
+          schedulePoll(taskID)
+          return
+        }
+        const images = imagesFromResult(response, userMessage.content)
+        updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => {
+          const imageIndex = slotIndexes.indexOf(slotIndex)
+          if (imageIndex < 0) return slot
+          return images[imageIndex]
+            ? { ...slot, status: 'succeeded', progress: 100, image: images[imageIndex] }
+            : { ...slot, status: 'failed', progress: 100, error: response.error_message || '图片生成未返回可显示的图片' }
+        }))
+        finishTask(taskID)
+        finalizeGenerationMessage(conversation.id, pendingId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => slotIndexes.includes(slotIndex)
+          ? { ...slot, status: 'failed', progress: 100, error: message }
+          : slot))
+        finishTask(taskID)
+        finalizeGenerationMessage(conversation.id, pendingId)
+      }
+    }))
   }
 
   function messageOutputCount(message?: ChatMessage): number {

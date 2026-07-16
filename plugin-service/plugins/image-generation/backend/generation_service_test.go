@@ -1141,17 +1141,34 @@ func TestGenerationService_RetryUsesStoredPromptWhileHistoryKeepsDisplayPrompt(t
 	if retry.JobID == record.ID {
 		t.Fatal("retry reused the original history id")
 	}
+	retryWithGroup, err := svc.RetryWithRequest(ctx, nil, principal, upstream.URL, record.ID, "retry-group-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryRecord, err := history.Get(ctx, principal, retryWithGroup.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryRecord.Request["generation_group_id"] != "retry-group-1" {
+		t.Fatalf("retry generation group = %#v, want retry-group-1", retryRecord.Request["generation_group_id"])
+	}
+	if retryRecord.Request["prompt"] != record.Request["prompt"] {
+		t.Fatalf("retry prompt = %#v, want %#v", retryRecord.Request["prompt"], record.Request["prompt"])
+	}
 
 	promptsMu.Lock()
 	defer promptsMu.Unlock()
-	if len(prompts) != 2 {
-		t.Fatalf("provider prompt count = %d, want 2", len(prompts))
+	if len(prompts) != 3 {
+		t.Fatalf("provider prompt count = %d, want 3", len(prompts))
 	}
 	if prompts[0] != "Follow the user request.\nUser request: draw a camera" {
 		t.Fatalf("first provider prompt = %q", prompts[0])
 	}
 	if prompts[1] != "Follow the user request.\nUser request: draw a camera" {
 		t.Fatalf("retry provider prompt = %q", prompts[1])
+	}
+	if prompts[2] != "Follow the user request.\nUser request: draw a camera" {
+		t.Fatalf("grouped retry provider prompt = %q", prompts[2])
 	}
 }
 

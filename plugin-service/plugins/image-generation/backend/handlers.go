@@ -40,6 +40,10 @@ type JobResponse struct {
 	ErrorMessage string         `json:"error_message,omitempty"`
 }
 
+type RetryHistoryRequest struct {
+	GenerationGroupID string `json:"generation_group_id"`
+}
+
 func compactJobResponse(record *model.HistoryRecord) JobResponse {
 	response := JobResponse{JobID: record.ID, Status: record.Status}
 	if record.Status == model.HistoryStatusSucceeded {
@@ -388,7 +392,14 @@ func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request, principa
 }
 
 func (h *Handler) RetryHistory(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
-	resp, err := h.generation.RetryWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), r.PathValue("id"))
+	var retryRequest RetryHistoryRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&retryRequest); err != nil && !errors.Is(err, io.EOF) {
+			httpx.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid retry request"})
+			return
+		}
+	}
+	resp, err := h.generation.RetryWithRequest(r.Context(), r, principal, resolveMainServiceBaseURL(r), r.PathValue("id"), retryRequest.GenerationGroupID)
 	if err != nil {
 		writeServiceError(w, err)
 		return

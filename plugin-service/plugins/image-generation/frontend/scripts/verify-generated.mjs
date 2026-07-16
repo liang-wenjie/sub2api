@@ -10,7 +10,7 @@ async function hashes() {
     const path = fileURLToPath(new URL(relativePath, import.meta.url))
     const content = await readFile(path)
     const comparable = relativePath.endsWith('index.html')
-      ? Buffer.from(content.toString('utf8').replace(/\r\n/g, '\n'))
+      ? Buffer.from(content.toString('utf8').replace(/\r\n?/g, '\n'))
       : content
     const digest = createHash('sha256').update(comparable).digest('hex')
     return [relativePath, digest]

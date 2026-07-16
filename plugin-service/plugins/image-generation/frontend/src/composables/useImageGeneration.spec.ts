@@ -66,7 +66,7 @@ function createApi(generateResult: GenerateResponse = completedResponse()) {
     listConversationMessages: vi.fn().mockResolvedValue({ items: [] }),
     optimizePrompt: vi.fn().mockResolvedValue({ prompt: 'Optimized prompt', model: 'gpt-5.1' }),
     generate: vi.fn().mockResolvedValue(generateResult),
-    retryHistory: vi.fn(),
+    retryHistory: vi.fn().mockResolvedValue({ job_id: 'retry-job-1', status: 'pending' }),
     getStatus: vi.fn(),
     cancel: vi.fn(),
     deleteConversation: vi.fn(),
@@ -418,6 +418,7 @@ describe('useImageGeneration', () => {
 
     expect(state.conversations.value[0].messages).toHaveLength(2)
     expect(state.conversations.value[0].messages[0].content).toBe('Create a lamp')
+    expect(state.conversations.value[0].messages[0].requestSettings?.[0].countLabel).toBe('数量: 4')
     expect(state.conversations.value[0].messages[1]).toEqual(expect.objectContaining({ status: 'canceled', content: '生成已取消' }))
   })
 
@@ -521,7 +522,7 @@ describe('useImageGeneration', () => {
     state.dispose()
   })
 
-  it('uses a generated image as reference when generating again', async () => {
+  it('retries the original history task when generating an image again', async () => {
     const api = createApi()
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
     await state.initialize()
@@ -533,13 +534,8 @@ describe('useImageGeneration', () => {
 
     await state.repeatFromImage(image, 'Try another')
 
-    expect(api.generate.mock.calls.slice(-3)).toHaveLength(3)
-    for (const [request] of api.generate.mock.calls.slice(-3)) {
-      expect(request).toEqual(expect.objectContaining({
-        output_count: 1,
-        reference_images: [expect.objectContaining({ data_url: image.originalSrc })],
-      }))
-    }
+    expect(api.generate).toHaveBeenCalledTimes(3)
+    expect(api.retryHistory).toHaveBeenCalledWith('job-1', expect.objectContaining({ generation_group_id: expect.stringMatching(/^generation-/) }))
   })
 
   it('keeps internal generation instructions out of the editable refinement prompt', () => {
@@ -790,25 +786,30 @@ describe('useImageGeneration', () => {
     expect(state.errorMessage.value).toBe('')
   })
 
-  it('resubmits the user prompt when retrying a failed assistant message', async () => {
+  it('retries failed history jobs with their original stored parameters', async () => {
     const api = createApi({ job_id: 'job-1', status: 'succeeded', result: { images: [] } })
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
     await state.initialize()
     state.outputCount.value = 3
     state.prompt.value = '生成一盏台灯'
+    api.generate
+      .mockResolvedValueOnce({ job_id: 'job-1', status: 'succeeded', result: { images: [] } })
+      .mockResolvedValueOnce({ job_id: 'job-2', status: 'succeeded', result: { images: [] } })
+      .mockResolvedValueOnce({ job_id: 'job-3', status: 'succeeded', result: { images: [] } })
     await state.submit()
     const failedId = state.activeConversation.value!.messages[1].id
-    api.generate.mockResolvedValue(completedResponse())
+    api.generate.mockClear()
     state.outputCount.value = 1
+    state.model.value = 'gpt-image-1'
+    state.size.value = '1536x1024'
 
     await state.retryMessage(failedId)
 
-    for (const [request] of api.generate.mock.calls.slice(-3)) {
-      expect(request).toEqual(expect.objectContaining({
-        output_count: 1,
-        inputs: expect.objectContaining({ display_prompt: '生成一盏台灯' }),
-      }))
-    }
-    expect(state.activeConversation.value?.messages.at(-1)?.generationSlots?.filter(slot => slot.image)).toHaveLength(3)
+    expect(api.generate).not.toHaveBeenCalled()
+    expect(api.retryHistory).toHaveBeenCalledTimes(3)
+    expect(api.retryHistory.mock.calls.map(([historyID]) => historyID)).toEqual(['job-1', 'job-2', 'job-3'])
+    const retryGroups = api.retryHistory.mock.calls.map(([, request]) => request.generation_group_id)
+    expect(new Set(retryGroups).size).toBe(1)
+    expect(retryGroups[0]).toMatch(/^generation-/)
   })
 })

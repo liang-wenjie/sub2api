@@ -180,6 +180,7 @@ export interface ImageReference {
 
 export interface GeneratedImage {
   id: string
+  historyId?: string
   src: string
   originalSrc?: string
   revisedPrompt: string
@@ -213,6 +214,7 @@ export interface ChatMessage {
   generationSlots?: GenerationSlot[]
   referenceImages?: ImageReference[]
   requestSettings?: RequestSetting[]
+  historyIds?: string[]
 }
 
 export interface Conversation {
