@@ -812,4 +812,29 @@ describe('useImageGeneration', () => {
     expect(new Set(retryGroups).size).toBe(1)
     expect(retryGroups[0]).toMatch(/^generation-/)
   })
+
+  it('keeps a failed exchange when retry is requested during another generation', async () => {
+    const api = createApi({ job_id: 'failed-job', status: 'succeeded', result: { images: [] } })
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = 'First image'
+    await state.submit()
+    const failedMessages = state.activeConversation.value!.messages.slice(0, 2)
+    const failedId = failedMessages[1].id
+
+    const activeGeneration = deferred<GenerateResponse>()
+    api.generate.mockImplementationOnce(() => activeGeneration.promise)
+    state.prompt.value = 'Second image'
+    const pendingSubmit = state.submit()
+
+    await state.retryMessage(failedId)
+
+    expect(state.activeConversation.value!.messages.slice(0, 2).map(message => message.id)).toEqual(
+      failedMessages.map(message => message.id),
+    )
+    expect(api.retryHistory).not.toHaveBeenCalled()
+
+    activeGeneration.resolve(completedResponse())
+    await pendingSubmit
+  })
 })

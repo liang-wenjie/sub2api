@@ -821,6 +821,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   }
 
   async function retryMessage(messageId: string): Promise<void> {
+    if (generationStatus.value !== 'idle') return
     const conversation = activeConversation.value
     if (!conversation) return
     const failedIndex = conversation.messages.findIndex(message => message.id === messageId)
