@@ -9,6 +9,7 @@ import type {
   GeneratedImage,
   GeneratedImagePayload,
   HistoryRecord,
+  HistoryTask,
   ImageApiKey,
   ImagePresetSelection,
   EnumCapability,
@@ -513,12 +514,18 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     }))
   }
 
-  function addMessageHistoryID(conversationId: string, messageId: string, historyID: string): void {
+  function addMessageHistoryID(conversationId: string, messageId: string, historyID: string, outputCount: number): void {
     updateConversation(conversationId, conversation => ({
       ...conversation,
       historyIds: conversation.historyIds.includes(historyID) ? conversation.historyIds : [...conversation.historyIds, historyID],
       messages: conversation.messages.map(message => message.id === messageId
-        ? { ...message, historyIds: message.historyIds?.includes(historyID) ? message.historyIds : [...(message.historyIds ?? []), historyID] }
+        ? {
+            ...message,
+            historyIds: message.historyIds?.includes(historyID) ? message.historyIds : [...(message.historyIds ?? []), historyID],
+            historyTasks: message.historyTasks?.some(task => task.id === historyID)
+              ? message.historyTasks
+              : [...(message.historyTasks ?? []), { id: historyID, outputCount }],
+          }
         : message),
     }))
   }
@@ -675,7 +682,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         })
         if (!activeTasks.has(taskId)) return false
         task.jobId = response.job_id
-        addMessageHistoryID(conversation.id, pendingId, response.job_id)
+        addMessageHistoryID(conversation.id, pendingId, response.job_id, descriptor.slotIndexes.length)
         if (response.status === 'pending') {
           task.state = 'polling'
           syncGenerationState()
@@ -806,7 +813,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const assistantIndex = conversation?.messages.findIndex(message => message.images?.some(item => item.id === image.id)) ?? -1
     const sourceMessage = assistantIndex > 0 ? conversation?.messages.slice(0, assistantIndex).reverse().find(message => message.role === 'user') : undefined
     if (image.historyId && sourceMessage) {
-      await retryStoredHistory(sourceMessage, [image.historyId])
+      const sourceTask = conversation?.messages[assistantIndex].historyTasks?.find(task => task.id === image.historyId)
+      await retryStoredHistory(sourceMessage, [sourceTask ?? { id: image.historyId, outputCount: 1 }])
       return
     }
     await submit({
@@ -829,13 +837,17 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const failedMessage = conversation.messages[failedIndex]
     const userMessage = conversation.messages.slice(0, failedIndex).reverse().find(message => message.role === 'user')
     if (!userMessage) return
-    const historyIDs = failedMessage.historyIds?.length ? failedMessage.historyIds : userMessage.historyIds ?? []
-    if (historyIDs.length) {
+    const historyTasks = failedMessage.historyTasks?.length
+      ? failedMessage.historyTasks
+      : userMessage.historyTasks?.length
+        ? userMessage.historyTasks
+        : (failedMessage.historyIds?.length ? failedMessage.historyIds : userMessage.historyIds ?? []).map(id => ({ id, outputCount: 1 }))
+    if (historyTasks.length) {
       updateConversation(conversation.id, current => ({
         ...current,
         messages: current.messages.filter(message => message.id !== messageId && message.id !== userMessage.id),
       }))
-      await retryStoredHistory(userMessage, historyIDs)
+      await retryStoredHistory(userMessage, historyTasks)
       return
     }
     updateConversation(conversation.id, current => ({
@@ -845,14 +857,14 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     await submit({ prompt: userMessage.content, references: userMessage.referenceImages ?? [], outputCount: messageOutputCount(userMessage) })
   }
 
-  async function retryStoredHistory(userMessage: ChatMessage, historyIDs: string[]): Promise<void> {
-    if (generationStatus.value !== 'idle' || historyIDs.length === 0) return
+  async function retryStoredHistory(userMessage: ChatMessage, historyTasks: HistoryTask[]): Promise<void> {
+    if (generationStatus.value !== 'idle' || historyTasks.length === 0) return
     const conversation = activeConversation.value
     if (!conversation) return
     const createdAt = timestamp()
     const pendingId = `assistant-retry-${now().getTime()}`
     const generationGroupID = `generation-${now().getTime()}`
-    const requestedOutputCount = messageOutputCount(userMessage)
+    const requestedOutputCount = historyTasks.reduce((total, task) => total + task.outputCount, 0)
     const generationSlots: GenerationSlot[] = Array.from({ length: requestedOutputCount }, (_, index) => ({
       id: `${pendingId}-slot-${index}`,
       status: 'pending',
@@ -863,6 +875,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       id: `user-retry-${now().getTime()}`,
       createdAt,
       historyIds: undefined,
+      historyTasks: undefined,
       referenceImages: userMessage.referenceImages?.map(reference => ({ ...reference })),
     }
     const pendingMessage: ChatMessage = {
@@ -883,11 +896,13 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     promoteConversation(conversation.id)
     errorMessage.value = ''
 
-    const slotGroups = historyIDs.length === 1
-      ? [Array.from({ length: requestedOutputCount }, (_, index) => index)]
-      : historyIDs.map((_, index) => [index]).filter(group => group[0] < requestedOutputCount)
-    await Promise.all(historyIDs.slice(0, slotGroups.length).map(async (historyID, index) => {
-      const slotIndexes = slotGroups[index]
+    let slotOffset = 0
+    const retries = historyTasks.map(task => {
+      const slotIndexes = Array.from({ length: task.outputCount }, (_, index) => slotOffset + index)
+      slotOffset += task.outputCount
+      return { ...task, slotIndexes }
+    })
+    await Promise.all(retries.map(async ({ id: historyID, outputCount, slotIndexes }, index) => {
       const taskID = `${pendingId}-task-${index}`
       const task: ActiveGenerationTask = {
         conversationId: conversation.id,
@@ -909,7 +924,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         const response = await options.api.retryHistory(historyID, { generation_group_id: generationGroupID })
         if (!activeTasks.has(taskID)) return
         task.jobId = response.job_id
-        addMessageHistoryID(conversation.id, pendingId, response.job_id)
+        addMessageHistoryID(conversation.id, pendingId, response.job_id, outputCount)
         if (response.status === 'pending') {
           task.state = 'polling'
           syncGenerationState()

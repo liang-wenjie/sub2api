@@ -197,6 +197,11 @@ export interface GenerationSlot {
   error?: string
 }
 
+export interface HistoryTask {
+  id: string
+  outputCount: number
+}
+
 export interface RequestSetting {
   modelLabel: string
   sizeLabel: string
@@ -215,6 +220,7 @@ export interface ChatMessage {
   referenceImages?: ImageReference[]
   requestSettings?: RequestSetting[]
   historyIds?: string[]
+  historyTasks?: HistoryTask[]
 }
 
 export interface Conversation {

@@ -889,4 +889,26 @@ describe('useImageGeneration', () => {
       vi.useRealTimers()
     }
   })
+
+  it('allocates every output slot when retrying multiple multi-image history tasks', async () => {
+    const api = createApi()
+    api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Set', preview: 'Failed', status: 'failed', updated_at: '2026-07-16T10:00:00Z' }] })
+    api.listConversationMessages.mockResolvedValue({ items: [1, 2].map(index => ({
+      id: `history-${index}`, conversation_id: 'conversation-1', user_id: 1, prompt: 'Create four images', status: 'failed' as const,
+      request: { model: 'gemini-2.5-flash-image', output_count: 2, generation_group_id: 'group-multi' },
+      error_message: `task ${index} failed`, created_at: `2026-07-16T09:59:0${index}Z`, updated_at: '2026-07-16T10:00:00Z',
+    })) })
+    api.retryHistory
+      .mockResolvedValueOnce({ job_id: 'retry-1', status: 'succeeded', result: { images: [{ url: '/one.png' }, { url: '/two.png' }] } })
+      .mockResolvedValueOnce({ job_id: 'retry-2', status: 'succeeded', result: { images: [{ url: '/three.png' }, { url: '/four.png' }] } })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+    await state.initialize()
+
+    await state.retryMessage(state.activeConversation.value!.messages[1].id)
+
+    const assistant = state.activeConversation.value!.messages[1]
+    expect(assistant.generationSlots).toHaveLength(4)
+    expect(assistant.generationSlots?.every(slot => slot.status === 'succeeded')).toBe(true)
+    expect(assistant.images?.map(image => image.originalSrc)).toEqual(['/one.png', '/two.png', '/three.png', '/four.png'])
+  })
 })
