@@ -547,6 +547,26 @@ describe('useImageGeneration', () => {
     state.dispose()
   })
 
+  it('cancels a backend job that arrives after submission was canceled', async () => {
+    const submission = deferred<GenerateResponse>()
+    const api = createApi()
+    api.generate.mockImplementationOnce(() => submission.promise)
+    api.cancel.mockResolvedValue({ job_id: 'late-job', status: 'canceled' })
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 60_000 })
+    await state.initialize()
+    state.prompt.value = 'Create a lamp'
+
+    const pendingSubmit = state.submit()
+    await Promise.resolve()
+    await state.cancelGeneration()
+    submission.resolve({ job_id: 'late-job', status: 'pending' })
+    await pendingSubmit
+
+    expect(api.cancel).toHaveBeenCalledWith('late-job')
+    expect(state.activeConversation.value?.messages[1].status).toBe('canceled')
+    state.dispose()
+  })
+
   it('retries the original history task when generating an image again', async () => {
     const api = createApi()
     const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })

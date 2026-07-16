@@ -127,6 +127,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
   let promptModelRequestSequence = 0
   let promptOptimizationController: AbortController | null = null
   const activeTasks = new Map<string, ActiveGenerationTask>()
+  const canceledSubmittingTasks = new Set<string>()
   let initializedKeySelection = false
 
   const selectedKey = computed(() => keys.value.find(key => key.id === selectedKeyId.value) ?? null)
@@ -204,6 +205,16 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     if (task?.progressTimer) clearInterval(task.progressTimer)
     activeTasks.delete(pendingId)
     syncGenerationState()
+  }
+
+  async function cancelLateJob(taskId: string, jobId: string): Promise<boolean> {
+    if (!canceledSubmittingTasks.delete(taskId)) return false
+    try {
+      await options.api.cancel(jobId)
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : String(error)
+    }
+    return true
   }
 
   function createConversation(): Conversation {
@@ -680,6 +691,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
           prompt: requestPrompt(descriptor.prompt, references),
           output_count: independentGPTTasks ? 1 : requestedOutputCount,
         })
+        if (await cancelLateJob(taskId, response.job_id)) return null
         if (!activeTasks.has(taskId)) return false
         task.jobId = response.job_id
         addMessageHistoryID(conversation.id, pendingId, response.job_id, descriptor.slotIndexes.length)
@@ -704,6 +716,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         finalizeGenerationMessage(conversation.id, pendingId)
         return images.length > 0
       } catch (error) {
+        canceledSubmittingTasks.delete(taskId)
         if (!activeTasks.has(taskId)) return false
         const message = error instanceof Error ? error.message : String(error)
         updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => descriptor.slotIndexes.includes(slotIndex)
@@ -714,7 +727,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         return false
       }
     }))
-    if (results.every(result => !result)) errorMessage.value = '所有图片生成任务均失败'
+    if (results.every(result => result === false)) errorMessage.value = '所有图片生成任务均失败'
   }
 
   function terminalMessage(record: GenerateResponse, fallbackPrompt = '', fallbackLabel?: string): ChatMessage {
@@ -791,6 +804,8 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
             : slot))
         }
       } else {
+        const taskID = [...activeTasks.entries()].find(([, current]) => current === task)?.[0]
+        if (taskID) canceledSubmittingTasks.add(taskID)
         updateGenerationSlots(task.conversationId, task.pendingId, slots => slots.map((slot, slotIndex) => task.slotIndexes.includes(slotIndex)
           ? { ...slot, status: 'canceled', progress: 100, error: '生成已取消' }
           : slot))
@@ -922,6 +937,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       syncGenerationState()
       try {
         const response = await options.api.retryHistory(historyID, { generation_group_id: generationGroupID })
+        if (await cancelLateJob(taskID, response.job_id)) return
         if (!activeTasks.has(taskID)) return
         task.jobId = response.job_id
         addMessageHistoryID(conversation.id, pendingId, response.job_id, outputCount)
@@ -942,6 +958,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         finishTask(taskID)
         finalizeGenerationMessage(conversation.id, pendingId)
       } catch (error) {
+        canceledSubmittingTasks.delete(taskID)
         const message = error instanceof Error ? error.message : String(error)
         updateGenerationSlots(conversation.id, pendingId, slots => slots.map((slot, slotIndex) => slotIndexes.includes(slotIndex)
           ? { ...slot, status: 'failed', progress: 100, error: message }
@@ -996,6 +1013,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       if (task.timer) clearTimeout(task.timer)
     }
     activeTasks.clear()
+    canceledSubmittingTasks.clear()
     syncGenerationState()
     cancelPromptOptimization()
   }
