@@ -404,6 +404,23 @@ describe('useImageGeneration', () => {
     expect(assistants[0].images?.map(image => image.variantLabel)).toEqual(['正面', '背面'])
   })
 
+  it('restores a canceled multi-image generation group as one conversation exchange', async () => {
+    const api = createApi()
+    api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Canceled', status: 'canceled', updated_at: '2026-07-16T10:00:00Z' }] })
+    api.listConversationMessages.mockResolvedValue({ items: Array.from({ length: 4 }, (_, index) => ({
+      id: `history-canceled-${index + 1}`, conversation_id: 'conversation-1', user_id: 1, prompt: 'Create a lamp', status: 'canceled',
+      request: { model: 'gpt-image-2', size: '1024x1024', output_count: 1, generation_group_id: 'group-repeat-1' },
+      error_message: '生成已取消', created_at: `2026-07-16T09:59:0${index}Z`, updated_at: '2026-07-16T10:00:00Z',
+    })) })
+    const state = useImageGeneration({ api, loadKeys: async () => [key] })
+
+    await state.initialize()
+
+    expect(state.conversations.value[0].messages).toHaveLength(2)
+    expect(state.conversations.value[0].messages[0].content).toBe('Create a lamp')
+    expect(state.conversations.value[0].messages[1]).toEqual(expect.objectContaining({ status: 'canceled', content: '生成已取消' }))
+  })
+
   it('keeps the latest reference when older messages are loaded', async () => {
     const api = createApi()
     api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })

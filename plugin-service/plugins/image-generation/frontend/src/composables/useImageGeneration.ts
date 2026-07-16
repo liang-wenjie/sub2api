@@ -567,6 +567,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
 
     const createdAt = timestamp()
     const userId = `user-${now().getTime()}`
+    const generationGroupID = `generation-${now().getTime()}`
     const independentGPTTasks = !useSeparateAngleImages && !hasMultipleAngles && model.value.startsWith('gpt-image-') && requestedOutputCount > 1
     const descriptors: GenerationDescriptor[] = independentGPTTasks
       ? (variants ?? Array.from({ length: requestedOutputCount }, (_, index) => ({
@@ -632,6 +633,7 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
         inputs: {
           display_prompt: userPrompt,
           conversation_id: conversation.conversationId || conversation.id,
+          generation_group_id: generationGroupID,
         },
     }
 
