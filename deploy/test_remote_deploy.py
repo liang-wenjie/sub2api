@@ -149,6 +149,23 @@ class LoadRemoteConfigTests(unittest.TestCase):
 
 
 class HelperTests(unittest.TestCase):
+    def test_plugin_service_receives_minio_configuration_in_release_compose_files(self) -> None:
+        project_root = Path(__file__).resolve().parent.parent
+        expected_variables = (
+            "MINIO_ENDPOINT=minio:9000",
+            "MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-sub2api-plugin}",
+            "MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}",
+            "MINIO_BUCKET=${MINIO_BUCKET:-plugin-media}",
+            "MINIO_USE_SSL=${MINIO_USE_SSL:-false}",
+        )
+
+        for compose_name in ("docker-compose.local.yml", "docker-compose.yml", "docker-compose.standalone.yml"):
+            compose_content = (project_root / "deploy" / compose_name).read_text(encoding="utf-8")
+            plugin_service = compose_content.split("  plugin-service:\n", 1)[1].split("\n  minio:\n", 1)[0]
+
+            for variable in expected_variables:
+                self.assertIn(variable, plugin_service, f"{compose_name} must configure {variable} for plugin-service")
+
     def test_should_upload_path_skips_runtime_data_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             project_root = Path(tmpdir)
