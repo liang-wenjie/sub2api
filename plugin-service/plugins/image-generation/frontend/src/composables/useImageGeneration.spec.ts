@@ -249,7 +249,8 @@ describe('useImageGeneration', () => {
     expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({
       size: '1024x1024', quality: 'high', output_format: 'webp', output_compression: 82, background: 'transparent',
     }))
-    expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('画质: high')
+    expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('画质: 高画质')
+    expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('背景: 透明背景')
     expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('格式: webp')
     expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('压缩: 82%')
   })
@@ -346,12 +347,14 @@ describe('useImageGeneration', () => {
     await state.submit()
 
     expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({
+      input_fidelity: 'high',
       reference_images: [expect.objectContaining({
         storage_key: 'image-generation/uploads/7/upload-1/original',
         preview_storage_key: 'image-generation/uploads/7/upload-1/preview',
         data_url: undefined,
       })],
     }))
+    expect(state.activeConversation.value?.messages[0].requestSettings?.[0].detailsLabel).toContain('保真度: 高保真')
   })
 
   it('loads summaries before the selected conversation details', async () => {
@@ -359,13 +362,19 @@ describe('useImageGeneration', () => {
     api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })
     api.listConversationMessages.mockResolvedValue({ items: [{
       id: 'history-1', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create a lamp', status: 'succeeded',
-      request: { model: 'gpt-image-2', size: '1024x1024', output_count: 3 }, result: { images: [{ url: '/original.png', preview_url: '/preview.jpg' }] },
+      request: {
+        model: 'gpt-image-2', size: '1024x1024', output_count: 3,
+        quality: 'high', background: 'transparent', input_fidelity: 'high',
+      }, result: { images: [{ url: '/original.png', preview_url: '/preview.jpg' }] },
       created_at: '2026-07-11T09:59:00Z', updated_at: '2026-07-11T10:00:00Z',
     }] })
     const state = useImageGeneration({ api, loadKeys: async () => [key] })
 
     await state.initialize()
     expect(state.conversations.value[0].messages[0].requestSettings?.[0].countLabel).toBe('数量: 3')
+    expect(state.conversations.value[0].messages[0].requestSettings?.[0].detailsLabel).toContain('画质: 高画质')
+    expect(state.conversations.value[0].messages[0].requestSettings?.[0].detailsLabel).toContain('背景: 透明背景')
+    expect(state.conversations.value[0].messages[0].requestSettings?.[0].detailsLabel).toContain('保真度: 高保真')
 
     expect(api.listConversationMessages).toHaveBeenCalledWith('conversation-1', '')
     expect(state.conversations.value[0].messages).toHaveLength(2)

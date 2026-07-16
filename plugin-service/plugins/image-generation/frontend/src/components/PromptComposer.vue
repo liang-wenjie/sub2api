@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
+import { imageParameterLabel } from '../parameterLabels'
 import type { ImagePresetSelection, ImageReference } from '../types'
 
 const props = withDefaults(defineProps<{
@@ -343,7 +344,7 @@ function confirmPresets() {
       <label v-if="qualityOptions.length" class="composer-select">
         <span class="sr-only">画质</span>
         <select :value="quality" data-testid="image-quality-select" @change="emit('update:quality', ($event.target as HTMLSelectElement).value)">
-          <option v-for="item in qualityOptions" :key="item" :value="item">{{ item }}</option>
+          <option v-for="item in qualityOptions" :key="item" :value="item">{{ imageParameterLabel('quality', item) }}</option>
         </select>
       </label>
       <label v-if="outputFormatOptions.length" class="composer-select">
@@ -359,13 +360,13 @@ function confirmPresets() {
       <label v-if="backgroundOptions.length" class="composer-select">
         <span class="sr-only">背景</span>
         <select :value="background" data-testid="image-background-select" @change="emit('update:background', ($event.target as HTMLSelectElement).value)">
-          <option v-for="item in backgroundOptions" :key="item" :value="item">{{ item }}</option>
+          <option v-for="item in backgroundOptions" :key="item" :value="item">{{ imageParameterLabel('background', item) }}</option>
         </select>
       </label>
       <label v-if="references.length && inputFidelityOptions.length" class="composer-select">
         <span class="sr-only">参考图保真度</span>
         <select :value="inputFidelity" data-testid="image-input-fidelity-select" @change="emit('update:inputFidelity', ($event.target as HTMLSelectElement).value)">
-          <option v-for="item in inputFidelityOptions" :key="item" :value="item">{{ item }}</option>
+          <option v-for="item in inputFidelityOptions" :key="item" :value="item">{{ imageParameterLabel('input_fidelity', item) }}</option>
         </select>
       </label>
       <label class="composer-select">

@@ -200,12 +200,15 @@ describe('image generation components', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="image-quality-select"]').element).toBeTruthy()
+    expect(wrapper.get('[data-testid="image-quality-select"]').text()).toContain('自动画质')
+    expect(wrapper.get('[data-testid="image-quality-select"]').text()).toContain('标准画质')
     expect(wrapper.get('[data-testid="image-output-format-select"]').element).toBeTruthy()
     expect(wrapper.get('[data-testid="image-output-compression"]').attributes('min')).toBe('0')
-    expect(wrapper.get('[data-testid="image-background-select"]').element).toBeTruthy()
-    expect(wrapper.get('[data-testid="image-input-fidelity-select"]').element).toBeTruthy()
+    expect(wrapper.get('[data-testid="image-background-select"]').text()).toContain('透明背景')
+    expect(wrapper.get('[data-testid="image-input-fidelity-select"]').text()).toContain('高保真')
+    await wrapper.get('[data-testid="image-quality-select"]').setValue('medium')
     await wrapper.get('[data-testid="image-output-compression"]').setValue(75)
+    expect(wrapper.emitted('update:quality')?.[0]).toEqual(['medium'])
     expect(wrapper.emitted('update:outputCompression')?.[0]).toEqual([75])
   })
 

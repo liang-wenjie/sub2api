@@ -1,4 +1,5 @@
 import { authenticatedMediaUrl } from '../api/client'
+import { imageParameterLabel } from '../parameterLabels'
 import type { ChatMessage, GeneratedImage, GeneratedImagePayload, HistoryRecord, ReferenceImageRequest } from '../types'
 
 function references(record: HistoryRecord) {
@@ -60,11 +61,11 @@ function historyParameterSummary(request: Record<string, unknown>): string {
   const details = [
     request.aspect_ratio ? `比例: ${request.aspect_ratio}` : '',
     request.resolution ? `分辨率: ${request.resolution}` : '',
-    request.quality ? `画质: ${request.quality}` : '',
+    request.quality ? `画质: ${imageParameterLabel('quality', String(request.quality))}` : '',
     request.output_format ? `格式: ${request.output_format}` : '',
     request.output_compression !== undefined ? `压缩: ${request.output_compression}%` : '',
-    request.background ? `背景: ${request.background}` : '',
-    request.input_fidelity ? `保真度: ${request.input_fidelity}` : '',
+    request.background ? `背景: ${imageParameterLabel('background', String(request.background))}` : '',
+    request.input_fidelity ? `保真度: ${imageParameterLabel('input_fidelity', String(request.input_fidelity))}` : '',
   ]
   return details.filter(Boolean).join(' | ')
 }

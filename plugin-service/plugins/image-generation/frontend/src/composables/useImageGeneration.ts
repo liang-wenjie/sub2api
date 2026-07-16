@@ -1,5 +1,6 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { authenticatedMediaUrl, type PluginApi } from '../api/client'
+import { imageParameterLabel } from '../parameterLabels'
 import { projectConversationMessages } from './conversationMessages'
 import type {
   ChatMessage,
@@ -475,11 +476,11 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
     const details = [
       aspectRatio.value ? `比例: ${aspectRatio.value}` : '',
       resolution.value ? `分辨率: ${resolution.value}` : '',
-      quality.value ? `画质: ${quality.value}` : '',
+      quality.value ? `画质: ${imageParameterLabel('quality', quality.value)}` : '',
       outputFormat.value ? `格式: ${outputFormat.value}` : '',
       supportsOutputCompression.value && outputCompression.value != null ? `压缩: ${outputCompression.value}%` : '',
-      background.value ? `背景: ${background.value}` : '',
-      hasReferences && inputFidelity.value ? `保真度: ${inputFidelity.value}` : '',
+      background.value ? `背景: ${imageParameterLabel('background', background.value)}` : '',
+      hasReferences && inputFidelity.value ? `保真度: ${imageParameterLabel('input_fidelity', inputFidelity.value)}` : '',
     ]
     return details.filter(Boolean).join(' | ')
   }
