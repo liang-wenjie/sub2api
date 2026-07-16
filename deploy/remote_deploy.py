@@ -290,6 +290,13 @@ def build_compose_pull_command(
     )
 
 
+def build_legacy_plugin_cleanup_command() -> str:
+    return (
+        "if docker container inspect plugin-service >/dev/null 2>&1; "
+        "then docker rm -f plugin-service; fi"
+    )
+
+
 def get_deploy_plan(config: RemoteDeployConfig, reuse_existing_data_services: bool) -> DeployPlan:
     return get_deploy_plan_with_assets(config, reuse_existing_data_services, ())
 
@@ -301,13 +308,13 @@ def get_deploy_plan_with_assets(
 ) -> DeployPlan:
     if config.deploy_target == "plugin_service":
         return DeployPlan(
-            services=("plugin-service",),
+            services=("sub2api-plugin-server",),
             force_recreate=True,
             no_deps=True,
-            health_checks=(("plugin-service", "plugin-service"),),
+            health_checks=(("sub2api-plugin-server", "sub2api-plugin-server"),),
         )
 
-    services = ("sub2api", "plugin-service")
+    services = ("sub2api", "sub2api-plugin-server")
     if config.image_source == "local_image":
         if local_image_services:
             services = tuple(service for service in services if service in local_image_services)
@@ -359,7 +366,7 @@ def get_image_assets(config: RemoteDeployConfig, project_root: Path = PROJECT_RO
     if config.plugin_local_image and config.plugin_local_image_tar:
         assets.append(
             ImageAsset(
-                service_name="plugin-service",
+                service_name="sub2api-plugin-server",
                 image_name=config.plugin_local_image,
                 tar_path=resolve_plugin_local_image_tar_path(config, project_root),
                 build_enabled=config.build_plugin_local_image,
@@ -631,7 +638,7 @@ def print_remote_runtime_diagnostics(client: object, remote_dir: str, compose_fi
 
     plugin_port_binding = try_exec_remote_command(
         client,
-        "docker port plugin-service 8091",
+        "docker port sub2api-plugin-server 8091",
         timeout=30,
     )
     if plugin_port_binding:
@@ -724,6 +731,9 @@ def deploy_to_remote(config: RemoteDeployConfig) -> None:
             reuse_existing_data_services,
             tuple(asset.service_name for asset in image_assets),
         )
+        if "sub2api-plugin-server" in plan.services:
+            exec_remote_command(client, build_legacy_plugin_cleanup_command(), timeout=60)
+
         if reuse_existing_data_services and config.deploy_target != "plugin_service":
             print("Detected existing postgres/redis containers, will recreate app services only.")
 

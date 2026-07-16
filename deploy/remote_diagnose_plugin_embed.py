@@ -181,7 +181,7 @@ def diagnose_remote_embed(public_base_url: str = "") -> None:
         print_section("Plugin container image")
         image_name = remote_deploy.try_exec_remote_command(
             client,
-            "docker inspect --format '{{.Config.Image}}' plugin-service",
+            "docker inspect --format '{{.Config.Image}}' sub2api-plugin-server",
             timeout=30,
         )
         print_command_output(image_name.splitlines())
@@ -189,7 +189,7 @@ def diagnose_remote_embed(public_base_url: str = "") -> None:
         print_section("Plugin frontend files")
         file_status = remote_deploy.try_exec_remote_command(
             client,
-            f"docker exec plugin-service {build_remote_file_probe_command()}",
+            f"docker exec sub2api-plugin-server {build_remote_file_probe_command()}",
             timeout=30,
         )
         print_command_output(file_status.splitlines())

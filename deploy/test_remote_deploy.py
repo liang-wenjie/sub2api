@@ -161,10 +161,14 @@ class HelperTests(unittest.TestCase):
 
         for compose_name in ("docker-compose.local.yml", "docker-compose.yml", "docker-compose.standalone.yml"):
             compose_content = (project_root / "deploy" / compose_name).read_text(encoding="utf-8")
-            plugin_service = compose_content.split("  plugin-service:\n", 1)[1].split("\n  minio:\n", 1)[0]
+            plugin_service = compose_content.split("  sub2api-plugin-server:\n", 1)[1].split("\n  minio:\n", 1)[0]
 
             for variable in expected_variables:
-                self.assertIn(variable, plugin_service, f"{compose_name} must configure {variable} for plugin-service")
+                self.assertIn(variable, plugin_service, f"{compose_name} must configure {variable} for sub2api-plugin-server")
+
+            self.assertIn("container_name: sub2api-plugin-server", plugin_service)
+            self.assertIn("aliases:", plugin_service)
+            self.assertIn("- plugin-server", plugin_service)
 
     def test_should_upload_path_skips_runtime_data_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -214,57 +218,64 @@ class HelperTests(unittest.TestCase):
         command = remote_deploy.build_compose_up_command(
             remote_dir="/opt/sub2api",
             compose_file="docker-compose.local.yml",
-            services=("sub2api", "plugin-service"),
+            services=("sub2api", "sub2api-plugin-server"),
             force_recreate=True,
             no_deps=False,
         )
 
-        self.assertIn("up -d --force-recreate sub2api plugin-service", command)
+        self.assertIn("up -d --force-recreate sub2api sub2api-plugin-server", command)
         self.assertNotIn(" up -d\"", command)
 
     def test_build_compose_up_command_keeps_normal_up_for_compose_mode(self) -> None:
         command = remote_deploy.build_compose_up_command(
             remote_dir="/opt/sub2api",
             compose_file="docker-compose.local.yml",
-            services=("sub2api", "plugin-service"),
+            services=("sub2api", "sub2api-plugin-server"),
             force_recreate=False,
             no_deps=False,
         )
 
-        self.assertIn("up -d sub2api plugin-service", command)
+        self.assertIn("up -d sub2api sub2api-plugin-server", command)
         self.assertNotIn("--force-recreate", command)
 
     def test_build_compose_up_command_reuses_existing_data_services(self) -> None:
         command = remote_deploy.build_compose_up_command(
             remote_dir="/opt/sub2api",
             compose_file="docker-compose.local.yml",
-            services=("sub2api", "plugin-service"),
+            services=("sub2api", "sub2api-plugin-server"),
             force_recreate=True,
             no_deps=True,
         )
 
-        self.assertIn("up -d --no-deps --force-recreate sub2api plugin-service", command)
+        self.assertIn("up -d --no-deps --force-recreate sub2api sub2api-plugin-server", command)
 
     def test_build_compose_up_command_deploys_only_plugin_service(self) -> None:
         command = remote_deploy.build_compose_up_command(
             remote_dir="/opt/sub2api",
             compose_file="docker-compose.local.yml",
-            services=("plugin-service",),
+            services=("sub2api-plugin-server",),
             force_recreate=True,
             no_deps=True,
         )
 
-        self.assertIn("up -d --no-deps --force-recreate plugin-service", command)
-        self.assertNotIn("sub2api", command.split("up -d", 1)[1])
+        self.assertIn("up -d --no-deps --force-recreate sub2api-plugin-server", command)
+        self.assertNotIn(" sub2api ", command.split("up -d", 1)[1])
 
     def test_build_compose_pull_command_targets_plugin_service_only(self) -> None:
         command = remote_deploy.build_compose_pull_command(
             remote_dir="/opt/sub2api",
             compose_file="docker-compose.local.yml",
-            services=("plugin-service",),
+            services=("sub2api-plugin-server",),
         )
 
-        self.assertIn("pull plugin-service", command)
+        self.assertIn("pull sub2api-plugin-server", command)
+
+    def test_build_legacy_plugin_cleanup_command_removes_old_container_only(self) -> None:
+        command = remote_deploy.build_legacy_plugin_cleanup_command()
+
+        self.assertIn("docker container inspect plugin-service", command)
+        self.assertIn("docker rm -f plugin-service", command)
+        self.assertNotIn("sub2api-plugin-server", command)
 
     def test_get_deploy_plan_for_plugin_service_only(self) -> None:
         config = remote_deploy.RemoteDeployConfig(
@@ -289,10 +300,10 @@ class HelperTests(unittest.TestCase):
 
         plan = remote_deploy.get_deploy_plan(config, reuse_existing_data_services=True)
 
-        self.assertEqual(plan.services, ("plugin-service",))
+        self.assertEqual(plan.services, ("sub2api-plugin-server",))
         self.assertTrue(plan.force_recreate)
         self.assertTrue(plan.no_deps)
-        self.assertEqual(plan.health_checks, (("plugin-service", "plugin-service"),))
+        self.assertEqual(plan.health_checks, (("sub2api-plugin-server", "sub2api-plugin-server"),))
 
     def test_get_deploy_plan_local_image_without_plugin_asset_recreates_only_sub2api(self) -> None:
         config = remote_deploy.RemoteDeployConfig(

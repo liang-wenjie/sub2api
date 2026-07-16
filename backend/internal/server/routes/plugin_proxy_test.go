@@ -132,10 +132,10 @@ func TestResolvePluginServiceBaseURL(t *testing.T) {
 
 	t.Setenv("PLUGIN_SERVICE_BASE_URL", "")
 	t.Setenv("PLUGIN_SERVER_PORT", "")
-	require.Equal(t, "http://plugin-service:8091", resolvePluginServiceBaseURL(""))
+	require.Equal(t, "http://plugin-server:8091", resolvePluginServiceBaseURL(""))
 
 	t.Setenv("PLUGIN_SERVER_PORT", "18091")
-	require.Equal(t, "http://plugin-service:18091", resolvePluginServiceBaseURL(""))
+	require.Equal(t, "http://plugin-server:18091", resolvePluginServiceBaseURL(""))
 
 	t.Setenv("PLUGIN_SERVICE_BASE_URL", "http://custom-plugin:19091")
 	require.Equal(t, "http://custom-plugin:19091", resolvePluginServiceBaseURL(""))

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultPluginServiceURL      = "http://plugin-service:8091"
+	defaultPluginServiceURL      = "http://plugin-server:8091"
 	defaultPluginServicePort     = "8091"
 	localhostPluginServiceHost   = "127.0.0.1"
 	localhostPluginServiceScheme = "http"
@@ -67,7 +67,7 @@ func resolvePluginServiceBaseURL(explicit string) string {
 		return localhostPluginServiceScheme + "://" + dockerHostPluginServiceHost + ":" + port
 	}
 	if strings.TrimSpace(os.Getenv("PLUGIN_SERVER_PORT")) != "" {
-		return "http://plugin-service:" + port
+		return "http://plugin-server:" + port
 	}
 	return defaultPluginServiceURL
 }
@@ -98,7 +98,7 @@ func newPluginReverseProxy(baseURL string) (*httputil.ReverseProxy, error) {
 }
 
 func refreshPluginProxyTarget(target *url.URL) *url.URL {
-	if target == nil || target.Hostname() != "plugin-service" {
+	if target == nil || target.Hostname() != "plugin-server" {
 		return target
 	}
 	refreshed, err := url.Parse(resolvePluginServiceBaseURL(""))
