@@ -146,7 +146,7 @@ describe('image generation components', () => {
     })
   })
 
-  it('sizes generation selects from their current visible values', async () => {
+  it('keeps native generation selects in normal document flow', async () => {
     const wrapper = mount(PromptComposer, {
       props: {
         prompt: '',
@@ -160,9 +160,7 @@ describe('image generation components', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="image-model-width"]').text()).toBe('gpt-image-2')
-    expect(wrapper.get('[data-testid="image-size-width"]').text()).toBe('1536 × 1024')
-    expect(wrapper.get('[data-testid="image-output-count-width"]').text()).toBe('3 张')
+    expect(wrapper.findAll('.composer-select > select')).toHaveLength(3)
 
     await wrapper.get('[data-testid="image-model-select"]').setValue('image-model-with-a-long-name')
     await wrapper.get('[data-testid="image-size-select"]').setValue('1024x1536')

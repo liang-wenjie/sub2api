@@ -318,42 +318,36 @@ function confirmPresets() {
     <div class="composer-tools">
       <label class="composer-select">
         <span class="sr-only">模型</span>
-        <span class="composer-select-width" data-testid="image-model-width" aria-hidden="true">{{ model }}</span>
         <select :value="model" data-testid="image-model-select" @change="emit('update:model', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in models" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
       <label v-if="effectiveSizeOptions.length" class="composer-select">
         <span class="sr-only">尺寸</span>
-        <span class="composer-select-width" data-testid="image-size-width" aria-hidden="true">{{ size.replace('x', ' × ') }}</span>
         <select :value="size" data-testid="image-size-select" @change="emit('update:size', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in effectiveSizeOptions" :key="item" :value="item">{{ item.replace('x', ' × ') }}</option>
         </select>
       </label>
       <label v-if="aspectRatioOptions.length" class="composer-select">
         <span class="sr-only">图片比例</span>
-        <span class="composer-select-width" aria-hidden="true">{{ aspectRatio }}</span>
         <select :value="aspectRatio" data-testid="image-aspect-ratio-select" @change="emit('update:aspectRatio', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in aspectRatioOptions" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
       <label v-if="resolutionOptions.length" class="composer-select">
         <span class="sr-only">分辨率</span>
-        <span class="composer-select-width" aria-hidden="true">{{ resolution }}</span>
         <select :value="resolution" data-testid="image-resolution-select" @change="emit('update:resolution', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in resolutionOptions" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
       <label v-if="qualityOptions.length" class="composer-select">
         <span class="sr-only">画质</span>
-        <span class="composer-select-width" aria-hidden="true">{{ quality }}</span>
         <select :value="quality" data-testid="image-quality-select" @change="emit('update:quality', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in qualityOptions" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
       <label v-if="outputFormatOptions.length" class="composer-select">
         <span class="sr-only">输出格式</span>
-        <span class="composer-select-width" aria-hidden="true">{{ outputFormat }}</span>
         <select :value="outputFormat" data-testid="image-output-format-select" @change="emit('update:outputFormat', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in outputFormatOptions" :key="item" :value="item">{{ item }}</option>
         </select>
@@ -364,21 +358,18 @@ function confirmPresets() {
       </label>
       <label v-if="backgroundOptions.length" class="composer-select">
         <span class="sr-only">背景</span>
-        <span class="composer-select-width" aria-hidden="true">{{ background }}</span>
         <select :value="background" data-testid="image-background-select" @change="emit('update:background', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in backgroundOptions" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
       <label v-if="references.length && inputFidelityOptions.length" class="composer-select">
         <span class="sr-only">参考图保真度</span>
-        <span class="composer-select-width" aria-hidden="true">{{ inputFidelity }}</span>
         <select :value="inputFidelity" data-testid="image-input-fidelity-select" @change="emit('update:inputFidelity', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in inputFidelityOptions" :key="item" :value="item">{{ item }}</option>
         </select>
       </label>
       <label class="composer-select">
         <span class="sr-only">生成数量</span>
-        <span class="composer-select-width" data-testid="image-output-count-width" aria-hidden="true">{{ outputCount }} 张</span>
         <select :value="outputCount" data-testid="image-output-count" @change="emit('update:outputCount', Number(($event.target as HTMLSelectElement).value))">
           <option v-for="count in maxOutputImages" :key="count" :value="count">{{ count }} 张</option>
         </select>

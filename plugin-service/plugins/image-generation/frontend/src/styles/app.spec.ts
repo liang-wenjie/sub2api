@@ -30,11 +30,14 @@ describe('implicit scrollbars', () => {
     expect(css).toMatch(/\.reference-use-button\s*\{[^}]*height:\s*32px;[^}]*min-height:\s*32px;[^}]*padding:\s*0\s+10px;[^}]*border-radius:\s*8px;[^}]*font-size:\s*11px;/s)
   })
 
-  it('keeps native generation selects out of intrinsic width calculation', () => {
-    expect(css).toMatch(/\.composer-select\s*\{[^}]*position:\s*relative;[^}]*display:\s*inline-grid;/s)
-    expect(css).toMatch(/\.composer-select select\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*width:\s*100%;/s)
-    expect(css).toMatch(/\.composer-select-width\s*\{[^}]*padding:\s*0\s+44px\s+0\s+16px;/s)
-    expect(css).not.toMatch(/\.composer-select[^}]*max-width:\s*150px;/s)
+  it('keeps native generation selects in normal document flow', () => {
+    expect(css).toMatch(/\.composer-select\s*\{[^}]*display:\s*inline-flex;[^}]*flex:\s*0\s+0\s+auto;/s)
+    expect(css).not.toMatch(/\.composer-select select\s*\{[^}]*position:\s*absolute;/s)
+  })
+
+  it('wraps toolbar controls before their labels can be compressed', () => {
+    expect(css).toMatch(/\.compression-control\s*\{[^}]*flex:\s*0\s+0\s+auto;/s)
+    expect(css).toMatch(/\.preset-button\s*\{[^}]*flex:\s*0\s+0\s+auto;/s)
   })
 
   it('wraps long generation parameter summaries inside narrow message bubbles', () => {
