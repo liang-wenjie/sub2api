@@ -51,6 +51,7 @@ function generationSlots(record: HistoryRecord): GenerationSlot[] {
     const image = matchingIndex >= 0 ? unusedImages.splice(matchingIndex, 1)[0] : undefined
     const base = { id: `${record.id}-slot-${index}`, label, progress: 100 }
     if (image) return { ...base, status: 'succeeded' as const, image }
+    if (record.status === 'pending') return { ...base, status: 'pending' as const, progress: 1 }
     if (record.status === 'canceled') return { ...base, status: 'canceled' as const, error: record.error_message || '生成已取消' }
     return {
       ...base,
@@ -96,19 +97,25 @@ export function projectConversationMessages(records: HistoryRecord[]): ChatMessa
         historyIds: group.map(item => item.id),
         historyTasks,
       }
-      if (group.some(item => item.status === 'pending')) return [user, { id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...', createdAt: new Date(latest.updated_at).toLocaleString(), status: 'pending', historyIds: group.map(item => item.id), historyTasks } as ChatMessage]
       const generated = group.flatMap(images)
+      const slots = group.flatMap(generationSlots)
+      const hasPendingSlots = slots.some(slot => slot.status === 'pending')
       if (generated.length) {
-        const slots = group.flatMap(generationSlots)
         const hasIncompleteSlots = slots.some(slot => slot.status !== 'succeeded')
         return [user, {
-          id: `${record.id}-assistant`, role: 'assistant', content: '生成结果',
+          id: `${record.id}-assistant`, role: 'assistant', content: hasPendingSlots ? '正在生成图片，请稍候...' : '生成结果',
           createdAt: new Date(latest.updated_at).toLocaleString(), images: generated,
           generationSlots: hasIncompleteSlots ? slots : undefined,
+          status: hasPendingSlots ? 'pending' : undefined,
           historyIds: group.map(item => item.id),
           historyTasks,
         } as ChatMessage]
       }
+      if (hasPendingSlots) return [user, {
+        id: `${record.id}-assistant`, role: 'assistant', content: '正在生成图片，请稍候...',
+        createdAt: new Date(latest.updated_at).toLocaleString(), status: 'pending', generationSlots: slots,
+        historyIds: group.map(item => item.id), historyTasks,
+      } as ChatMessage]
       if (group.every(item => item.status === 'succeeded')) return [user]
       const status = group.every(item => item.status === 'canceled') ? 'canceled' : 'failed'
       const failed = group.find(item => item.status === 'failed')

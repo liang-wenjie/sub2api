@@ -447,6 +447,42 @@ describe('useImageGeneration', () => {
     expect(assistant.generationSlots?.[1]).toEqual(expect.objectContaining({ status: 'failed', error: 'second image failed' }))
   })
 
+  it('shows completed images while the rest of a history group is pending', async () => {
+    const api = createApi()
+    api.getStatus.mockResolvedValue({
+      job_id: 'history-pending', status: 'succeeded', result: { images: [{ url: '/pending-success.png' }] },
+    })
+    api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Generating', status: 'pending', updated_at: '2026-07-17T10:00:00Z' }] })
+    api.listConversationMessages.mockResolvedValue({ items: [
+      {
+        id: 'history-success', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create two lamps', status: 'succeeded',
+        request: { model: 'gpt-image-2', size: '1024x1024', output_count: 1, generation_group_id: 'group-1' },
+        result: { images: [{ url: '/success.png' }] }, created_at: '2026-07-17T09:59:00Z', updated_at: '2026-07-17T10:00:00Z',
+      },
+      {
+        id: 'history-pending', conversation_id: 'conversation-1', user_id: 1, prompt: 'Create two lamps', status: 'pending',
+        request: { model: 'gpt-image-2', size: '1024x1024', output_count: 1, generation_group_id: 'group-1' },
+        created_at: '2026-07-17T09:59:01Z', updated_at: '2026-07-17T10:00:01Z',
+      },
+    ] })
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+
+    await state.initialize()
+
+    const assistant = state.conversations.value[0].messages[1]
+    expect(assistant.status).toBe('pending')
+    expect(assistant.images?.[0].src).toContain('/success.png')
+    expect(assistant.generationSlots).toHaveLength(2)
+    expect(assistant.generationSlots?.[0]).toEqual(expect.objectContaining({ status: 'succeeded' }))
+    expect(assistant.generationSlots?.[1]).toEqual(expect.objectContaining({ status: 'pending' }))
+
+    await vi.waitFor(() => {
+      const completed = state.conversations.value[0].messages[1]
+      expect(completed.generationSlots?.map(slot => slot.status)).toEqual(['succeeded', 'succeeded'])
+      expect(completed.images?.[1].src).toContain('/pending-success.png')
+    })
+  })
+
   it('keeps the latest reference when older messages are loaded', async () => {
     const api = createApi()
     api.listConversations.mockResolvedValue({ items: [{ id: 'conversation-1', title: 'Lamp', preview: 'Latest', status: 'succeeded', updated_at: '2026-07-11T10:00:00Z' }] })

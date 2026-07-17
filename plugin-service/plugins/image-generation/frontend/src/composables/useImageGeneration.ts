@@ -315,17 +315,22 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       }))
       conversationNextCursor.value = { ...conversationNextCursor.value, [id]: page.next_cursor || '' }
       for (const pending of page.items.filter(record => record.status === 'pending')) {
-        const pendingId = `${pending.id}-assistant`
-        activeTasks.set(pendingId, {
+        const assistant = messages.find(message => message.role === 'assistant' && message.historyTasks?.some(task => task.id === pending.id))
+        const historyTasks = assistant?.historyTasks ?? [{ id: pending.id, outputCount: Number(pending.request.output_count) || 1 }]
+        const taskIndex = historyTasks.findIndex(task => task.id === pending.id)
+        const slotOffset = historyTasks.slice(0, Math.max(taskIndex, 0)).reduce((total, task) => total + task.outputCount, 0)
+        const outputCount = historyTasks[Math.max(taskIndex, 0)]?.outputCount ?? 1
+        const taskId = `${pending.id}-assistant`
+        activeTasks.set(taskId, {
           conversationId: id,
-          pendingId,
-          slotIndexes: [0],
+          pendingId: assistant?.id ?? taskId,
+          slotIndexes: Array.from({ length: outputCount }, (_, index) => slotOffset + index),
           prompt: pending.prompt,
           jobId: pending.id,
           state: 'polling',
         })
         syncGenerationState()
-        schedulePoll(pendingId)
+        schedulePoll(taskId)
       }
     } finally {
       if (sequence === conversationRequestSequence) loadingConversation.value = false
