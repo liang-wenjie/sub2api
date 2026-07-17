@@ -158,6 +158,67 @@ func TestGenerationService_GenerateVariantsUsesIndependentPrompts(t *testing.T) 
 	}
 }
 
+func TestGenerationService_GPTVariantsPersistCompletedImagesWhilePending(t *testing.T) {
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var releaseOnce sync.Once
+	var requestCount atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request := requestCount.Add(1)
+		if request == 2 {
+			close(secondStarted)
+			<-releaseSecond
+		}
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"aW1hZ2U="}]}`))
+	}))
+	defer func() {
+		releaseOnce.Do(func() { close(releaseSecond) })
+		upstream.Close()
+	}()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client(), MediaStorage: newMemoryMediaStorage()})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(context.Background(), principal, upstream.URL, GenerateRequest{
+		Prompt: "character", ProviderAPIKey: "provider-key", Model: "gpt-image-1",
+		Variants: []GenerateVariant{{Label: "正面", Prompt: "front"}, {Label: "背面", Prompt: "back"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second GPT variant did not start")
+	}
+
+	pending, err := svc.Status(context.Background(), principal, upstream.URL, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := imageMapsValue(pending.Result["images"])
+	if pending.Status != model.HistoryStatusPending || len(images) != 1 || images[0]["variant_label"] != "正面" {
+		t.Fatalf("pending record = %#v", pending)
+	}
+
+	releaseOnce.Do(func() { close(releaseSecond) })
+	deadline := time.Now().Add(time.Second)
+	for pending.Status != model.HistoryStatusSucceeded && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		pending, err = svc.Status(context.Background(), principal, upstream.URL, created.JobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	completedImages := imageMapsValue(pending.Result["images"])
+	if pending.Status != model.HistoryStatusSucceeded || len(completedImages) != 2 {
+		t.Fatalf("completed record = %#v", pending)
+	}
+	if completedImages[0]["url"] != apiBasePath+"/assets/"+created.JobID+"/result/0" || completedImages[1]["url"] != apiBasePath+"/assets/"+created.JobID+"/result/1" {
+		t.Fatalf("completed image URLs = %#v", completedImages)
+	}
+}
+
 func TestGenerationService_OptimizePromptFallsBackWhenProviderReturnsEmptyContent(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""}}]}`))
@@ -360,6 +421,8 @@ func TestGenerationService_BatchLifecycleResolvesStoredAPIKeyID(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"batch-key-id","status":"queued"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/batch-key-id":
 			_, _ = w.Write([]byte(`{"id":"batch-key-id","status":"queued"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/batch-key-id/items":
+			_, _ = w.Write([]byte(`{"data":[]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches/batch-key-id/cancel":
 			_, _ = w.Write([]byte(`{"id":"batch-key-id","status":"cancelled"}`))
 		default:
@@ -955,6 +1018,62 @@ func TestGenerationService_ReconcileCompletedBatch(t *testing.T) {
 	images := imageMapsValue(completed.Result["images"])
 	if len(images) != 2 || images[0]["url"] != "data:image/png;base64,cG5n" {
 		t.Fatalf("images = %#v", images)
+	}
+}
+
+func TestGenerationService_BatchPersistsCompletedItemsWhilePending(t *testing.T) {
+	ctx := context.Background()
+	var contentCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches":
+			_, _ = w.Write([]byte(`{"id":"batch-progress","status":"queued"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/batch-progress":
+			_, _ = w.Write([]byte(`{"id":"batch-progress","status":"running"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/batch-progress/items":
+			_, _ = w.Write([]byte(`{"data":[{"custom_id":"variant-front","status":"completed","image_count":1},{"custom_id":"variant-back","status":"pending","image_count":0}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/batch-progress/items/variant-front/content":
+			contentCalls.Add(1)
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("front"))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	history := service.NewHistoryService(repository.NewHistoryRepository())
+	svc := NewGenerationService(history, GenerationServiceOptions{HTTPClient: upstream.Client()})
+	principal := model.CurrentPrincipal{UserID: 7, Role: model.RoleUser, Plugin: "image-generation"}
+	created, err := svc.Generate(ctx, principal, upstream.URL, GenerateRequest{
+		Prompt: "character", ProviderAPIKey: "api-key", Model: "gemini-2.5-flash-image",
+		Variants: []GenerateVariant{{Label: "正面", Prompt: "front"}, {Label: "背面", Prompt: "back"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := history.Get(ctx, principal, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Request["batch_variant_labels"] = map[string]string{"variant-front": "正面", "variant-back": "背面"}
+	if err := history.Update(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := svc.Status(ctx, principal, upstream.URL, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := imageMapsValue(pending.Result["images"])
+	if pending.Status != model.HistoryStatusPending || len(images) != 1 || images[0]["variant_label"] != "正面" {
+		t.Fatalf("pending record = %#v", pending)
+	}
+	if _, err := svc.Status(ctx, principal, upstream.URL, created.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if contentCalls.Load() != 1 {
+		t.Fatalf("completed item content calls = %d, want 1", contentCalls.Load())
 	}
 }
 

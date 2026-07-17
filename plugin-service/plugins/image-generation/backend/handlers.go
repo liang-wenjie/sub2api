@@ -46,7 +46,7 @@ type RetryHistoryRequest struct {
 
 func compactJobResponse(record *model.HistoryRecord) JobResponse {
 	response := JobResponse{JobID: record.ID, Status: record.Status}
-	if record.Status == model.HistoryStatusSucceeded {
+	if record.Status == model.HistoryStatusSucceeded || len(imageMapsValue(record.Result["images"])) > 0 {
 		response.Result = record.Result
 	}
 	if record.Status == model.HistoryStatusFailed || record.Status == model.HistoryStatusCanceled {

@@ -448,9 +448,15 @@ func (s *GenerationService) runLocalTask(ctx context.Context, cancel context.Can
 		s.tasksMu.Unlock()
 	}()
 
-	result, generationErr := s.generateWithProvider(ctx, providerBaseURL, req)
-	if generationErr == nil {
-		generationErr = s.archiveResultImages(ctx, historyID, result)
+	var result map[string]any
+	var generationErr error
+	if len(req.Variants) > 0 {
+		result, generationErr = s.generateVariantsIncrementally(ctx, historyID, providerBaseURL, req)
+	} else {
+		result, generationErr = s.generateWithProvider(ctx, providerBaseURL, req)
+		if generationErr == nil {
+			generationErr = s.archiveResultImages(ctx, historyID, result)
+		}
 	}
 	record, err := s.history.Get(context.Background(), model.CurrentPrincipal{Role: model.RoleAdmin}, historyID)
 	if err != nil || isTerminalHistoryStatus(record.Status) {
@@ -465,6 +471,60 @@ func (s *GenerationService) runLocalTask(ctx context.Context, cancel context.Can
 		record.ErrorMessage = ""
 	}
 	_ = s.history.Update(context.Background(), record)
+}
+
+func (s *GenerationService) generateVariantsIncrementally(ctx context.Context, historyID, providerBaseURL string, req GenerateRequest) (map[string]any, error) {
+	for index, variant := range req.Variants {
+		single := req
+		single.Prompt = variant.Prompt
+		single.OutputCount = 1
+		single.Variants = nil
+		result, err := s.generateSingleWithProvider(ctx, providerBaseURL, single)
+		if err != nil {
+			return nil, err
+		}
+		for _, image := range imageMapsValue(result["images"]) {
+			image["variant_label"] = variant.Label
+			if strings.TrimSpace(stringValue(image["revised_prompt"])) == "" {
+				image["revised_prompt"] = variant.Label
+			}
+		}
+		if err := s.appendResultImages(ctx, historyID, result, "local-variant-"+strconv.Itoa(index+1)); err != nil {
+			return nil, err
+		}
+	}
+	record, err := s.history.Get(context.Background(), model.CurrentPrincipal{Role: model.RoleAdmin}, historyID)
+	if err != nil {
+		return nil, err
+	}
+	return record.Result, nil
+}
+
+func (s *GenerationService) appendResultImages(ctx context.Context, historyID string, result map[string]any, sourceID string) error {
+	record, err := s.history.Get(context.Background(), model.CurrentPrincipal{Role: model.RoleAdmin}, historyID)
+	if err != nil || isTerminalHistoryStatus(record.Status) {
+		return err
+	}
+	if record.Result == nil {
+		record.Result = map[string]any{}
+	}
+	images := imageMapsValue(result["images"])
+	if len(images) == 0 {
+		return nil
+	}
+	existing := imageMapsValue(record.Result["images"])
+	if s.mediaStorage != nil {
+		if err := s.archiveResultImagesAt(ctx, historyID, result, len(existing)); err != nil {
+			return err
+		}
+		images = imageMapsValue(result["images"])
+	}
+	for _, image := range images {
+		image["source_id"] = sourceID
+		existing = append(existing, image)
+	}
+	record.Result["images"] = existing
+	return s.history.Update(ctx, record)
 }
 
 func (s *GenerationService) submitBatch(ctx context.Context, record *model.HistoryRecord, providerBaseURL string, req GenerateRequest) (*GenerateResponse, error) {
@@ -634,6 +694,9 @@ func (s *GenerationService) reconcileBatch(ctx context.Context, source *http.Req
 	case "cancelled", "canceled":
 		record.Status = model.HistoryStatusCanceled
 	default:
+		if err := s.appendCompletedBatchItems(ctx, record, providerBaseURL, apiKey, batchID); err != nil {
+			return nil, err
+		}
 		record.Status = model.HistoryStatusPending
 	}
 	if err := s.history.Update(ctx, record); err != nil {
@@ -647,29 +710,63 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 	if err != nil {
 		return err
 	}
+	if err := s.appendCompletedBatchItemsFromList(ctx, record, providerBaseURL, apiKey, batchID, items.Data); err != nil {
+		return err
+	}
+	variantLabels := stringMapValue(record.Request["batch_variant_labels"])
+	failedVariants := make([]string, 0)
+	for _, item := range items.Data {
+		if label := variantLabels[item.CustomID]; label != "" && (item.Status != "completed" || item.ImageCount < 1) {
+			failedVariants = append(failedVariants, label)
+		}
+	}
+	if len(imageMapsValue(record.Result["images"])) == 0 {
+		return errors.New("completed batch image item is missing")
+	}
+	record.Result["batch_status"] = "completed"
+	if len(failedVariants) > 0 {
+		record.Result["failed_variants"] = failedVariants
+	}
+	return nil
+}
+
+func (s *GenerationService) appendCompletedBatchItems(ctx context.Context, record *model.HistoryRecord, providerBaseURL, apiKey, batchID string) error {
+	items, err := s.batchClient.ListItems(ctx, providerBaseURL, apiKey, batchID)
+	if err != nil {
+		return err
+	}
+	return s.appendCompletedBatchItemsFromList(ctx, record, providerBaseURL, apiKey, batchID, items.Data)
+}
+
+func (s *GenerationService) appendCompletedBatchItemsFromList(ctx context.Context, record *model.HistoryRecord, providerBaseURL, apiKey, batchID string, items []batchItem) error {
 	customID := stringValue(record.Request["batch_custom_id"])
 	variantLabels := stringMapValue(record.Request["batch_variant_labels"])
-	selected := make([]batchItem, 0, len(items.Data))
-	for _, item := range items.Data {
+	selected := make([]batchItem, 0, len(items))
+	for _, item := range items {
 		if item.CustomID == customID || variantLabels[item.CustomID] != "" {
 			selected = append(selected, item)
 		}
 	}
 	if len(selected) == 0 {
-		return errors.New("completed batch image item is missing")
+		return nil
 	}
-	images := make([]map[string]any, 0)
-	failedVariants := make([]string, 0)
-	archiveIndex := 0
+	if record.Result == nil {
+		record.Result = map[string]any{}
+	}
+	existing := imageMapsValue(record.Result["images"])
+	knownSources := make(map[string]bool, len(existing))
+	for _, image := range existing {
+		knownSources[stringValue(image["source_id"])] = true
+	}
 	for _, item := range selected {
 		if item.Status != "completed" || item.ImageCount < 1 {
-			if label := variantLabels[item.CustomID]; label != "" {
-				failedVariants = append(failedVariants, label)
-				continue
-			}
-			return errors.New("completed batch image item is missing")
+			continue
 		}
 		for imageIndex := 0; imageIndex < item.ImageCount; imageIndex++ {
+			sourceID := item.CustomID + ":" + strconv.Itoa(imageIndex)
+			if knownSources[sourceID] {
+				continue
+			}
 			content, mimeType, err := s.batchClient.GetItemContent(ctx, providerBaseURL, apiKey, batchID, item.CustomID, imageIndex)
 			if err != nil {
 				return err
@@ -682,7 +779,7 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 				"variant_label":  label,
 			}
 			if s.mediaStorage != nil {
-				stored, err := s.archiveImage(ctx, record.ID, archiveIndex, mimeType, content)
+				stored, err := s.archiveImage(ctx, record.ID, len(existing), mimeType, content)
 				if err != nil {
 					return err
 				}
@@ -690,24 +787,12 @@ func (s *GenerationService) completeBatchResult(ctx context.Context, record *mod
 				stored["variant_label"] = label
 				image = stored
 			}
-			images = append(images, image)
-			archiveIndex++
+			image["source_id"] = sourceID
+			existing = append(existing, image)
+			knownSources[sourceID] = true
 		}
 	}
-	if len(images) == 0 {
-		return errors.New("completed batch image item is missing")
-	}
-	record.Result = map[string]any{
-		"type":         "image_generation",
-		"provider":     "batch",
-		"model":        stringValue(record.Request["model"]),
-		"size":         stringValue(record.Request["size"]),
-		"batch_status": "completed",
-		"images":       images,
-	}
-	if len(failedVariants) > 0 {
-		record.Result["failed_variants"] = failedVariants
-	}
+	record.Result["images"] = existing
 	return nil
 }
 
@@ -1292,6 +1377,10 @@ func normalizeImagesResult(req GenerateRequest, payload openAIImagesResponse) ma
 }
 
 func (s *GenerationService) archiveResultImages(ctx context.Context, historyID string, result map[string]any) error {
+	return s.archiveResultImagesAt(ctx, historyID, result, 0)
+}
+
+func (s *GenerationService) archiveResultImagesAt(ctx context.Context, historyID string, result map[string]any, startIndex int) error {
 	if s.mediaStorage == nil {
 		return nil
 	}
@@ -1311,7 +1400,7 @@ func (s *GenerationService) archiveResultImages(ctx context.Context, historyID s
 		if err != nil {
 			return err
 		}
-		stored, err := s.archiveImage(ctx, historyID, index, contentType, data)
+		stored, err := s.archiveImage(ctx, historyID, startIndex+index, contentType, data)
 		if err != nil {
 			return err
 		}

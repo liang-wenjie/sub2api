@@ -769,6 +769,17 @@ export function useImageGeneration(options: UseImageGenerationOptions) {
       try {
         const record = await options.api.getStatus(current.jobId)
         if (record.status === 'pending') {
+          const images = imagesFromResult(record, current.prompt, current.label)
+          if (images.length) {
+            updateGenerationSlots(current.conversationId, current.pendingId, slots => slots.map((slot, slotIndex) => {
+              if (!current.slotIndexes.includes(slotIndex) || slot.image) return slot
+              const imageIndex = current.slotIndexes.indexOf(slotIndex)
+              const image = slot.label
+                ? images.find(candidate => candidate.variantLabel === slot.label)
+                : images[imageIndex]
+              return image ? { ...slot, status: 'succeeded', progress: 100, image } : slot
+            }))
+          }
           schedulePoll(pendingId)
           return
         }

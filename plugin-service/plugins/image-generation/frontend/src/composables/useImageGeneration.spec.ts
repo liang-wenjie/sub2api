@@ -583,6 +583,41 @@ describe('useImageGeneration', () => {
     state.dispose()
   })
 
+  it('shows images returned by a pending job before polling completes', async () => {
+    const api = createApi({ job_id: 'angle-job', status: 'pending' })
+    const completed = deferred<GenerateResponse>()
+    api.getStatus
+      .mockResolvedValueOnce({
+        job_id: 'angle-job', status: 'pending',
+        result: { images: [{ url: '/front.png', variant_label: '正面' }] },
+      })
+      .mockImplementationOnce(() => completed.promise)
+    const state = useImageGeneration({ api, loadKeys: async () => [key], pollInterval: 1 })
+    await state.initialize()
+    state.prompt.value = 'Create a character'
+    state.presetSelection.value = {
+      styles: [], scenes: [], effects: [], angles: ['front', 'back'], separateAngleImages: true, keepAngleConsistency: false,
+    }
+
+    await state.submit()
+
+    await vi.waitFor(() => {
+      const assistant = state.activeConversation.value?.messages[1]
+      expect(assistant?.status).toBe('pending')
+      expect(assistant?.generationSlots?.[0].image?.src).toContain('/front.png')
+      expect(assistant?.generationSlots?.[1].status).toBe('pending')
+    })
+    completed.resolve({
+      job_id: 'angle-job', status: 'succeeded',
+      result: { images: [{ url: '/front.png', variant_label: '正面' }, { url: '/back.png', variant_label: '背面' }] },
+    })
+    await vi.waitFor(() => {
+      const assistant = state.activeConversation.value?.messages[1]
+      expect(assistant?.generationSlots?.map(slot => slot.status)).toEqual(['succeeded', 'succeeded'])
+      expect(assistant?.generationSlots?.[1].image?.src).toContain('/back.png')
+    })
+  })
+
   it('cancels a backend job that arrives after submission was canceled', async () => {
     const submission = deferred<GenerateResponse>()
     const api = createApi()

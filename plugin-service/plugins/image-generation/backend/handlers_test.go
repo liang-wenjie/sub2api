@@ -52,6 +52,16 @@ func TestCompactJobResponseOmitsPendingRequestAndResult(t *testing.T) {
 	}
 }
 
+func TestCompactJobResponseIncludesPendingImages(t *testing.T) {
+	pending := compactJobResponse(&model.HistoryRecord{
+		ID: "job-progress", Status: model.HistoryStatusPending,
+		Result: map[string]any{"images": []any{map[string]any{"url": "/result/0"}}},
+	})
+	if pending.Result == nil || len(imageMapsValue(pending.Result["images"])) != 1 {
+		t.Fatalf("pending response = %#v", pending)
+	}
+}
+
 func TestCompactJobResponseIncludesOnlyTerminalPayload(t *testing.T) {
 	succeeded := compactJobResponse(&model.HistoryRecord{ID: "job-2", Status: model.HistoryStatusSucceeded, Result: map[string]any{"images": []any{"image"}}})
 	if succeeded.Result == nil || succeeded.ErrorMessage != "" {
