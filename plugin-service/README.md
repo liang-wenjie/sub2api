@@ -134,3 +134,22 @@ The production build writes deterministic `app.js` and `app.css` files to `../we
 3. Implement plugin backend handlers and register their routes.
 4. Add hosted frontend assets under `web/`.
 5. Register the plugin from `plugins.RegisterAll`; the host router discovers routes through the registry.
+
+## Agnes Image Relay
+
+The `ai-relay` plugin exposes an internal OpenAI Images-compatible relay for
+Agnes Image 2.1 Flash. Configure a route as an administrator from:
+
+- `http://plugin-server:8091/plugins/ai-relay`
+
+The configuration stores only the route slug, Agnes base URL, default model,
+optional model/quality mappings, output-count limit, and enabled state. It does
+not store an API key. In the main-site account configuration, use:
+
+- `http://plugin-server:8091/plugins/ai-relay/agnes/<slug>`
+
+The main site forwards that account's Bearer key to the plugin, and the plugin
+forwards it only to the configured Agnes endpoint. The initial relay supports
+OpenAI Images generation requests and maps GPT Image size, quality, response
+format, and `n` to Agnes Image requests. Chat, image edit, variants, and model
+listing are intentionally not exposed.
