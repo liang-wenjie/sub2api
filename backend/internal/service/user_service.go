@@ -107,6 +107,7 @@ type UserRepository interface {
 	UpdateConcurrency(ctx context.Context, id int64, amount int) error
 	BatchSetConcurrency(ctx context.Context, userIDs []int64, value int) (int, error)
 	BatchAddConcurrency(ctx context.Context, userIDs []int64, delta int) (int, error)
+	BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	RemoveGroupFromAllowedGroups(ctx context.Context, groupID int64) (int64, error)
 	// AddGroupToAllowedGroups 将指定分组增量添加到用户的 allowed_groups（幂等，冲突忽略）
@@ -122,11 +123,12 @@ type UserRepository interface {
 	DisableTotp(ctx context.Context, userID int64) error
 }
 
-// ImageGenerationPreferenceRepository is deliberately separate from UserRepository
-// because only the image-generation preference flow needs this persistence contract.
-type ImageGenerationPreferenceRepository interface {
-	GetLastImageAPIKeyID(ctx context.Context, userID int64) (*int64, error)
-	SetLastImageAPIKeyID(ctx context.Context, userID int64, apiKeyID *int64) (*int64, error)
+// RedeemUserAdjustmentRepository provides the atomic, floor-at-zero updates
+// used by negative-value redeem codes. It is intentionally narrower than
+// UserRepository because normal usage billing is allowed to overdraw.
+type RedeemUserAdjustmentRepository interface {
+	ApplyRedeemBalanceAdjustment(ctx context.Context, id int64, delta float64) error
+	ApplyRedeemConcurrencyAdjustment(ctx context.Context, id int64, delta int) error
 }
 
 type UserAuthIdentityRecord struct {
@@ -260,22 +262,6 @@ func (s *UserService) GetProfile(ctx context.Context, userID int64) (*User, erro
 		return nil, fmt.Errorf("get user avatar: %w", err)
 	}
 	return user, nil
-}
-
-func (s *UserService) GetLastImageAPIKeyID(ctx context.Context, userID int64) (*int64, error) {
-	repo, ok := s.userRepo.(ImageGenerationPreferenceRepository)
-	if !ok {
-		return nil, fmt.Errorf("image generation preferences are not supported by user repository")
-	}
-	return repo.GetLastImageAPIKeyID(ctx, userID)
-}
-
-func (s *UserService) SetLastImageAPIKeyID(ctx context.Context, userID int64, apiKeyID *int64) (*int64, error) {
-	repo, ok := s.userRepo.(ImageGenerationPreferenceRepository)
-	if !ok {
-		return nil, fmt.Errorf("image generation preferences are not supported by user repository")
-	}
-	return repo.SetLastImageAPIKeyID(ctx, userID, apiKeyID)
 }
 
 func (s *UserService) GetProfileIdentitySummaries(ctx context.Context, userID int64, user *User) (UserIdentitySummarySet, error) {

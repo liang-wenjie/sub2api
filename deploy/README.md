@@ -1,12 +1,13 @@
 # Sub2API Deployment Files
 
-This directory contains files for deploying Sub2API on Linux servers.
+This directory contains files for deploying Sub2API on Linux servers and Apple-silicon Macs.
 
 ## Deployment Methods
 
 | Method | Best For | Setup Wizard |
 |--------|----------|--------------|
 | **Docker Compose** | Quick setup, all-in-one | Not needed (auto-setup) |
+| **Apple container** | Native local stack on macOS 26 | Not needed (auto-setup) |
 | **Binary Install** | Production servers, systemd | Web-based wizard |
 
 ## Files
@@ -16,10 +17,9 @@ This directory contains files for deploying Sub2API on Linux servers.
 | `docker-compose.yml` | Docker Compose configuration (named volumes) |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
-| `remote_deploy.py` | SSH one-click remote deployment script |
-| `remote_deploy_plugin_service.py` | SSH deploy script for plugin-service only |
-| `.remote.example` | Remote server SSH configuration template |
-| `.env.example` | Docker environment variables template |
+| `apple-container.sh` | Native Apple `container` lifecycle script |
+| `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
+| `.env.example` | Container environment variables template |
 | `DOCKER.md` | Docker Hub documentation |
 | `install.sh` | One-click binary installation script |
 | `install-datamanagementd.sh` | datamanagementd 一键安装脚本 |
@@ -27,6 +27,23 @@ This directory contains files for deploying Sub2API on Linux servers.
 | `sub2api-datamanagementd.service` | datamanagementd systemd service unit file |
 | `DATAMANAGEMENTD_CN.md` | datamanagementd 部署与联动说明（中文） |
 | `config.example.yaml` | Example configuration file |
+
+---
+
+## Apple container Deployment
+
+Apple-silicon Macs running macOS 26 can run the complete Sub2API, PostgreSQL, and Redis stack with Apple `container` 1.1.0 or newer:
+
+```bash
+./apple-container.sh init
+./apple-container.sh up
+./apple-container.sh status
+./apple-container.sh logs app -f
+```
+
+The script uses Apple named volumes, starts dependencies in order, and performs live readiness checks. It does not provide a continuous restart supervisor; run `./apple-container.sh up` after a host reboot. Docker Compose remains the recommended production deployment path.
+
+See [APPLE_CONTAINER.md](./APPLE_CONTAINER.md) for configuration, upgrades, persistence, networking behavior, and limitations.
 
 ---
 
@@ -79,6 +96,7 @@ cd sub2api/deploy
 
 # Configure environment
 cp .env.example .env
+chmod 600 .env
 nano .env  # Set POSTGRES_PASSWORD and other required variables
 
 # Generate secure secrets (recommended)
@@ -88,7 +106,7 @@ echo "JWT_SECRET=${JWT_SECRET}" >> .env
 echo "TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}" >> .env
 
 # Create data directories
-mkdir -p data plugin_data postgres_data redis_data
+mkdir -p data postgres_data redis_data
 
 # Start all services using local directory version
 docker compose -f docker-compose.local.yml up -d
@@ -98,93 +116,6 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 
 # Access Web UI
 # http://localhost:8080
-```
-
-### Method 3: One-Click Remote Deployment
-
-If you already have a Linux server with Docker and Docker Compose installed, you can deploy directly over SSH:
-
-```bash
-# In the repository root
-cp deploy/.remote.example deploy/.remote
-cp deploy/.env.example deploy/.env
-
-# Edit both files:
-# - deploy/.remote: fill in SSH_HOST / SSH_USER / SSH_PASSWORD or SSH_KEY_PATH
-# - deploy/.env: configure runtime environment variables
-
-python deploy/remote_deploy.py
-```
-
-To update only the plugin service on the remote host:
-
-```bash
-python deploy/remote_deploy_plugin_service.py
-```
-
-To deploy the exact source code from your local working tree, build and save a
-local image first, then enable `local_image` mode in `deploy/.remote`:
-
-```bash
-docker build -t weishaw/sub2api:latest -f Dockerfile .
-docker save -o deploy/weishaw-sub2api-latest.tar weishaw/sub2api:latest
-
-# deploy/.remote
-IMAGE_SOURCE=local_image
-LOCAL_IMAGE=weishaw/sub2api:latest
-LOCAL_IMAGE_TAR=deploy/weishaw-sub2api-latest.tar
-
-python deploy/remote_deploy.py
-```
-
-For plugin-service local image deployment:
-
-```bash
-docker build -t weishaw/sub2api-plugin-service:latest -f plugin-service/Dockerfile .
-docker save -o deploy/weishaw-sub2api-plugin-service-latest.tar weishaw/sub2api-plugin-service:latest
-
-# deploy/.remote
-IMAGE_SOURCE=local_image
-PLUGIN_LOCAL_IMAGE=weishaw/sub2api-plugin-service:latest
-PLUGIN_LOCAL_IMAGE_TAR=deploy/weishaw-sub2api-plugin-service-latest.tar
-
-python deploy/remote_deploy_plugin_service.py
-```
-
-What the remote deployment script does:
-- Reads server credentials from `deploy/.remote`
-- Uploads the `deploy/` directory contents to the remote server
-- Uploads `deploy/.env` to the remote deployment directory
-- Creates `data/`, `plugin_data/`, `postgres_data/`, and `redis_data/`
-- Runs `docker compose --env-file .env -f docker-compose.local.yml up -d` for `sub2api` and `plugin-service`
-- When `DEPLOY_TARGET=plugin_service`, updates only the `plugin-service` container
-- When `IMAGE_SOURCE=local_image`, uploads the configured image tar files, runs `docker load`
-  on the remote server, and recreates only the selected services with the loaded images
-- Prints container status and recent logs after deployment
-
-Remote deployment requirements:
-- Remote host can be accessed over SSH
-- Docker and Docker Compose are already installed on the remote server
-- Local Docker is installed when using `IMAGE_SOURCE=local_image`
-- Local Python environment has `paramiko` installed
-
-### Plugin Service Remote Deployment Notes
-
-- `docker-compose.yml`, `docker-compose.local.yml`, and `docker-compose.standalone.yml`
-  include `plugin-service` alongside `sub2api`.
-- The shared deployment env should include:
-  ```env
-  PLUGIN_SERVER_PORT=8091
-  PLUGIN_SERVER_IMAGE=weishaw/sub2api-plugin-service:latest
-  ```
-- The main site should forward `/plugins/*` to `plugin-service:${PLUGIN_SERVER_PORT}`.
-- The current plugin history repository is in-memory, so plugin history does not
-  survive a `plugin-service` container restart yet.
-
-Install `paramiko` locally if needed:
-
-```bash
-pip install paramiko
 ```
 
 ### Deployment Version Comparison
