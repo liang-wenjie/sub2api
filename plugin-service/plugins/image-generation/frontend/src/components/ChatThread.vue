@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import GeneratedImageCard from './GeneratedImageCard.vue'
 import type { Conversation, GeneratedImage, ImageReference } from '../types'
 
@@ -8,8 +8,38 @@ const emit = defineEmits<{ reference: [image: GeneratedImage]; referenceImage: [
 const thread = ref<HTMLElement | null>(null)
 const awaitingOlderMessages = ref(false)
 const pendingInitialScroll = ref(true)
+const loadedReferenceImages = ref(new Set<string>())
 let previousScrollHeight = 0
 let previousScrollTop = 0
+let referenceObserver: IntersectionObserver | undefined
+
+function referenceImageSource(id: string, source: string): string | undefined {
+  return loadedReferenceImages.value.has(id) ? source : undefined
+}
+
+function observeReferenceImage(element: HTMLImageElement | null, id: string): void {
+  if (!element || !referenceObserver || loadedReferenceImages.value.has(id)) return
+  referenceObserver.observe(element)
+}
+
+onMounted(() => {
+  if (typeof window.IntersectionObserver !== 'function') {
+    loadedReferenceImages.value = new Set((props.conversation?.messages ?? []).flatMap(message => message.referenceImages?.map(reference => reference.id) ?? []))
+    return
+  }
+  referenceObserver = new IntersectionObserver(entries => {
+    const loaded = new Set(loadedReferenceImages.value)
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      const id = (entry.target as HTMLElement).dataset.referenceImageId
+      if (id) loaded.add(id)
+      referenceObserver?.unobserve(entry.target)
+    }
+    loadedReferenceImages.value = loaded
+  }, { root: thread.value, rootMargin: '300px 0px' })
+})
+
+onBeforeUnmount(() => referenceObserver?.disconnect())
 
 async function scrollToLatestMessage(): Promise<void> {
   await nextTick()
@@ -69,7 +99,9 @@ function formatSizeLabel(value: string): string {
             <div v-for="reference in message.referenceImages" :key="reference.id" class="reference-item" data-testid="history-reference-item">
               <button type="button" class="reference-open" aria-label="查看参考图原图" @click="$emit('view', reference.originalDataUrl || reference.dataUrl, reference.fileName)">
                 <img
-                  :src="reference.dataUrl"
+                  :ref="element => observeReferenceImage(element as HTMLImageElement | null, reference.id)"
+                  :data-reference-image-id="reference.id"
+                  :src="referenceImageSource(reference.id, reference.dataUrl)"
                   :alt="reference.fileName"
                   data-testid="user-message-reference-image"
                 >
@@ -107,6 +139,7 @@ function formatSizeLabel(value: string): string {
                 <GeneratedImageCard
                   v-if="slot.image"
                   :image="slot.image"
+                  :scroll-root="thread"
                   @reference="$emit('reference', $event)"
                   @refine="$emit('refine', $event)"
                   @repeat="$emit('repeat', $event, message.content)"
@@ -131,6 +164,7 @@ function formatSizeLabel(value: string): string {
               v-for="image in message.images"
               :key="image.id"
               :image="image"
+              :scroll-root="thread"
               @reference="$emit('reference', $event)"
               @refine="$emit('refine', $event)"
               @repeat="$emit('repeat', $event, message.content)"

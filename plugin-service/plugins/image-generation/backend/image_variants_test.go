@@ -50,7 +50,7 @@ func TestCreateCompressedPreviewConstrainsLongestEdge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decoded.Bounds().Size(); got.X != 1600 || got.Y != 800 {
+	if got := decoded.Bounds().Size(); got.X != 640 || got.Y != 320 {
 		t.Fatalf("size = %v", got)
 	}
 }

@@ -264,6 +264,37 @@ describe('image generation components', () => {
     expect(wrapper.text()).toContain('再次生成')
   })
 
+  it('loads a historical image only after it enters the scroll observer range', async () => {
+    let callback: IntersectionObserverCallback | undefined
+    const originalObserver = window.IntersectionObserver
+    class TestIntersectionObserver {
+      constructor(next: IntersectionObserverCallback) { callback = next }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return [] }
+      root = null
+      rootMargin = ''
+      thresholds = []
+    }
+    window.IntersectionObserver = TestIntersectionObserver as unknown as typeof IntersectionObserver
+
+    const scrollRoot = document.createElement('div')
+    const wrapper = mount(GeneratedImageCard, {
+      props: { image: { id: 'image-1', src: '/preview.jpg', revisedPrompt: '蓝色台灯', createdAt: 'now', lazy: true }, scrollRoot },
+    })
+    const image = wrapper.get('img')
+    expect(image.attributes('src')).toBeUndefined()
+
+		await nextTick()
+		callback?.([{ isIntersecting: true, target: image.element } as unknown as IntersectionObserverEntry], {} as IntersectionObserver)
+    await nextTick()
+    expect(image.attributes('src')).toBe('/preview.jpg')
+
+    wrapper.unmount()
+    window.IntersectionObserver = originalObserver
+  })
+
   it('renders Chinese sidebar controls and emits collapse from the pinned footer', async () => {
     const wrapper = mount(HistorySidebar, {
       props: { conversations: [conversation], activeId: conversation.id, keys: [key], selectedKeyId: 1 },
@@ -397,7 +428,7 @@ describe('image generation components', () => {
     expect(wrapper.emitted('update:outputCount')?.[0]).toEqual([3])
   })
 
-  it('renders sent user messages with reference, description, and generation parameters', () => {
+  it('renders sent user messages with reference, description, and generation parameters', async () => {
     const wrapper = mount(ChatThread, {
       props: {
         conversation: {
@@ -414,6 +445,7 @@ describe('image generation components', () => {
       },
     })
 
+		await nextTick()
     expect(wrapper.get('[data-testid="user-message-reference-image"]').attributes('src')).toContain('data:image/png')
     expect(wrapper.text()).toContain('创作描述')
     expect(wrapper.text()).toContain('生成一只小狗')
@@ -421,6 +453,35 @@ describe('image generation components', () => {
     expect(wrapper.text()).toContain('画质: high | 格式: webp')
     expect(wrapper.text()).toContain('Prompt')
     expect(wrapper.text()).toContain('GPT Image 2 | 1024 × 1024 | 数量: 1')
+  })
+
+  it('defers historical reference image loading until it enters the chat viewport', async () => {
+    let callback: IntersectionObserverCallback | undefined
+    const originalObserver = window.IntersectionObserver
+    class TestIntersectionObserver {
+      constructor(next: IntersectionObserverCallback) { callback = next }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return [] }
+      root = null
+      rootMargin = ''
+      thresholds = []
+    }
+    window.IntersectionObserver = TestIntersectionObserver as unknown as typeof IntersectionObserver
+    const wrapper = mount(ChatThread, {
+      props: { conversation: { ...conversation, messages: [{ id: 'user-1', role: 'user', content: 'dog', createdAt: 'now', referenceImages: [{ id: 'ref-1', dataUrl: '/preview.png', originalDataUrl: '/original.png', fileName: 'dog.png', mimeType: 'image/png' }] }] } },
+    })
+    const image = wrapper.get('[data-testid="user-message-reference-image"]')
+    expect(image.attributes('src')).toBeUndefined()
+
+    await nextTick()
+    callback?.([{ isIntersecting: true, target: image.element } as unknown as IntersectionObserverEntry], {} as IntersectionObserver)
+    await nextTick()
+    expect(image.attributes('src')).toBe('/preview.png')
+
+    wrapper.unmount()
+    window.IntersectionObserver = originalObserver
   })
 
   it('renders fixed generation slots with loading progress and failures', () => {
