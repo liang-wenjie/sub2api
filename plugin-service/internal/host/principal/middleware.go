@@ -167,6 +167,12 @@ func copyMainSiteCredentials(dst *http.Request, src *http.Request) {
 	if rawCookie := strings.TrimSpace(src.Header.Get("Cookie")); rawCookie != "" {
 		dst.Header.Set("Cookie", rawCookie)
 	}
+	if forwardedFor := strings.TrimSpace(src.Header.Get("X-Forwarded-For")); forwardedFor != "" {
+		dst.Header.Set("X-Forwarded-For", forwardedFor)
+	}
+	if userAgent := strings.TrimSpace(src.Header.Get("User-Agent")); userAgent != "" {
+		dst.Header.Set("User-Agent", userAgent)
+	}
 	if forwardedCookie := strings.TrimSpace(src.URL.Query().Get("cookie")); forwardedCookie != "" && dst.Header.Get("Cookie") == "" {
 		dst.Header.Set("Cookie", forwardedCookie)
 	}
