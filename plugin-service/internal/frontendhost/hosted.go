@@ -111,7 +111,7 @@ func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
 		assetPrefix += "/"
 	}
 
-	mux.HandleFunc("GET "+trailingSlashPagePath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+trailingSlashPagePath+"{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, pagePath, http.StatusPermanentRedirect)
 	})
 
