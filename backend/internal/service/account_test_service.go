@@ -38,6 +38,10 @@ const (
 	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
 )
 
+func isOpenAIImageModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-image-")
+}
+
 // TestEvent represents a SSE event for account testing
 type TestEvent struct {
 	Type     string `json:"type"`
@@ -57,11 +61,6 @@ const (
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 )
-
-// isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
-func isOpenAIImageModel(model string) bool {
-	return strings.HasPrefix(strings.ToLower(model), "gpt-image-")
-}
 
 // AccountTestService handles account testing operations
 type AccountTestService struct {
@@ -518,19 +517,12 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		testModelID = resolveOpenAICompactForwardModel(account, testModelID)
 		return s.testOpenAICompactConnection(c, account, testModelID)
 	}
-
-	// Route to image generation test if an image model is selected
 	if isOpenAIImageModel(testModelID) {
-		imagePrompt := strings.TrimSpace(prompt)
-		if imagePrompt == "" {
-			imagePrompt = defaultOpenAIImageTestPrompt
+		if account.Type == AccountTypeAPIKey {
+			return s.testOpenAIImageAPIKey(c, ctx, account, testModelID, imagePromptForTest(prompt))
 		}
-		if account.Type == "apikey" {
-			return s.testOpenAIImageAPIKey(c, ctx, account, testModelID, imagePrompt)
-		}
-		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
+		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePromptForTest(prompt))
 	}
-
 	credentialAccount := account
 	if account.IsCredentialShadow() {
 		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
@@ -544,6 +536,13 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	var authToken string
 	var apiURL string
 	var isOAuth bool
+
+	if mode == AccountTestModeImage {
+		if account.Type == AccountTypeAPIKey {
+			return s.testOpenAIImageAPIKey(c, ctx, account, testModelID, imagePromptForTest(prompt))
+		}
+		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePromptForTest(prompt))
+	}
 
 	if credentialAccount.IsOAuth() {
 		isOAuth = true
@@ -686,6 +685,13 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// Process SSE stream
 	return s.processOpenAIStream(c, resp.Body)
+}
+
+func imagePromptForTest(prompt string) string {
+	if imagePrompt := strings.TrimSpace(prompt); imagePrompt != "" {
+		return imagePrompt
+	}
+	return defaultOpenAIImageTestPrompt
 }
 
 // testGrokAccountConnection tests a Grok OAuth or API-key account through xAI's Responses API.

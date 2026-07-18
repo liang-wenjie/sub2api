@@ -17,9 +17,9 @@ func TestFrontendServesRelayConfigurationPage(t *testing.T) {
 		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		`/plugins/ai-relay/assets/app.js`,
-		`/plugins/ai-relay/assets/app.css`,
-		`data-plugin-api-base="/plugins/ai-relay/api"`,
+		`/admin/ai-relay`,
+		`window.location.replace`,
+		`window.top !== window`,
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("page is missing %q", marker)

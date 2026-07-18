@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -53,17 +52,21 @@ func EnsureRouteSchema(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS plugin_ai_relay_routes (
 		platform TEXT NOT NULL,
 		slug TEXT NOT NULL,
+		name TEXT NOT NULL DEFAULT '',
 		base_url TEXT NOT NULL,
-		default_model TEXT NOT NULL,
-		model_map JSONB NOT NULL DEFAULT '{}'::jsonb,
-		quality_map JSONB NOT NULL DEFAULT '{}'::jsonb,
-		max_n INTEGER NOT NULL DEFAULT 4,
-		enabled BOOLEAN NOT NULL DEFAULT TRUE,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		PRIMARY KEY (platform, slug)
 	)`)
-	return err
+	if err != nil {
+		return err
+	}
+	for _, column := range []string{"default_model", "model_map", "quality_map", "max_n", "enabled"} {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE plugin_ai_relay_routes DROP COLUMN IF EXISTS `+column); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *SQLRouteRepository) Get(ctx context.Context, platform, slug string) (RouteConfig, bool, error) {
@@ -78,12 +81,20 @@ func (r *SQLRouteRepository) Get(ctx context.Context, platform, slug string) (Ro
 	return config, true, nil
 }
 
-func (r *SQLRouteRepository) List(ctx context.Context, platform string) ([]RouteConfig, error) {
+func (r *SQLRouteRepository) List(ctx context.Context, filter RouteQuery) ([]RouteConfig, error) {
 	query := routeSelectSQL
 	args := []any{}
-	if platform = strings.ToLower(strings.TrimSpace(platform)); platform != "" {
-		query += ` WHERE platform = $1`
+	conditions := []string{}
+	if platform := strings.ToLower(strings.TrimSpace(filter.Platform)); platform != "" {
 		args = append(args, platform)
+		conditions = append(conditions, fmt.Sprintf("platform = $%d", len(args)))
+	}
+	if search := strings.TrimSpace(filter.Search); search != "" {
+		args = append(args, "%"+search+"%")
+		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR slug ILIKE $%d)", len(args), len(args)))
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += ` ORDER BY platform, slug`
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -107,34 +118,18 @@ func (r *SQLRouteRepository) Upsert(ctx context.Context, config RouteConfig) (Ro
 	if err != nil {
 		return RouteConfig{}, err
 	}
-	modelMap, err := marshalRouteMap(normalized.ModelMap)
-	if err != nil {
-		return RouteConfig{}, err
-	}
-	qualityMap, err := marshalRouteMap(normalized.QualityMap)
-	if err != nil {
-		return RouteConfig{}, err
-	}
 	row := r.db.QueryRowContext(ctx, `INSERT INTO plugin_ai_relay_routes (
-		platform, slug, base_url, default_model, model_map, quality_map, max_n, enabled
-	) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+		platform, slug, name, base_url
+	) VALUES ($1, $2, $3, $4)
 	ON CONFLICT (platform, slug) DO UPDATE SET
+		name = EXCLUDED.name,
 		base_url = EXCLUDED.base_url,
-		default_model = EXCLUDED.default_model,
-		model_map = EXCLUDED.model_map,
-		quality_map = EXCLUDED.quality_map,
-		max_n = EXCLUDED.max_n,
-		enabled = EXCLUDED.enabled,
 		updated_at = NOW()
-	RETURNING platform, slug, base_url, default_model, model_map, quality_map, max_n, enabled`,
+	RETURNING platform, slug, name, base_url`,
 		normalized.Platform,
 		normalized.Slug,
+		normalized.Name,
 		normalized.BaseURL,
-		normalized.DefaultModel,
-		modelMap,
-		qualityMap,
-		normalized.MaxN,
-		normalized.Enabled,
 	)
 	return scanRouteConfig(row)
 }
@@ -154,7 +149,40 @@ func (r *SQLRouteRepository) Delete(ctx context.Context, platform, slug string) 
 	return nil
 }
 
-const routeSelectSQL = `SELECT platform, slug, base_url, default_model, model_map, quality_map, max_n, enabled FROM plugin_ai_relay_routes`
+func (r *SQLRouteRepository) DeleteMany(ctx context.Context, routes []RouteReference) error {
+	if len(routes) == 0 {
+		return ErrInvalidRouteConfig
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	seen := make(map[string]struct{}, len(routes))
+	for _, route := range routes {
+		platform := strings.ToLower(strings.TrimSpace(route.Platform))
+		slug := strings.ToLower(strings.TrimSpace(route.Slug))
+		key := routeKey(platform, slug)
+		if _, ok := seen[key]; ok || !routeSlugPattern.MatchString(platform) || !routeSlugPattern.MatchString(slug) {
+			return ErrInvalidRouteConfig
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM plugin_ai_relay_routes WHERE platform = $1 AND slug = $2`, platform, slug)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return ErrRouteNotFound
+		}
+		seen[key] = struct{}{}
+	}
+	return tx.Commit()
+}
+
+const routeSelectSQL = `SELECT platform, slug, name, base_url FROM plugin_ai_relay_routes`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -162,26 +190,8 @@ type rowScanner interface {
 
 func scanRouteConfig(row rowScanner) (RouteConfig, error) {
 	var config RouteConfig
-	var modelMap, qualityMap []byte
-	if err := row.Scan(&config.Platform, &config.Slug, &config.BaseURL, &config.DefaultModel, &modelMap, &qualityMap, &config.MaxN, &config.Enabled); err != nil {
+	if err := row.Scan(&config.Platform, &config.Slug, &config.Name, &config.BaseURL); err != nil {
 		return RouteConfig{}, err
 	}
-	if err := json.Unmarshal(modelMap, &config.ModelMap); err != nil {
-		return RouteConfig{}, fmt.Errorf("decode model map: %w", err)
-	}
-	if err := json.Unmarshal(qualityMap, &config.QualityMap); err != nil {
-		return RouteConfig{}, fmt.Errorf("decode quality map: %w", err)
-	}
 	return config, nil
-}
-
-func marshalRouteMap(values map[string]string) (string, error) {
-	if len(values) == 0 {
-		return "{}", nil
-	}
-	encoded, err := json.Marshal(values)
-	if err != nil {
-		return "", err
-	}
-	return string(encoded), nil
 }

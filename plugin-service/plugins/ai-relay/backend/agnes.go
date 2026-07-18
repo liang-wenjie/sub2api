@@ -20,7 +20,8 @@ type AgnesImageRequest struct {
 }
 
 type AgnesExtraBody struct {
-	ResponseFormat string `json:"response_format,omitempty"`
+	ResponseFormat string   `json:"response_format,omitempty"`
+	Image          []string `json:"image,omitempty"`
 }
 
 func NewAgnesAdapter() *AgnesAdapter {
@@ -31,42 +32,66 @@ func (*AgnesAdapter) Platform() string {
 	return "agnes"
 }
 
+func (*AgnesAdapter) Descriptor() PlatformDescriptor {
+	return PlatformDescriptor{Key: "agnes", DisplayName: "Agnes", Operation: "images/generations"}
+}
+
 func (*AgnesAdapter) Endpoint(config RouteConfig) string {
+	return agnesBaseURL(config) + "/images/generations"
+}
+
+func (*AgnesAdapter) ModelsEndpoint(config RouteConfig) string {
+	return agnesBaseURL(config) + "/models"
+}
+
+func (*AgnesAdapter) ChatCompletionsEndpoint(config RouteConfig) string {
+	return agnesBaseURL(config) + "/chat/completions"
+}
+
+func agnesBaseURL(config RouteConfig) string {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = defaultAgnesImageBaseURL
 	}
-	return baseURL + "/images/generations"
+	return baseURL
 }
 
 func (*AgnesAdapter) BuildRequest(config RouteConfig, request OpenAIImageRequest) (AgnesImageRequest, error) {
-	prompt := strings.TrimSpace(request.Prompt)
+	return buildAgnesImageRequest(config, request.Model, request.Prompt, request.Size, request.ResponseFormat, nil)
+}
+
+func (*AgnesAdapter) BuildEditRequest(config RouteConfig, request OpenAIImageEditRequest) (AgnesImageRequest, error) {
+	if len(request.Images) == 0 {
+		return AgnesImageRequest{}, fmt.Errorf("image is required")
+	}
+	return buildAgnesImageRequest(config, request.Model, request.Prompt, request.Size, request.ResponseFormat, request.Images)
+}
+
+func buildAgnesImageRequest(_ RouteConfig, modelValue, promptValue, sizeValue, responseFormat string, images []string) (AgnesImageRequest, error) {
+	prompt := strings.TrimSpace(promptValue)
 	if prompt == "" {
 		return AgnesImageRequest{}, fmt.Errorf("prompt is required")
 	}
-	model := strings.TrimSpace(config.DefaultModel)
-	if mapped := strings.TrimSpace(config.ModelMap[strings.TrimSpace(request.Model)]); mapped != "" {
-		model = mapped
-	}
+	model := strings.TrimSpace(modelValue)
 	if model == "" {
-		return AgnesImageRequest{}, fmt.Errorf("default model is required")
+		return AgnesImageRequest{}, fmt.Errorf("model is required")
 	}
-	size, ratio, err := agnesSizeAndRatio(request.Size)
+	size, ratio, err := agnesSizeAndRatio(sizeValue)
 	if err != nil {
 		return AgnesImageRequest{}, err
 	}
-	if tier := strings.TrimSpace(config.QualityMap[strings.TrimSpace(request.Quality)]); tier != "" {
-		size = tier
-	}
-
 	outgoing := AgnesImageRequest{Model: model, Prompt: prompt, Size: size, Ratio: ratio}
-	switch strings.TrimSpace(request.ResponseFormat) {
+	if len(images) > 0 {
+		outgoing.ExtraBody.Image = images
+	}
+	switch strings.TrimSpace(responseFormat) {
 	case "", "url":
 		outgoing.ExtraBody.ResponseFormat = "url"
 	case "b64_json":
 		outgoing.ReturnBase64 = true
+		outgoing.ExtraBody.ResponseFormat = "b64_json"
 	default:
-		return AgnesImageRequest{}, fmt.Errorf("unsupported response_format %q", request.ResponseFormat)
+		return AgnesImageRequest{}, fmt.Errorf("unsupported response_format %q", responseFormat)
 	}
 	return outgoing, nil
 }

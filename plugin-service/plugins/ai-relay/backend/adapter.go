@@ -1,6 +1,15 @@
 package backend
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
+
+type PlatformDescriptor struct {
+	Key         string `json:"key"`
+	DisplayName string `json:"display_name"`
+	Operation   string `json:"operation"`
+}
 
 type OpenAIImageRequest struct {
 	Model             string `json:"model"`
@@ -30,9 +39,25 @@ type OpenAIImageData struct {
 
 type ImageAdapter interface {
 	Platform() string
+	Descriptor() PlatformDescriptor
 	Endpoint(RouteConfig) string
+	ModelsEndpoint(RouteConfig) string
+	ChatCompletionsEndpoint(RouteConfig) string
 	BuildRequest(RouteConfig, OpenAIImageRequest) (AgnesImageRequest, error)
+	BuildEditRequest(RouteConfig, OpenAIImageEditRequest) (AgnesImageRequest, error)
 	ParseResponse([]byte) (OpenAIImageResponse, error)
+}
+
+func (r *AdapterRegistry) Platforms() []PlatformDescriptor {
+	if r == nil {
+		return []PlatformDescriptor{}
+	}
+	platforms := make([]PlatformDescriptor, 0, len(r.adapters))
+	for _, adapter := range r.adapters {
+		platforms = append(platforms, adapter.Descriptor())
+	}
+	sort.Slice(platforms, func(i, j int) bool { return platforms[i].Key < platforms[j].Key })
+	return platforms
 }
 
 type AdapterRegistry struct {

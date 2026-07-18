@@ -18,21 +18,28 @@ var (
 )
 
 type RouteConfig struct {
-	Platform     string            `json:"platform"`
-	Slug         string            `json:"slug"`
-	BaseURL      string            `json:"base_url"`
-	DefaultModel string            `json:"default_model"`
-	ModelMap     map[string]string `json:"model_map,omitempty"`
-	QualityMap   map[string]string `json:"quality_map,omitempty"`
-	MaxN         int               `json:"max_n"`
-	Enabled      bool              `json:"enabled"`
+	Platform string `json:"platform"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	BaseURL  string `json:"base_url"`
+}
+
+type RouteQuery struct {
+	Platform string
+	Search   string
+}
+
+type RouteReference struct {
+	Platform string `json:"platform"`
+	Slug     string `json:"slug"`
 }
 
 type RouteRepository interface {
 	Get(ctx context.Context, platform, slug string) (RouteConfig, bool, error)
-	List(ctx context.Context, platform string) ([]RouteConfig, error)
+	List(ctx context.Context, query RouteQuery) ([]RouteConfig, error)
 	Upsert(ctx context.Context, config RouteConfig) (RouteConfig, error)
 	Delete(ctx context.Context, platform, slug string) error
+	DeleteMany(ctx context.Context, routes []RouteReference) error
 }
 
 type MemoryRouteRepository struct {
@@ -47,8 +54,8 @@ func NewMemoryRouteRepository() *MemoryRouteRepository {
 func NormalizeRouteConfig(config RouteConfig) (RouteConfig, error) {
 	config.Platform = strings.ToLower(strings.TrimSpace(config.Platform))
 	config.Slug = strings.ToLower(strings.TrimSpace(config.Slug))
+	config.Name = strings.TrimSpace(config.Name)
 	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	config.DefaultModel = strings.TrimSpace(config.DefaultModel)
 	if config.Platform == "" || !routeSlugPattern.MatchString(config.Platform) || !routeSlugPattern.MatchString(config.Slug) {
 		return RouteConfig{}, ErrInvalidRouteConfig
 	}
@@ -56,17 +63,9 @@ func NormalizeRouteConfig(config RouteConfig) (RouteConfig, error) {
 	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
 		return RouteConfig{}, ErrInvalidRouteConfig
 	}
-	if config.DefaultModel == "" {
-		return RouteConfig{}, ErrInvalidRouteConfig
+	if config.Name == "" {
+		config.Name = config.Slug
 	}
-	if config.MaxN == 0 {
-		config.MaxN = 4
-	}
-	if config.MaxN < 1 || config.MaxN > 10 {
-		return RouteConfig{}, ErrInvalidRouteConfig
-	}
-	config.ModelMap = copyStringMap(config.ModelMap)
-	config.QualityMap = copyStringMap(config.QualityMap)
 	return config, nil
 }
 
@@ -77,15 +76,20 @@ func (r *MemoryRouteRepository) Get(_ context.Context, platform, slug string) (R
 	return copyRouteConfig(config), ok, nil
 }
 
-func (r *MemoryRouteRepository) List(_ context.Context, platform string) ([]RouteConfig, error) {
+func (r *MemoryRouteRepository) List(_ context.Context, query RouteQuery) ([]RouteConfig, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	platform = strings.ToLower(strings.TrimSpace(platform))
+	platform := strings.ToLower(strings.TrimSpace(query.Platform))
+	search := strings.ToLower(strings.TrimSpace(query.Search))
 	configs := make([]RouteConfig, 0, len(r.routes))
 	for _, config := range r.routes {
-		if platform == "" || config.Platform == platform {
-			configs = append(configs, copyRouteConfig(config))
+		if platform != "" && config.Platform != platform {
+			continue
 		}
+		if search != "" && !strings.Contains(strings.ToLower(config.Name), search) && !strings.Contains(config.Slug, search) {
+			continue
+		}
+		configs = append(configs, copyRouteConfig(config))
 	}
 	sort.Slice(configs, func(i, j int) bool {
 		if configs[i].Platform == configs[j].Platform {
@@ -118,23 +122,35 @@ func (r *MemoryRouteRepository) Delete(_ context.Context, platform, slug string)
 	return nil
 }
 
+func (r *MemoryRouteRepository) DeleteMany(_ context.Context, routes []RouteReference) error {
+	if len(routes) == 0 {
+		return ErrInvalidRouteConfig
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	keys := make([]string, 0, len(routes))
+	seen := make(map[string]struct{}, len(routes))
+	for _, route := range routes {
+		key := routeKey(route.Platform, route.Slug)
+		if _, ok := seen[key]; ok || !routeSlugPattern.MatchString(strings.ToLower(strings.TrimSpace(route.Platform))) || !routeSlugPattern.MatchString(strings.ToLower(strings.TrimSpace(route.Slug))) {
+			return ErrInvalidRouteConfig
+		}
+		if _, ok := r.routes[key]; !ok {
+			return ErrRouteNotFound
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	for _, key := range keys {
+		delete(r.routes, key)
+	}
+	return nil
+}
+
 func routeKey(platform, slug string) string {
 	return strings.ToLower(strings.TrimSpace(platform)) + ":" + strings.ToLower(strings.TrimSpace(slug))
 }
 
 func copyRouteConfig(config RouteConfig) RouteConfig {
-	config.ModelMap = copyStringMap(config.ModelMap)
-	config.QualityMap = copyStringMap(config.QualityMap)
 	return config
-}
-
-func copyStringMap(values map[string]string) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-	copy := make(map[string]string, len(values))
-	for key, value := range values {
-		copy[key] = value
-	}
-	return copy
 }

@@ -12,12 +12,15 @@ const (
 	AccountTestModeDefault = "default"
 	// AccountTestModeCompact drives the /responses/compact compact-probe test.
 	AccountTestModeCompact = "compact"
+	AccountTestModeImage   = "image"
 )
 
 func normalizeAccountTestMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case AccountTestModeCompact:
 		return AccountTestModeCompact
+	case AccountTestModeImage:
+		return AccountTestModeImage
 	default:
 		return AccountTestModeDefault
 	}

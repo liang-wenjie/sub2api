@@ -4,25 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Relay</title>
-    <link rel="stylesheet" href="/plugins/ai-relay/assets/app.css" />
-    <script type="module" src="/plugins/ai-relay/assets/app.js"></script>
   </head>
   <body>
-    <main id="app" data-plugin-api-base="/plugins/ai-relay/api">
-      <section class="toolbar"><h1>Agnes Image Relay</h1><button id="reload" type="button">Reload</button></section>
-      <p id="notice" role="status"></p>
-      <section class="form-panel">
-        <h2>Route</h2>
-        <form id="route-form">
-          <label>Slug<input name="slug" pattern="[a-z0-9][a-z0-9_-]{0,63}" required /></label>
-          <label>Base URL<input name="base_url" type="url" value="https://apihub.agnes-ai.com/v1" required /></label>
-          <label>Default model<input name="default_model" value="agnes-image-2.1-flash" required /></label>
-          <label>Maximum images<input name="max_n" type="number" min="1" max="10" value="4" required /></label>
-          <label class="check"><input name="enabled" type="checkbox" checked /> Enabled</label>
-          <button type="submit">Save route</button>
-        </form>
-      </section>
-      <section><h2>Configured routes</h2><table><thead><tr><th>Slug</th><th>Model</th><th>URL</th><th>State</th><th></th></tr></thead><tbody id="routes"></tbody></table></section>
-    </main>
+    <script>
+      (function () {
+        var mainOrigin = window.location.origin;
+        try {
+          if (document.referrer) mainOrigin = new URL(document.referrer).origin;
+        } catch (error) {}
+        var target = mainOrigin + '/admin/ai-relay';
+        if (window.top !== window) window.top.location.replace(target);
+        else window.location.replace(target);
+      })();
+    </script>
+    <noscript><a href="/admin/ai-relay">Open AI Relay</a></noscript>
   </body>
 </html>

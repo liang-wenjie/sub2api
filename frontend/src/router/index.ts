@@ -515,6 +515,16 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/ai-relay',
+    name: 'AdminAIRelay',
+    component: () => import('@/views/admin/AIRelayView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'AI Relay'
+    }
+  },
+  {
     path: '/admin/announcements',
     name: 'AdminAnnouncements',
     component: () => import('@/views/admin/AnnouncementsView.vue'),

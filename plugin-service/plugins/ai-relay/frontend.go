@@ -11,8 +11,9 @@ import (
 
 func RegisterFrontend(mux *http.ServeMux) {
 	frontendhost.RegisterHostedPlugin(mux, frontendhost.HostedPluginOptions{
-		PluginKey: "ai-relay",
-		WebRoot:   relayWebRoot(),
+		PluginKey:   "ai-relay",
+		WebRoot:     relayWebRoot(),
+		AssetPrefix: "/plugins/ai-relay-assets/",
 	})
 }
 
