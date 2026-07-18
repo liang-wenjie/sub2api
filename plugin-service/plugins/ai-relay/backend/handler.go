@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -33,7 +34,7 @@ type routeListPagination struct {
 type RelayHandler struct {
 	routes   RouteRepository
 	adapters *AdapterRegistry
-	client   *http.Client
+	clients  RelayClientProvider
 }
 
 func RegisterRoutes(mux *http.ServeMux, auth *hostprincipal.Middleware, handler *RelayHandler) {
@@ -95,7 +96,12 @@ func (h *RelayHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	result, err := h.generatePayload(r.Context(), adapter, config, payload, request.N, authorization)
+	client, err := h.clientForRequest(r)
+	if err != nil {
+		writeProxyClientError(w, err)
+		return
+	}
+	result, err := h.generatePayload(r.Context(), client, adapter, config, payload, request.N, authorization)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
@@ -115,10 +121,17 @@ func NewRelayHandler(routes RouteRepository, adapters *AdapterRegistry, client *
 	if client == nil {
 		client = http.DefaultClient
 	}
+	return NewRelayHandlerWithClientProvider(routes, adapters, NewProxyClientProvider(client, unavailableProxyResolver{}))
+}
+
+func NewRelayHandlerWithClientProvider(routes RouteRepository, adapters *AdapterRegistry, clients RelayClientProvider) *RelayHandler {
 	if adapters == nil {
 		adapters = NewDefaultAdapterRegistry()
 	}
-	return &RelayHandler{routes: routes, adapters: adapters, client: client}
+	if clients == nil {
+		clients = NewProxyClientProvider(http.DefaultClient, unavailableProxyResolver{})
+	}
+	return &RelayHandler{routes: routes, adapters: adapters, clients: clients}
 }
 
 func (h *RelayHandler) Relay(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +181,12 @@ func (h *RelayHandler) Relay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.generate(r.Context(), adapter, config, request, authorization)
+	client, err := h.clientForRequest(r)
+	if err != nil {
+		writeProxyClientError(w, err)
+		return
+	}
+	result, err := h.generate(r.Context(), client, adapter, config, request, authorization)
 	if err != nil {
 		status := http.StatusBadGateway
 		if err == context.DeadlineExceeded {
@@ -345,15 +363,15 @@ func isAdmin(principal model.CurrentPrincipal) bool {
 	return strings.EqualFold(strings.TrimSpace(principal.Role), model.RoleAdmin)
 }
 
-func (h *RelayHandler) generate(ctx context.Context, adapter ImageAdapter, config RouteConfig, request OpenAIImageRequest, authorization string) (OpenAIImageResponse, error) {
+func (h *RelayHandler) generate(ctx context.Context, client *http.Client, adapter ImageAdapter, config RouteConfig, request OpenAIImageRequest, authorization string) (OpenAIImageResponse, error) {
 	outgoing, err := adapter.BuildRequest(config, request)
 	if err != nil {
 		return OpenAIImageResponse{}, err
 	}
-	return h.generatePayload(ctx, adapter, config, outgoing, request.N, authorization)
+	return h.generatePayload(ctx, client, adapter, config, outgoing, request.N, authorization)
 }
 
-func (h *RelayHandler) generatePayload(ctx context.Context, adapter ImageAdapter, config RouteConfig, outgoing AgnesImageRequest, count int, authorization string) (OpenAIImageResponse, error) {
+func (h *RelayHandler) generatePayload(ctx context.Context, client *http.Client, adapter ImageAdapter, config RouteConfig, outgoing AgnesImageRequest, count int, authorization string) (OpenAIImageResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, relayRequestTimeout)
 	defer cancel()
 	payload, err := json.Marshal(outgoing)
@@ -368,7 +386,7 @@ func (h *RelayHandler) generatePayload(ctx context.Context, adapter ImageAdapter
 		}
 		upstreamRequest.Header.Set("Authorization", authorization)
 		upstreamRequest.Header.Set("Content-Type", "application/json")
-		response, err := h.client.Do(upstreamRequest)
+		response, err := client.Do(upstreamRequest)
 		if err != nil {
 			return OpenAIImageResponse{}, err
 		}
@@ -504,7 +522,12 @@ func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Reques
 	}
 	upstreamRequest.Header.Set("Authorization", authorization)
 	upstreamRequest.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-	response, err := h.client.Do(upstreamRequest)
+	client, err := h.clientForRequest(r)
+	if err != nil {
+		writeProxyClientError(w, err)
+		return
+	}
+	response, err := client.Do(upstreamRequest)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
@@ -513,6 +536,27 @@ func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, response.Body)
+}
+
+func (h *RelayHandler) clientForRequest(r *http.Request) (*http.Client, error) {
+	if h == nil || h.clients == nil {
+		return nil, ErrProxyStorageUnavailable
+	}
+	proxyID := ""
+	ctx := context.Background()
+	if r != nil {
+		proxyID = r.Header.Get(ProxyIDHeader)
+		ctx = r.Context()
+	}
+	return h.clients.ClientFor(ctx, proxyID)
+}
+
+func writeProxyClientError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrInvalidProxyID) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid account proxy context")
+		return
+	}
+	writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "account proxy is unavailable")
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

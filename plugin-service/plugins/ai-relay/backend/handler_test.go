@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -10,6 +11,16 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
 )
+
+type recordingRelayClientProvider struct {
+	client   *http.Client
+	proxyIDs []string
+}
+
+func (p *recordingRelayClientProvider) ClientFor(_ context.Context, proxyID string) (*http.Client, error) {
+	p.proxyIDs = append(p.proxyIDs, proxyID)
+	return p.client, nil
+}
 
 func TestRelayForwardsAccountBearerKeyAndReturnsOpenAIImages(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,9 +41,11 @@ func TestRelayForwardsAccountBearerKeyAndReturnsOpenAIImages(t *testing.T) {
 	repository.routes["agnes:team-a"] = RouteConfig{
 		Platform: "agnes", Slug: "team-a", BaseURL: upstream.URL + "/v1",
 	}
-	handler := NewRelayHandler(repository, NewDefaultAdapterRegistry(), upstream.Client())
+	provider := &recordingRelayClientProvider{client: upstream.Client()}
+	handler := NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider)
 	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/team-a", bytes.NewBufferString(`{"model":"gpt-image-1","prompt":"poster","size":"1024x1024","response_format":"url"}`))
 	req.Header.Set("Authorization", "Bearer agnes-account-key")
+	req.Header.Set(ProxyIDHeader, "42")
 	rec := httptest.NewRecorder()
 
 	handler.Relay(rec, req)
@@ -42,6 +55,9 @@ func TestRelayForwardsAccountBearerKeyAndReturnsOpenAIImages(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type = %q", got)
+	}
+	if len(provider.proxyIDs) != 1 || provider.proxyIDs[0] != "42" {
+		t.Fatalf("provider proxy IDs = %#v", provider.proxyIDs)
 	}
 }
 
@@ -59,8 +75,9 @@ func TestRelayConvertsOpenAIImageEditMultipartRequestForAgnes(t *testing.T) {
 
 	repository := NewMemoryRouteRepository()
 	repository.routes["agnes:team-a"] = RouteConfig{Platform: "agnes", Slug: "team-a", BaseURL: upstream.URL + "/v1"}
+	provider := &recordingRelayClientProvider{client: upstream.Client()}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultAdapterRegistry(), upstream.Client()))
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider))
 
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
@@ -82,10 +99,14 @@ func TestRelayConvertsOpenAIImageEditMultipartRequestForAgnes(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/team-a/v1/images/edits", body)
 	req.Header.Set("Authorization", "Bearer account-key")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set(ProxyIDHeader, "42")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(provider.proxyIDs) != 1 || provider.proxyIDs[0] != "42" {
+		t.Fatalf("provider proxy IDs = %#v", provider.proxyIDs)
 	}
 }
 
@@ -110,8 +131,9 @@ func TestV1ModelsAndChatProxyAccountBearerKey(t *testing.T) {
 
 	repository := NewMemoryRouteRepository()
 	repository.routes["agnes:team-a"] = RouteConfig{Platform: "agnes", Slug: "team-a", BaseURL: upstream.URL + "/v1"}
+	provider := &recordingRelayClientProvider{client: upstream.Client()}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultAdapterRegistry(), upstream.Client()))
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider))
 
 	for _, test := range []struct{ method, path, body string }{
 		{http.MethodGet, "/plugins/ai-relay/agnes/team-a/v1/models", ""},
@@ -119,11 +141,37 @@ func TestV1ModelsAndChatProxyAccountBearerKey(t *testing.T) {
 	} {
 		req := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body))
 		req.Header.Set("Authorization", "Bearer account-key")
+		req.Header.Set(ProxyIDHeader, "42")
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s %s status = %d; body=%s", test.method, test.path, rec.Code, rec.Body.String())
 		}
+	}
+	if len(provider.proxyIDs) != 2 || provider.proxyIDs[0] != "42" || provider.proxyIDs[1] != "42" {
+		t.Fatalf("provider proxy IDs = %#v", provider.proxyIDs)
+	}
+}
+
+func TestRelayRejectsMalformedAccountProxyContext(t *testing.T) {
+	repository := NewMemoryRouteRepository()
+	repository.routes["agnes:team-a"] = RouteConfig{
+		Platform: "agnes", Slug: "team-a", BaseURL: "https://apihub.agnes-ai.com/v1",
+	}
+	handler := NewRelayHandlerWithClientProvider(
+		repository,
+		NewDefaultAdapterRegistry(),
+		NewProxyClientProvider(http.DefaultClient, &fakeProxyResolver{}),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/team-a", bytes.NewBufferString(`{"model":"agnes-image-2.1-flash","prompt":"poster"}`))
+	req.Header.Set("Authorization", "Bearer account-key")
+	req.Header.Set(ProxyIDHeader, "invalid")
+	rec := httptest.NewRecorder()
+
+	handler.Relay(rec, req)
+
+	if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte(`"type":"invalid_request_error"`)) {
+		t.Fatalf("response = %d; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

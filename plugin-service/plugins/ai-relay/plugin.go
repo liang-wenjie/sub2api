@@ -24,5 +24,10 @@ func (Plugin) RegisterRoutes(mux *http.ServeMux, deps pluginregistry.RouteDeps) 
 	if err != nil {
 		panic(err)
 	}
-	backend.RegisterRoutes(mux, deps.Auth, backend.NewRelayHandler(routes, backend.NewDefaultAdapterRegistry(), nil))
+	proxyResolver, err := backend.NewProxyResolver(deps.Config.Database)
+	if err != nil {
+		panic(err)
+	}
+	clients := backend.NewProxyClientProvider(nil, proxyResolver)
+	backend.RegisterRoutes(mux, deps.Auth, backend.NewRelayHandlerWithClientProvider(routes, backend.NewDefaultAdapterRegistry(), clients))
 }
