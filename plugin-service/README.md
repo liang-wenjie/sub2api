@@ -137,19 +137,28 @@ The production build writes deterministic `app.js` and `app.css` files to `../we
 
 ## Agnes Image Relay
 
-The `ai-relay` plugin exposes an internal OpenAI Images-compatible relay for
-Agnes Image 2.1 Flash. Configure a route as an administrator from:
+The `ai-relay` plugin exposes an internal OpenAI-compatible relay for Agnes.
+Configure routes as an administrator from the main-site AI Relay page:
 
-- `http://plugin-server:8091/plugins/ai-relay`
+- `/admin/ai-relay`
 
-The configuration stores only the route slug, Agnes base URL, default model,
-optional model/quality mappings, output-count limit, and enabled state. It does
-not store an API key. In the main-site account configuration, use:
+The route configuration stores only the platform, name, slug, and target base
+URL. It does not store an API key. In main-site account management, use:
 
 - `http://plugin-server:8091/plugins/ai-relay/agnes/<slug>`
 
 The main site forwards that account's Bearer key to the plugin, and the plugin
-forwards it only to the configured Agnes endpoint. The initial relay supports
-OpenAI Images generation requests and maps GPT Image size, quality, response
-format, and `n` to Agnes Image requests. Chat, image edit, variants, and model
-listing are intentionally not exposed.
+forwards it only to the configured Agnes endpoint. The relay supports image
+generation, image editing, model listing, and chat completions through their
+OpenAI-compatible `/v1` paths.
+
+When the account has a primary proxy, the main backend sends only its numeric
+proxy ID over the internal plugin request. The plugin resolves credentials from
+the shared PostgreSQL `proxies` table and applies the proxy only between the
+plugin and Agnes. The main-site-to-plugin hop remains direct. Missing, disabled,
+expired, unsupported, or unreachable configured proxies return an upstream
+error and never fall back to a direct Agnes connection.
+
+Keep port `8091` internal and configure the plugin service with the same
+PostgreSQL settings as the main service. Proxy usernames and passwords are not
+sent to browsers or included in main-to-plugin headers.
