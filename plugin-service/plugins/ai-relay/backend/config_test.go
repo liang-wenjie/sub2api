@@ -119,3 +119,92 @@ func TestNormalizeRouteConfigRejectsInvalidSlugAndInsecureURL(t *testing.T) {
 		t.Fatal("NormalizeRouteConfig() error = nil, want validation error")
 	}
 }
+
+func TestNormalizeRouteConfigNormalizesPathMappings(t *testing.T) {
+	config, err := NormalizeRouteConfig(RouteConfig{
+		Platform: "agnes",
+		Slug:     "zhipu",
+		BaseURL:  "https://open.bigmodel.cn/v1",
+		PathMappings: map[string]string{
+			" /v1/responses/compact/ ": " /api/paas/v4/chat/completions/ ",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeRouteConfig() error = %v", err)
+	}
+	if got := config.PathMappings["responses/compact"]; got != "api/paas/v4/chat/completions" {
+		t.Fatalf("mapping = %q", got)
+	}
+}
+
+func TestNormalizeRouteConfigRejectsInvalidPathMappings(t *testing.T) {
+	tests := []struct {
+		name     string
+		mappings map[string]string
+	}{
+		{name: "absolute URL", mappings: map[string]string{"responses": "https://evil.example/path"}},
+		{name: "protocol relative URL", mappings: map[string]string{"responses": "//evil.example/path"}},
+		{name: "query", mappings: map[string]string{"responses": "path?x=1"}},
+		{name: "fragment", mappings: map[string]string{"responses": "path#fragment"}},
+		{name: "empty target", mappings: map[string]string{"responses": " / "}},
+		{name: "duplicate equivalent source", mappings: map[string]string{"responses": "one", "v1/responses": "two"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NormalizeRouteConfig(RouteConfig{
+				Platform: "agnes", Slug: "zhipu", BaseURL: "https://open.bigmodel.cn/v1", PathMappings: tt.mappings,
+			})
+			if err == nil {
+				t.Fatal("NormalizeRouteConfig() error = nil, want validation error")
+			}
+		})
+	}
+}
+
+func TestResolveRouteEndpointURLUsesMappingOrExistingBasePath(t *testing.T) {
+	config := RouteConfig{
+		BaseURL: "https://open.bigmodel.cn/v1",
+		PathMappings: map[string]string{
+			"responses/compact": "api/paas/v4/chat/completions",
+		},
+	}
+	mapped, err := ResolveRouteEndpointURL(config, "responses/compact")
+	if err != nil {
+		t.Fatalf("ResolveRouteEndpointURL(mapped) error = %v", err)
+	}
+	if mapped != "https://open.bigmodel.cn/api/paas/v4/chat/completions" {
+		t.Fatalf("mapped URL = %q", mapped)
+	}
+	unmapped, err := ResolveRouteEndpointURL(config, "models")
+	if err != nil {
+		t.Fatalf("ResolveRouteEndpointURL(unmapped) error = %v", err)
+	}
+	if unmapped != "https://open.bigmodel.cn/v1/models" {
+		t.Fatalf("unmapped URL = %q", unmapped)
+	}
+}
+
+func TestMemoryRouteRepositoryReturnsDefensivePathMappingCopies(t *testing.T) {
+	repository := NewMemoryRouteRepository()
+	saved, err := repository.Upsert(context.Background(), RouteConfig{
+		Platform: "agnes", Slug: "zhipu", BaseURL: "https://open.bigmodel.cn/v1",
+		PathMappings: map[string]string{"responses": "api/paas/v4/chat/completions"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved.PathMappings["responses"] = "mutated"
+
+	loaded, ok, err := repository.Get(context.Background(), "agnes", "zhipu")
+	if err != nil || !ok {
+		t.Fatalf("Get() = %#v, %v, %v", loaded, ok, err)
+	}
+	if got := loaded.PathMappings["responses"]; got != "api/paas/v4/chat/completions" {
+		t.Fatalf("stored mapping = %q", got)
+	}
+	loaded.PathMappings["responses"] = "mutated-again"
+	reloaded, _, _ := repository.Get(context.Background(), "agnes", "zhipu")
+	if got := reloaded.PathMappings["responses"]; got != "api/paas/v4/chat/completions" {
+		t.Fatalf("reloaded mapping = %q", got)
+	}
+}

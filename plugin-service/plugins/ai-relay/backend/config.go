@@ -18,10 +18,11 @@ var (
 )
 
 type RouteConfig struct {
-	Platform string `json:"platform"`
-	Slug     string `json:"slug"`
-	Name     string `json:"name"`
-	BaseURL  string `json:"base_url"`
+	Platform     string            `json:"platform"`
+	Slug         string            `json:"slug"`
+	Name         string            `json:"name"`
+	BaseURL      string            `json:"base_url"`
+	PathMappings map[string]string `json:"path_mappings"`
 }
 
 type RouteQuery struct {
@@ -65,6 +66,10 @@ func NormalizeRouteConfig(config RouteConfig) (RouteConfig, error) {
 	}
 	if config.Name == "" {
 		config.Name = config.Slug
+	}
+	config.PathMappings, err = normalizePathMappings(config.PathMappings)
+	if err != nil {
+		return RouteConfig{}, ErrInvalidRouteConfig
 	}
 	return config, nil
 }
@@ -152,5 +157,6 @@ func routeKey(platform, slug string) string {
 }
 
 func copyRouteConfig(config RouteConfig) RouteConfig {
+	config.PathMappings = copyPathMappings(config.PathMappings)
 	return config
 }
