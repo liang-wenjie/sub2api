@@ -138,8 +138,21 @@ function confirmDeleteRoute(route: RelayRoute) {
 }
 async function copyRouteURL(route: RelayRoute) {
   try {
-    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API is unavailable')
-    await navigator.clipboard.writeText(relayURL(route))
+    const url = relayURL(route)
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = url
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      const copied = document.execCommand('copy')
+      textarea.remove()
+      if (!copied) throw new Error('Legacy Clipboard API is unavailable')
+    }
     copyToast.value = { id: nextToastID++, type: 'success', message: 'Plugin URL copied', duration: 3000 }
   } catch {
     copyToast.value = { id: nextToastID++, type: 'error', message: 'Failed to copy Plugin URL', duration: 5000 }

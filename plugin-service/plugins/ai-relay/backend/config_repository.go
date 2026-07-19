@@ -62,6 +62,9 @@ func EnsureRouteSchema(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE plugin_ai_relay_routes ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, `ALTER TABLE plugin_ai_relay_routes ADD COLUMN IF NOT EXISTS path_mappings JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
 		return err
 	}

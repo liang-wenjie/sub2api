@@ -232,8 +232,10 @@ describe('AI Relay plugin application', () => {
     expect(wrapper.get('[role="status"]').text()).toContain('Failed to copy Plugin URL')
   })
 
-  it('shows an error toast when the Clipboard API is unavailable', async () => {
+  it('copies the route URL with the legacy API when Clipboard API is unavailable', async () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    const execCommand = vi.fn().mockReturnValue(true)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
     const wrapper = mount(App, {
       props: {
         api: fakeApi({
@@ -249,7 +251,8 @@ describe('AI Relay plugin application', () => {
     await wrapper.get('[aria-label="Copy route URL"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[role="status"]').text()).toContain('Failed to copy Plugin URL')
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    expect(wrapper.get('[role="status"]').text()).toContain('Plugin URL copied')
   })
 
   it('deletes one route from its action button after confirmation', async () => {

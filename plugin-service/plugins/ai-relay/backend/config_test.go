@@ -84,6 +84,7 @@ func TestSQLRouteRepositoryUpsertsConfigurationWithoutCredential(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS plugin_ai_relay_routes")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes ADD COLUMN IF NOT EXISTS path_mappings JSONB NOT NULL DEFAULT '{}'::jsonb")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes DROP COLUMN IF EXISTS default_model")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes DROP COLUMN IF EXISTS model_map")).WillReturnResult(sqlmock.NewResult(0, 0))
