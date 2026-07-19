@@ -58,48 +58,6 @@
         <label class="input-label">Platform<Select v-model="form.platform" :disabled="!!editing" :options="platformOptions.slice(1)" /></label>
         <label class="input-label">Slug<input v-model.trim="form.slug" class="input" required :disabled="!!editing" pattern="[a-z0-9][a-z0-9_-]{0,63}" /></label>
         <label class="input-label">Target Base URL<input v-model.trim="form.base_url" class="input" type="url" required /></label>
-        <div class="sm:col-span-2">
-          <div class="mb-2 flex items-center justify-between gap-3">
-            <div>
-              <p class="input-label">Path mappings</p>
-              <p class="text-sm text-gray-500 dark:text-gray-400">Replace matching upstream paths while keeping the target host.</p>
-            </div>
-            <button type="button" class="btn btn-secondary btn-sm shrink-0" data-testid="path-mapping-add" @click="addPathMapping">
-              <Icon name="plus" size="sm" />
-              Add mapping
-            </button>
-          </div>
-          <div v-if="pathMappingRows.length" class="space-y-2">
-            <div v-for="(mapping, index) in pathMappingRows" :key="mapping.id" class="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]">
-              <label class="sr-only" :for="`path-mapping-source-${mapping.id}`">Source path</label>
-              <input
-                :id="`path-mapping-source-${mapping.id}`"
-                v-model="mapping.source"
-                class="input font-mono text-sm"
-                placeholder="responses/compact"
-                data-testid="path-mapping-source"
-              />
-              <Icon name="arrowRight" size="sm" class="hidden text-gray-400 sm:block" aria-hidden="true" />
-              <label class="sr-only" :for="`path-mapping-target-${mapping.id}`">Target path</label>
-              <input
-                :id="`path-mapping-target-${mapping.id}`"
-                v-model="mapping.target"
-                class="input font-mono text-sm"
-                placeholder="api/paas/v4/chat/completions"
-                data-testid="path-mapping-target"
-              />
-              <button
-                type="button"
-                class="btn btn-ghost btn-icon size-9 justify-self-end p-0 text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
-                aria-label="Remove path mapping"
-                data-testid="path-mapping-remove"
-                @click="removePathMapping(index)"
-              >
-                <Icon name="trash" size="sm" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-        </div>
         <p v-if="formError" class="sm:col-span-2 text-sm text-red-600 dark:text-red-400">{{ formError }}</p>
       </form>
       <template #footer><button type="button" class="btn btn-secondary" @click="showEditor = false">Cancel</button><button form="relay-route-form" type="submit" class="btn btn-primary">Save configuration</button></template>
@@ -123,10 +81,9 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 
-interface RelayRoute { key: string; platform: string; slug: string; name: string; base_url: string; path_mappings: Record<string, string> }
+interface RelayRoute { key: string; platform: string; slug: string; name: string; base_url: string }
 interface Platform { key: string; display_name: string }
 interface Page { page: number; page_size: number; total: number; total_pages: number }
-interface MappingRow { id: number; source: string; target: string }
 
 const appStore = useAppStore()
 const pluginAPIBase = buildGatewayUrl('/plugins/ai-relay/api')
@@ -144,8 +101,6 @@ const editing = ref<RelayRoute | null>(null)
 const deleting = ref<RelayRoute[]>([])
 const formError = ref('')
 const form = reactive({ name: '', platform: '', slug: '', base_url: 'https://apihub.agnes-ai.com/v1' })
-const pathMappingRows = ref<MappingRow[]>([])
-let nextMappingID = 1
 
 // Agnes remains selectable while the optional platform discovery endpoint is unavailable.
 const fallbackPlatforms: Platform[] = [{ key: 'agnes', display_name: 'Agnes' }]
@@ -161,7 +116,7 @@ const columns = [
 const selectedRoutes = computed(() => Array.from(selectedRouteMap.value.values()))
 const deleteMessage = computed(() => deleting.value.length === 1 ? `Delete ${deleting.value[0].name || deleting.value[0].slug}?` : `Delete ${deleting.value.length} selected configurations?`)
 
-function normalizeRoute(route: Omit<RelayRoute, 'key'>): RelayRoute { return { ...route, path_mappings: route.path_mappings || {}, key: `${route.platform}:${route.slug}` } }
+function normalizeRoute(route: Omit<RelayRoute, 'key'>): RelayRoute { return { ...route, key: `${route.platform}:${route.slug}` } }
 function relayURL(route: RelayRoute) { return `${window.location.protocol}//plugin-server:8091/plugins/ai-relay/${route.platform}/${route.slug}` }
 function clearSelection() { selectedKeys.value = []; selectedRouteMap.value = new Map() }
 function updateSelection(keys: Array<string | number>) {
@@ -192,31 +147,13 @@ async function reload() {
 }
 function changePage(page: number) { pagination.page = page; reload() }
 function changePageSize(pageSize: number) { pagination.page = 1; pagination.page_size = pageSize; reload() }
-function canonicalPath(value: string) {
-  const trimmed = value.trim().replace(/^\/+|\/+$/g, '')
-  return trimmed.startsWith('v1/') ? trimmed.slice(3) : trimmed
-}
-function mappingRowsFromRecord(record: Record<string, string>): MappingRow[] {
-  return Object.entries(record || {}).map(([source, target]) => ({ id: nextMappingID++, source, target }))
-}
-function mappingRecordFromRows(rows: MappingRow[]): Record<string, string> {
-  const mappings: Record<string, string> = {}
-  rows.forEach(({ source, target }) => {
-    const normalizedSource = canonicalPath(source)
-    const normalizedTarget = target.trim().replace(/^\/+|\/+$/g, '')
-    if (normalizedSource && normalizedTarget) mappings[normalizedSource] = normalizedTarget
-  })
-  return mappings
-}
-function addPathMapping() { pathMappingRows.value.push({ id: nextMappingID++, source: '', target: '' }) }
-function removePathMapping(index: number) { pathMappingRows.value.splice(index, 1) }
-function openCreate() { editing.value = null; formError.value = ''; pathMappingRows.value = []; Object.assign(form, { name: '', platform: availablePlatforms.value[0]?.key || '', slug: Date.now().toString(), base_url: 'https://apihub.agnes-ai.com/v1' }); showEditor.value = true }
-function openEdit(route: RelayRoute) { editing.value = route; formError.value = ''; pathMappingRows.value = mappingRowsFromRecord(route.path_mappings); Object.assign(form, route); showEditor.value = true }
+function openCreate() { editing.value = null; formError.value = ''; Object.assign(form, { name: '', platform: availablePlatforms.value[0]?.key || '', slug: Date.now().toString(), base_url: 'https://apihub.agnes-ai.com/v1' }); showEditor.value = true }
+function openEdit(route: RelayRoute) { editing.value = route; formError.value = ''; Object.assign(form, route); showEditor.value = true }
 async function saveRoute() {
   formError.value = ''
   try {
     const path = editing.value ? `${pluginAPIBase}/routes/${editing.value.platform}/${editing.value.slug}` : `${pluginAPIBase}/routes`
-    await apiClient.request({ method: editing.value ? 'put' : 'post', url: path, data: { ...form, slug: form.slug.toLowerCase(), path_mappings: mappingRecordFromRows(pathMappingRows.value) } })
+    await apiClient.request({ method: editing.value ? 'put' : 'post', url: path, data: { ...form, slug: form.slug.toLowerCase() } })
     showEditor.value = false; pagination.page = 1; await reload(); appStore.showSuccess('Configuration saved')
   } catch (error: any) { formError.value = error?.message || 'Failed to save configuration' }
 }
