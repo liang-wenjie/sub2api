@@ -122,7 +122,10 @@ describe('AI Relay plugin application', () => {
     await wrapper.get('[data-testid="path-mapping-add"]').trigger('click')
 
     const source = wrapper.get('[data-testid="path-mapping-source"]')
+    const target = wrapper.get('[data-testid="path-mapping-target"]')
     expect(source.attributes('list')).toBe('openai-source-paths')
+    expect(source.attributes('placeholder')).toBe('v1/chat/completions')
+    expect(target.attributes('placeholder')).toBe('chat/completions')
     expect(wrapper.findAll('#openai-source-paths option').map(option => option.attributes('value'))).toEqual([
       'v1/models', 'v1/chat/completions', 'v1/responses', 'v1/responses/compact',
       'v1/embeddings', 'v1/images/generations', 'v1/images/edits',
@@ -142,12 +145,12 @@ describe('AI Relay plugin application', () => {
     await wrapper.get('[data-testid="path-mapping-add"]').trigger('click')
     await wrapper.get('[data-testid="path-mapping-add"]').trigger('click')
     await wrapper.findAll<HTMLInputElement>('[data-testid="path-mapping-source"]')[0].setValue('/v1/responses/compact/')
-    await wrapper.findAll<HTMLInputElement>('[data-testid="path-mapping-target"]')[0].setValue('/api/paas/v4/chat/completions/')
+    await wrapper.findAll<HTMLInputElement>('[data-testid="path-mapping-target"]')[0].setValue('/chat/completions/')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(createRoute).toHaveBeenCalledWith(expect.objectContaining({
-      path_mappings: { 'v1/responses/compact': 'api/paas/v4/chat/completions' },
+      path_mappings: { 'v1/responses/compact': 'chat/completions' },
     }))
   })
 

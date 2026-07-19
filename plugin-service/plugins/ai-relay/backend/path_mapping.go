@@ -68,7 +68,7 @@ func ResolveRouteEndpointURL(config RouteConfig, endpoint string) (string, error
 		}
 	}
 	if ok {
-		baseURL.Path = "/" + strings.Trim(target, "/")
+		baseURL.Path = strings.TrimRight(baseURL.Path, "/") + "/" + strings.Trim(target, "/")
 		baseURL.RawPath = ""
 		baseURL.RawQuery = ""
 		baseURL.Fragment = ""

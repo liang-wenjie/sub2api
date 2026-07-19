@@ -155,7 +155,7 @@ func TestV1ModelsAndChatProxyAccountBearerKey(t *testing.T) {
 
 func TestResponsesCompactPathMappingTransparentlyProxiesRequestAndResponse(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/paas/v4/chat/completions" || r.URL.RawQuery != "trace=compact" {
+		if r.URL.Path != "/v1/api/paas/v4/chat/completions" || r.URL.RawQuery != "trace=compact" {
 			t.Fatalf("upstream URL = %s", r.URL.String())
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer account-key" {
@@ -217,7 +217,7 @@ func TestPathMappingsApplyToExistingRelayEndpoints(t *testing.T) {
 	requestedPaths := make(chan string, 3)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestedPaths <- r.URL.Path
-		if r.URL.Path == "/mapped/images" {
+		if r.URL.Path == "/v1/mapped/images" {
 			_, _ = w.Write([]byte(`{"created":1,"data":[{"url":"https://cdn.example/image.png"}]}`))
 			return
 		}
@@ -250,7 +250,7 @@ func TestPathMappingsApplyToExistingRelayEndpoints(t *testing.T) {
 			t.Fatalf("%s status = %d; body=%s", req.URL.Path, rec.Code, rec.Body.String())
 		}
 	}
-	for _, want := range []string{"/mapped/models", "/mapped/chat", "/mapped/images"} {
+	for _, want := range []string{"/v1/mapped/models", "/v1/mapped/chat", "/v1/mapped/images"} {
 		if got := <-requestedPaths; got != want {
 			t.Fatalf("upstream path = %q, want %q", got, want)
 		}
@@ -262,7 +262,7 @@ func TestOpenAIWildcardTransparentProxyAppliesMappings(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer openai-key" {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 		}
-		if r.URL.Path == "/v4/embeddings" {
+		if r.URL.Path == "/v1/v4/embeddings" {
 			if r.URL.RawQuery != "trace=1" {
 				t.Fatalf("mapped query = %q", r.URL.RawQuery)
 			}

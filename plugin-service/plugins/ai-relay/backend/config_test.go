@@ -174,7 +174,7 @@ func TestResolveRouteEndpointURLUsesMappingOrExistingBasePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRouteEndpointURL(mapped) error = %v", err)
 	}
-	if mapped != "https://open.bigmodel.cn/api/paas/v4/chat/completions" {
+	if mapped != "https://open.bigmodel.cn/v1/api/paas/v4/chat/completions" {
 		t.Fatalf("mapped URL = %q", mapped)
 	}
 	unmapped, err := ResolveRouteEndpointURL(config, "models")
@@ -183,6 +183,21 @@ func TestResolveRouteEndpointURLUsesMappingOrExistingBasePath(t *testing.T) {
 	}
 	if unmapped != "https://open.bigmodel.cn/v1/models" {
 		t.Fatalf("unmapped URL = %q", unmapped)
+	}
+}
+
+func TestResolveRouteEndpointURLAppendsMappedTargetToBasePath(t *testing.T) {
+	config := RouteConfig{
+		BaseURL:      "https://open.bigmodel.cn/api/coding/paas/v4",
+		PathMappings: map[string]string{"v1/chat/completions": "chat/completions"},
+	}
+
+	mapped, err := ResolveRouteEndpointURL(config, "chat/completions")
+	if err != nil {
+		t.Fatalf("ResolveRouteEndpointURL() error = %v", err)
+	}
+	if mapped != "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions" {
+		t.Fatalf("mapped URL = %q", mapped)
 	}
 }
 
@@ -196,7 +211,7 @@ func TestResolveRouteEndpointURLMatchesStoredV1Mapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRouteEndpointURL() error = %v", err)
 	}
-	if mapped != "https://open.bigmodel.cn/api/paas/v4/chat/completions" {
+	if mapped != "https://open.bigmodel.cn/v1/api/paas/v4/chat/completions" {
 		t.Fatalf("mapped URL = %q", mapped)
 	}
 }
