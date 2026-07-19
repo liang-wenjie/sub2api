@@ -1,22 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Relay</title>
+    <script type="module" crossorigin src="/plugins/ai-relay/assets/app.js"></script>
+    <link rel="stylesheet" crossorigin href="/plugins/ai-relay/assets/app.css">
   </head>
   <body>
-    <script>
-      (function () {
-        var mainOrigin = window.location.origin;
-        try {
-          if (document.referrer) mainOrigin = new URL(document.referrer).origin;
-        } catch (error) {}
-        var target = mainOrigin + '/admin/ai-relay';
-        if (window.top !== window) window.top.location.replace(target);
-        else window.location.replace(target);
-      })();
-    </script>
-    <noscript><a href="/admin/ai-relay">Open AI Relay</a></noscript>
+    <div id="app" data-plugin-api-base="/plugins/ai-relay/api"></div>
   </body>
 </html>
