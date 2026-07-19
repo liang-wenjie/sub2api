@@ -27,6 +27,83 @@ describe('AI Relay plugin application', () => {
     expect(wrapper.find('select option[value="openai"]').text()).toBe('OpenAI')
   })
 
+  it('renames a route by deleting the old slug before creating the new slug', async () => {
+    const route = {
+      platform: 'openai',
+      slug: 'old-slug',
+      name: 'OpenAI upstream',
+      base_url: 'https://api.example.com/v1',
+      path_mappings: { 'v1/responses': 'v4/responses' },
+    }
+    const deleteRoutes = vi.fn().mockResolvedValue(undefined)
+    const createRoute = vi.fn().mockResolvedValue({})
+    const updateRoute = vi.fn().mockResolvedValue({})
+    const wrapper = mount(App, {
+      props: {
+        api: fakeApi({
+          listRoutes: vi.fn().mockResolvedValue({
+            items: [route],
+            pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
+          }),
+          deleteRoutes,
+          createRoute,
+          updateRoute,
+        }),
+      },
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="route-edit"]').trigger('click')
+
+    const slugInput = wrapper.findAll<HTMLInputElement>('input[required]')[1]
+    expect(slugInput.attributes('disabled')).toBeUndefined()
+    await slugInput.setValue('new-slug')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(deleteRoutes).toHaveBeenCalledWith([{ platform: 'openai', slug: 'old-slug' }])
+    expect(createRoute).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'openai',
+      slug: 'new-slug',
+      path_mappings: { 'v1/responses': 'v4/responses' },
+    }))
+    expect(updateRoute).not.toHaveBeenCalled()
+    expect(deleteRoutes.mock.invocationCallOrder[0]).toBeLessThan(createRoute.mock.invocationCallOrder[0])
+  })
+
+  it('updates an edited route directly when the slug is unchanged', async () => {
+    const route = {
+      platform: 'openai',
+      slug: 'same-slug',
+      name: 'OpenAI upstream',
+      base_url: 'https://api.example.com/v1',
+      path_mappings: {},
+    }
+    const deleteRoutes = vi.fn().mockResolvedValue(undefined)
+    const createRoute = vi.fn().mockResolvedValue({})
+    const updateRoute = vi.fn().mockResolvedValue({})
+    const wrapper = mount(App, {
+      props: {
+        api: fakeApi({
+          listRoutes: vi.fn().mockResolvedValue({
+            items: [route],
+            pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
+          }),
+          deleteRoutes,
+          createRoute,
+          updateRoute,
+        }),
+      },
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="route-edit"]').trigger('click')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(updateRoute).toHaveBeenCalledWith('openai', 'same-slug', expect.objectContaining({ slug: 'same-slug' }))
+    expect(deleteRoutes).not.toHaveBeenCalled()
+    expect(createRoute).not.toHaveBeenCalled()
+  })
+
   it('adds and removes path mapping rows in the create dialog', async () => {
     const wrapper = mount(App, { props: { api: fakeApi() } })
     await flushPromises()

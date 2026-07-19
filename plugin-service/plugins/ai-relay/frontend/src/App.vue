@@ -99,10 +99,17 @@ function removeMapping(index: number) { mappingRows.value.splice(index, 1) }
 async function save() {
   formError.value = ''
   const normalizedMappings = mappingRecordFromRows(mappingRows.value)
-  const payload = { ...form, slug: form.slug.trim().toLowerCase(), path_mappings: normalizedMappings }
+  const nextSlug = form.slug.trim().toLowerCase()
+  const payload = { ...form, slug: nextSlug, path_mappings: normalizedMappings }
   try {
-    if (editing.value) await props.api.updateRoute(editing.value.platform, editing.value.slug, payload)
-    else await props.api.createRoute(payload)
+    if (editing.value) {
+      if (nextSlug !== editing.value.slug) {
+        await props.api.deleteRoutes([{ platform: editing.value.platform, slug: editing.value.slug }])
+        await props.api.createRoute(payload)
+      } else {
+        await props.api.updateRoute(editing.value.platform, editing.value.slug, payload)
+      }
+    } else await props.api.createRoute(payload)
     dialogOpen.value = false
     page.value = 1
     await load()
@@ -192,7 +199,7 @@ defineExpose({ canonicalPath })
       <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="route-dialog-title">
         <div class="dialog-heading"><h2 id="route-dialog-title">{{ editing ? 'Edit route' : 'Add route' }}</h2><button type="button" class="icon-button" aria-label="Close dialog" @click="dialogOpen = false">×</button></div>
         <form @submit.prevent="save">
-          <div class="form-grid"><label>Name<input v-model.trim="form.name" required maxlength="80" /></label><label>Platform<select v-model="form.platform" :disabled="!!editing" required><option v-for="item in platforms" :key="item.key" :value="item.key">{{ item.display_name }}</option></select></label><label>Slug<input v-model.trim="form.slug" required pattern="[a-z0-9][a-z0-9_-]{0,63}" :disabled="!!editing" /></label><label>Target Base URL<input v-model.trim="form.base_url" type="url" required /></label></div>
+          <div class="form-grid"><label>Name<input v-model.trim="form.name" required maxlength="80" /></label><label>Platform<select v-model="form.platform" :disabled="!!editing" required><option v-for="item in platforms" :key="item.key" :value="item.key">{{ item.display_name }}</option></select></label><label>Slug<input v-model.trim="form.slug" required pattern="[a-z0-9][a-z0-9_-]{0,63}" /></label><label>Target Base URL<input v-model.trim="form.base_url" type="url" required /></label></div>
           <div class="mapping-editor"><div class="mapping-heading"><div><h3>Path mappings</h3><p>Replace matching upstream paths while keeping the target host.</p></div><button type="button" class="secondary-button" data-testid="path-mapping-add" @click="addMapping">＋ Add mapping</button></div><datalist id="openai-source-paths"><option v-for="path in openAISourcePathSuggestions" :key="path" :value="path" /></datalist><div v-for="(mapping, index) in mappingRows" :key="mapping.id" class="mapping-row"><label :for="`source-${mapping.id}`">Source path<input :id="`source-${mapping.id}`" v-model="mapping.source" list="openai-source-paths" data-testid="path-mapping-source" placeholder="v1/responses/compact" /></label><span class="mapping-arrow" aria-hidden="true">→</span><label :for="`target-${mapping.id}`">Target path<input :id="`target-${mapping.id}`" v-model="mapping.target" data-testid="path-mapping-target" placeholder="api/paas/v4/chat/completions" /></label><button type="button" class="icon-button" aria-label="Remove path mapping" data-testid="path-mapping-remove" @click="removeMapping(index)">×</button></div></div>
           <p v-if="formError" class="relay-alert" role="alert">{{ formError }}</p>
           <div class="dialog-actions"><button type="button" class="secondary-button" @click="dialogOpen = false">Cancel</button><button type="submit" class="primary-button" data-testid="route-save">Save route</button></div>
