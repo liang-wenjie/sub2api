@@ -94,9 +94,9 @@ func TestSQLRouteRepositoryUpsertsConfigurationWithoutCredential(t *testing.T) {
 		t.Fatalf("EnsureRouteSchema() error = %v", err)
 	}
 	mock.ExpectQuery("INSERT INTO plugin_ai_relay_routes").
-		WithArgs("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1", `{"responses/compact":"api/paas/v4/chat/completions"}`).
+		WithArgs("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1", `{"v1/responses/compact":"api/paas/v4/chat/completions"}`).
 		WillReturnRows(sqlmock.NewRows([]string{"platform", "slug", "name", "base_url", "path_mappings"}).
-			AddRow("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1", []byte(`{"responses/compact":"api/paas/v4/chat/completions"}`)))
+			AddRow("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1", []byte(`{"v1/responses/compact":"api/paas/v4/chat/completions"}`)))
 
 	repository := NewSQLRouteRepository(db)
 	_, err = repository.Upsert(context.Background(), RouteConfig{
@@ -134,7 +134,7 @@ func TestNormalizeRouteConfigNormalizesPathMappings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeRouteConfig() error = %v", err)
 	}
-	if got := config.PathMappings["responses/compact"]; got != "api/paas/v4/chat/completions" {
+	if got := config.PathMappings["v1/responses/compact"]; got != "api/paas/v4/chat/completions" {
 		t.Fatalf("mapping = %q", got)
 	}
 }
@@ -183,6 +183,21 @@ func TestResolveRouteEndpointURLUsesMappingOrExistingBasePath(t *testing.T) {
 	}
 	if unmapped != "https://open.bigmodel.cn/v1/models" {
 		t.Fatalf("unmapped URL = %q", unmapped)
+	}
+}
+
+func TestResolveRouteEndpointURLMatchesStoredV1Mapping(t *testing.T) {
+	config := RouteConfig{
+		BaseURL:      "https://open.bigmodel.cn/v1",
+		PathMappings: map[string]string{"v1/responses/compact": "api/paas/v4/chat/completions"},
+	}
+
+	mapped, err := ResolveRouteEndpointURL(config, "responses/compact")
+	if err != nil {
+		t.Fatalf("ResolveRouteEndpointURL() error = %v", err)
+	}
+	if mapped != "https://open.bigmodel.cn/api/paas/v4/chat/completions" {
+		t.Fatalf("mapped URL = %q", mapped)
 	}
 }
 

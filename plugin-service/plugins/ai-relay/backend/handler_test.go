@@ -484,7 +484,7 @@ func TestAdminCreatesRouteWithPathMappings(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Get() = %#v, %v, %v", stored, found, err)
 	}
-	if got := stored.PathMappings["responses/compact"]; got != "api/paas/v4/chat/completions" {
+	if got := stored.PathMappings["v1/responses/compact"]; got != "api/paas/v4/chat/completions" {
 		t.Fatalf("stored mapping = %q", got)
 	}
 }

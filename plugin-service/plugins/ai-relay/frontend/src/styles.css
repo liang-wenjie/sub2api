@@ -53,6 +53,7 @@ h1 { margin-bottom: 8px; font-size: 28px; line-height: 1.2; }
 .mapping-heading h3 { margin-bottom: 4px; font-size: 15px; }
 .mapping-heading p { margin-bottom: 0; color: #64748b; font-size: 12px; font-weight: 400; }
 .mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-bottom: 10px; }
+.mapping-row input::placeholder { color: #94a3b8; opacity: 1; }
 .mapping-arrow { padding-bottom: 10px; color: #94a3b8; }
 .dialog-actions { justify-content: flex-end; margin-top: 24px; }
 .relay-toast-region { position: fixed; z-index: 30; top: 16px; right: 16px; width: min(420px, calc(100vw - 32px)); pointer-events: none; }

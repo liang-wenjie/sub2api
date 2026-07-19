@@ -35,4 +35,8 @@ describe('AI Relay page layout styles', () => {
     expect(rule(mobile, '.relay-table-wrap')).toMatch(/flex:\s*none/)
     expect(rule(mobile, '.relay-table-wrap')).toMatch(/overflow-x:\s*auto/)
   })
+
+  it('uses muted examples for mapping inputs', () => {
+    expect(rule(styles, '.mapping-row input::placeholder')).toMatch(/color:\s*#94a3b8/)
+  })
 })

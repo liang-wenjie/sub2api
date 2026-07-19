@@ -15,19 +15,22 @@ func canonicalRelayPath(value string) string {
 
 func normalizePathMappings(input map[string]string) (map[string]string, error) {
 	normalized := make(map[string]string, len(input))
+	seenCanonicalSources := make(map[string]struct{}, len(input))
 	for rawSource, rawTarget := range input {
-		source := canonicalRelayPath(rawSource)
+		source := strings.Trim(strings.TrimSpace(rawSource), "/")
 		trimmedTarget := strings.TrimSpace(rawTarget)
 		if strings.HasPrefix(trimmedTarget, "//") {
 			return nil, ErrInvalidRouteConfig
 		}
 		target := strings.Trim(trimmedTarget, "/")
-		if source == "" || !validMappedTarget(target) {
+		canonicalSource := canonicalRelayPath(source)
+		if canonicalSource == "" || !validMappedTarget(target) {
 			return nil, ErrInvalidRouteConfig
 		}
-		if _, exists := normalized[source]; exists {
+		if _, exists := seenCanonicalSources[canonicalSource]; exists {
 			return nil, ErrInvalidRouteConfig
 		}
+		seenCanonicalSources[canonicalSource] = struct{}{}
 		normalized[source] = target
 	}
 	return normalized, nil
@@ -55,7 +58,16 @@ func ResolveRouteEndpointURL(config RouteConfig, endpoint string) (string, error
 		return "", ErrInvalidRouteConfig
 	}
 	canonicalEndpoint := canonicalRelayPath(endpoint)
-	if target, ok := config.PathMappings[canonicalEndpoint]; ok {
+	target, ok := config.PathMappings[canonicalEndpoint]
+	if !ok {
+		for source, candidate := range config.PathMappings {
+			if canonicalRelayPath(source) == canonicalEndpoint {
+				target, ok = candidate, true
+				break
+			}
+		}
+	}
+	if ok {
 		baseURL.Path = "/" + strings.Trim(target, "/")
 		baseURL.RawPath = ""
 		baseURL.RawQuery = ""

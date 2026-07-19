@@ -8,7 +8,7 @@ export function canonicalPath(value: string): string {
 export function mappingRecordFromRows(rows: MappingRow[]): Record<string, string> {
   const mappings: Record<string, string> = {}
   rows.forEach(({ source, target }) => {
-    const normalizedSource = canonicalPath(source)
+    const normalizedSource = source.trim().replace(/^\/+|\/+$/g, '')
     const normalizedTarget = target.trim().replace(/^\/+|\/+$/g, '')
     if (normalizedSource && normalizedTarget) mappings[normalizedSource] = normalizedTarget
   })

@@ -27,6 +27,22 @@ describe('AI Relay plugin application', () => {
     expect(wrapper.findAll('[data-testid="path-mapping-source"]')).toHaveLength(0)
   })
 
+  it('offers OpenAI source paths while allowing custom input', async () => {
+    const wrapper = mount(App, { props: { api: fakeApi() } })
+    await flushPromises()
+    await wrapper.get('[data-testid="route-add"]').trigger('click')
+    await wrapper.get('[data-testid="path-mapping-add"]').trigger('click')
+
+    const source = wrapper.get('[data-testid="path-mapping-source"]')
+    expect(source.attributes('list')).toBe('openai-source-paths')
+    expect(wrapper.findAll('#openai-source-paths option').map(option => option.attributes('value'))).toEqual([
+      'v1/models', 'v1/chat/completions', 'v1/responses', 'v1/responses/compact',
+      'v1/embeddings', 'v1/images/generations', 'v1/images/edits',
+    ])
+    await source.setValue('custom/endpoint')
+    expect((source.element as HTMLInputElement).value).toBe('custom/endpoint')
+  })
+
   it('submits normalized mappings and omits blank rows', async () => {
     const createRoute = vi.fn().mockResolvedValue({})
     const wrapper = mount(App, { props: { api: fakeApi({ createRoute }) } })
@@ -43,7 +59,7 @@ describe('AI Relay plugin application', () => {
     await flushPromises()
 
     expect(createRoute).toHaveBeenCalledWith(expect.objectContaining({
-      path_mappings: { 'responses/compact': 'api/paas/v4/chat/completions' },
+      path_mappings: { 'v1/responses/compact': 'api/paas/v4/chat/completions' },
     }))
   })
 
