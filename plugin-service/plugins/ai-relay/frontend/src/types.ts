@@ -11,6 +11,10 @@ export interface Platform {
   display_name: string
 }
 
+export interface RelayRuntime {
+  base_url: string
+}
+
 export interface Pagination {
   page: number
   page_size: number

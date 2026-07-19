@@ -2,7 +2,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import type { RelayApi } from './api'
 import { canonicalPath, mappingRecordFromRows, mappingRowsFromRecord } from './pathMappings'
+import Toast from './Toast.vue'
 import type { MappingRow, Platform, RelayRoute } from './types'
+
+type CopyToast = { id: number; type: 'success' | 'error'; message: string; duration: number }
 
 const props = defineProps<{ api: RelayApi }>()
 const routes = ref<RelayRoute[]>([])
@@ -22,14 +25,15 @@ const deleteOpen = ref(false)
 const formError = ref('')
 const form = reactive({ name: '', platform: '', slug: '', base_url: 'https://apihub.agnes-ai.com/v1' })
 const mappingRows = ref<MappingRow[]>([])
+const runtimeBaseURL = ref('http://127.0.0.1:8091')
+const copyToast = ref<CopyToast | null>(null)
 let nextID = 1
+let nextToastID = 1
 
 const selectedRoutes = computed(() => routes.value.filter(route => selected.value.has(routeKey(route))))
 const allSelected = computed(() => routes.value.length > 0 && routes.value.every(route => selected.value.has(routeKey(route))))
-const relayBase = typeof window === 'undefined' ? '' : `${window.location.protocol}//plugin-server:8091`
-
 function routeKey(route: Pick<RelayRoute, 'platform' | 'slug'>) { return `${route.platform}:${route.slug}` }
-function relayURL(route: RelayRoute) { return `${relayBase}/plugins/ai-relay/${route.platform}/${route.slug}` }
+function relayURL(route: RelayRoute) { return `${runtimeBaseURL.value}/plugins/ai-relay/${route.platform}/${route.slug}` }
 function setError(error: unknown) {
   const status = typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0
   unauthorized.value = status === 401 || status === 403
@@ -39,10 +43,13 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const [availablePlatforms, result] = await Promise.all([
+    const [runtime, availablePlatforms, result] = await Promise.all([
+      props.api.getRuntime().catch(() => null),
       props.api.listPlatforms(),
       props.api.listRoutes({ page: page.value, page_size: pageSize.value, platform: platform.value, search: search.value }),
     ])
+    const configuredBaseURL = runtime?.base_url?.trim().replace(/\/+$/, '')
+    if (configuredBaseURL) runtimeBaseURL.value = configuredBaseURL
     platforms.value = availablePlatforms
     routes.value = result.items || []
     Object.assign(pagination, result.pagination)
@@ -102,8 +109,18 @@ async function deleteSelected() {
     setError(error)
   }
 }
+function confirmDeleteRoute(route: RelayRoute) {
+  selected.value = new Set([routeKey(route)])
+  deleteOpen.value = true
+}
 async function copyRouteURL(route: RelayRoute) {
-  await navigator.clipboard?.writeText(relayURL(route))
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API is unavailable')
+    await navigator.clipboard.writeText(relayURL(route))
+    copyToast.value = { id: nextToastID++, type: 'success', message: 'Plugin URL copied', duration: 3000 }
+  } catch {
+    copyToast.value = { id: nextToastID++, type: 'error', message: 'Failed to copy Plugin URL', duration: 5000 }
+  }
 }
 function updateSearch() { page.value = 1; void load() }
 function updatePage(nextPage: number) { page.value = Math.max(1, nextPage); void load() }
@@ -145,15 +162,16 @@ defineExpose({ canonicalPath })
       <div v-if="loading" class="relay-state">Loading routes…</div>
       <div v-else-if="!routes.length" class="relay-state"><strong>No routes configured</strong><span>Add a route to start forwarding requests.</span><button type="button" class="secondary-button" @click="openCreate">Add route</button></div>
       <table v-else class="relay-table">
-        <thead><tr><th><input type="checkbox" :checked="allSelected" aria-label="Select all routes" @change="toggleAll" /></th><th>Name</th><th>Platform</th><th>Target URL</th><th>Mappings</th><th>Actions</th></tr></thead>
+        <thead><tr><th><input type="checkbox" :checked="allSelected" aria-label="Select all routes" @change="toggleAll" /></th><th>Name</th><th>Platform</th><th>Target URL</th><th>Plugin URL</th><th>Mappings</th><th>Actions</th></tr></thead>
         <tbody>
           <tr v-for="route in routes" :key="routeKey(route)">
             <td><input type="checkbox" :checked="selected.has(routeKey(route))" :aria-label="`Select ${route.name || route.slug}`" @change="toggleSelected(route)" /></td>
-            <td><strong>{{ route.name || route.slug }}</strong><small>{{ route.slug }}</small></td>
+            <td data-testid="route-name"><strong>{{ route.name || route.slug }}</strong></td>
             <td>{{ route.platform }}</td>
             <td><code>{{ route.base_url }}</code></td>
+            <td data-testid="route-plugin-url"><code>{{ relayURL(route) }}</code></td>
             <td><span class="mapping-badge">{{ Object.keys(route.path_mappings || {}).length }}</span></td>
-            <td class="action-cell"><button type="button" class="icon-button" aria-label="Copy route URL" @click="copyRouteURL(route)">⧉</button><button type="button" class="icon-button" data-testid="route-edit" aria-label="Edit route" @click="openEdit(route)">✎</button></td>
+            <td class="action-cell"><button type="button" class="icon-button" aria-label="Copy route URL" @click="copyRouteURL(route)">⧉</button><button type="button" class="icon-button" data-testid="route-edit" aria-label="Edit route" @click="openEdit(route)">✎</button><button type="button" class="icon-button" data-testid="route-delete" aria-label="Delete route" @click="confirmDeleteRoute(route)">×</button></td>
           </tr>
         </tbody>
       </table>
@@ -171,6 +189,7 @@ defineExpose({ canonicalPath })
         </form>
       </section>
     </div>
-    <div v-if="deleteOpen" class="dialog-backdrop" role="presentation"><section class="dialog narrow" role="alertdialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">Delete selected routes?</h2><p>This action cannot be undone.</p><div class="dialog-actions"><button type="button" class="secondary-button" @click="deleteOpen = false">Cancel</button><button type="button" class="danger-button" @click="deleteSelected">Delete</button></div></section></div>
+    <div v-if="deleteOpen" class="dialog-backdrop" role="presentation"><section class="dialog narrow" role="alertdialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">Delete selected routes?</h2><p>This action cannot be undone.</p><div class="dialog-actions"><button type="button" class="secondary-button" @click="deleteOpen = false">Cancel</button><button type="button" class="danger-button" data-testid="route-delete-confirm" @click="deleteSelected">Delete</button></div></section></div>
+    <Toast v-if="copyToast" :key="copyToast.id" :type="copyToast.type" :message="copyToast.message" :duration="copyToast.duration" @dismiss="copyToast = null" />
   </main>
 </template>

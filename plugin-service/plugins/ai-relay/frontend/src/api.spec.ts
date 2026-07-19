@@ -9,6 +9,18 @@ function response(body: unknown, init: ResponseInit = {}) {
 }
 
 describe('relay API client', () => {
+  it('loads the relay runtime base URL', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response({ base_url: 'http://plugin-server:8091' }))
+
+    await expect(createRelayApi('/plugins/ai-relay/api', fetcher).getRuntime()).resolves.toEqual({
+      base_url: 'http://plugin-server:8091',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      '/plugins/ai-relay/api/runtime',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+  })
+
   it('lists routes with encoded filters', async () => {
     const fetcher = vi.fn().mockResolvedValue(response({ items: [], pagination: { page: 1, page_size: 20, total: 0, total_pages: 1 } }))
     await createRelayApi('/plugins/ai-relay/api', fetcher).listRoutes({ page: 2, page_size: 10, platform: 'open ai', search: 'compact route' })

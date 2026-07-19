@@ -1,4 +1,4 @@
-import type { Pagination, Platform, RelayRoute, RoutePage } from './types'
+import type { Pagination, Platform, RelayRoute, RelayRuntime, RoutePage } from './types'
 
 export class RelayApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -8,6 +8,7 @@ export class RelayApiError extends Error {
 }
 
 export interface RelayApi {
+  getRuntime(): Promise<RelayRuntime>
   listPlatforms(): Promise<Platform[]>
   listRoutes(query: Partial<Pagination> & { platform?: string; search?: string }): Promise<RoutePage>
   createRoute(route: Omit<RelayRoute, 'key'>): Promise<RelayRoute>
@@ -44,6 +45,7 @@ export function createRelayApi(base: string, fetcher: typeof fetch = window.fetc
   const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) })
 
   return {
+    getRuntime: () => request<RelayRuntime>('/runtime'),
     listPlatforms: () => request<{ items: Platform[] }>('/platforms').then(payload => payload.items || []),
     listRoutes: query => {
       const params = new URLSearchParams()

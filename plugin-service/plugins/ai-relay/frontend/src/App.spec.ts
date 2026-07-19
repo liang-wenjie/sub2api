@@ -5,6 +5,7 @@ import type { RelayApi } from './api'
 
 function fakeApi(overrides: Partial<RelayApi> = {}): RelayApi {
   return {
+    getRuntime: vi.fn().mockResolvedValue({ base_url: 'http://127.0.0.1:8091' }),
     listPlatforms: vi.fn().mockResolvedValue([{ key: 'agnes', display_name: 'Agnes' }]),
     listRoutes: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, page_size: 20, total: 0, total_pages: 1 } }),
     createRoute: vi.fn().mockResolvedValue({}),
@@ -51,5 +52,104 @@ describe('AI Relay plugin application', () => {
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('offline')
     expect(wrapper.find('[data-testid="route-add"]').exists()).toBe(true)
+  })
+
+  it('shows the complete runtime plugin URL without a secondary slug', async () => {
+    const route = {
+      platform: 'agnes',
+      slug: 'zhipu',
+      name: 'Zhipu',
+      base_url: 'https://open.bigmodel.cn/v4',
+      path_mappings: {},
+    }
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const wrapper = mount(App, {
+      props: {
+        api: fakeApi({
+          getRuntime: vi.fn().mockResolvedValue({ base_url: 'http://plugin-server:8091' }),
+          listRoutes: vi.fn().mockResolvedValue({
+            items: [route],
+            pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
+          }),
+        }),
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="route-name"]').text()).toBe('Zhipu')
+    expect(wrapper.find('[data-testid="route-name"] small').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="route-plugin-url"]').text()).toBe(
+      'http://plugin-server:8091/plugins/ai-relay/agnes/zhipu',
+    )
+
+    await wrapper.get('[aria-label="Copy route URL"]').trigger('click')
+    expect(writeText).toHaveBeenCalledWith('http://plugin-server:8091/plugins/ai-relay/agnes/zhipu')
+    expect(wrapper.get('[role="status"]').text()).toContain('Plugin URL copied')
+  })
+
+  it('shows an error toast when copying the route URL fails', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'))
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const wrapper = mount(App, {
+      props: {
+        api: fakeApi({
+          listRoutes: vi.fn().mockResolvedValue({
+            items: [{ platform: 'agnes', slug: 'zhipu', name: 'Zhipu', base_url: 'https://open.bigmodel.cn/v4', path_mappings: {} }],
+            pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
+          }),
+        }),
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[aria-label="Copy route URL"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[role="status"]').text()).toContain('Failed to copy Plugin URL')
+  })
+
+  it('shows an error toast when the Clipboard API is unavailable', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    const wrapper = mount(App, {
+      props: {
+        api: fakeApi({
+          listRoutes: vi.fn().mockResolvedValue({
+            items: [{ platform: 'agnes', slug: 'zhipu', name: 'Zhipu', base_url: 'https://open.bigmodel.cn/v4', path_mappings: {} }],
+            pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
+          }),
+        }),
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[aria-label="Copy route URL"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[role="status"]').text()).toContain('Failed to copy Plugin URL')
+  })
+
+  it('deletes one route from its action button after confirmation', async () => {
+    const route = {
+      platform: 'agnes',
+      slug: 'zhipu',
+      name: 'Zhipu',
+      base_url: 'https://open.bigmodel.cn/v4',
+      path_mappings: {},
+    }
+    const deleteRoutes = vi.fn().mockResolvedValue(undefined)
+    const listRoutes = vi.fn().mockResolvedValue({
+      items: [route],
+      pagination: { page: 1, page_size: 20, total: 1, total_pages: 1 },
+    })
+    const wrapper = mount(App, { props: { api: fakeApi({ listRoutes, deleteRoutes }) } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="route-delete"]').trigger('click')
+    expect(wrapper.get('[role="alertdialog"]').text()).toContain('Delete selected routes?')
+    await wrapper.get('[data-testid="route-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteRoutes).toHaveBeenCalledWith([route])
   })
 })

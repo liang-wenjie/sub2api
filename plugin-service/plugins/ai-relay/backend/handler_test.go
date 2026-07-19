@@ -411,6 +411,32 @@ func TestAdminListsRegisteredPlatforms(t *testing.T) {
 	}
 }
 
+func TestAdminReadsRelayRuntime(t *testing.T) {
+	t.Setenv("PLUGIN_AI_RELAY_PUBLIC_BASE_URL", "")
+	t.Setenv("PLUGIN_SERVER_PORT", "8091")
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultAdapterRegistry(), http.DefaultClient))
+
+	req := httptest.NewRequest(http.MethodGet, "/plugins/ai-relay/api/runtime", nil)
+	req.Header.Set("X-Sub2api-User-Id", "7")
+	req.Header.Set("X-Sub2api-User-Role", "admin")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		BaseURL string `json:"base_url"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.BaseURL != "http://127.0.0.1:8091" {
+		t.Fatalf("base_url = %q", response.BaseURL)
+	}
+}
+
 func TestAdminCreatesOnlyRegisteredRelayPlatforms(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultAdapterRegistry(), http.DefaultClient))

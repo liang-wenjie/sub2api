@@ -54,6 +54,7 @@ func RegisterRoutes(mux *http.ServeMux, auth *hostprincipal.Middleware, handler 
 	}
 	mux.HandleFunc("GET /plugins/ai-relay/api/routes", auth.RequirePlugin("ai-relay", handler.ListRoutes))
 	mux.HandleFunc("GET /plugins/ai-relay/api/platforms", auth.RequirePlugin("ai-relay", handler.ListPlatforms))
+	mux.HandleFunc("GET /plugins/ai-relay/api/runtime", auth.RequirePlugin("ai-relay", handler.Runtime))
 	mux.HandleFunc("POST /plugins/ai-relay/api/routes", auth.RequirePlugin("ai-relay", handler.CreateRoute))
 	mux.HandleFunc("PUT /plugins/ai-relay/api/routes/{platform}/{slug}", auth.RequirePlugin("ai-relay", handler.UpsertRoute))
 	mux.HandleFunc("DELETE /plugins/ai-relay/api/routes/{platform}/{slug}", auth.RequirePlugin("ai-relay", handler.DeleteRoute))
@@ -118,6 +119,14 @@ func (h *RelayHandler) ListPlatforms(w http.ResponseWriter, _ *http.Request, pri
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": h.adapters.Platforms()})
+}
+
+func (h *RelayHandler) Runtime(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
+	if !isAdmin(principal) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "administrator access is required"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"base_url": resolvePublicBaseURL()})
 }
 
 func NewRelayHandler(routes RouteRepository, adapters *AdapterRegistry, client *http.Client) *RelayHandler {
