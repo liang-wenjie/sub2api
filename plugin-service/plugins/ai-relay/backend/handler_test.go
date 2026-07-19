@@ -430,6 +430,22 @@ func TestAdminCanManageAgnesRoutes(t *testing.T) {
 	}
 }
 
+func TestAdminBulkDeleteReportsMalformedItemsSeparately(t *testing.T) {
+	repository := NewMemoryRouteRepository()
+	repository.routes["agnes:one"] = RouteConfig{Platform: "agnes", Slug: "one", BaseURL: "https://example.test/v1"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultAdapterRegistry(), http.DefaultClient))
+
+	request := httptest.NewRequest(http.MethodDelete, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{"items":[{"platform":"agnes","slug":"one","name":"extra"}]}`))
+	request.Header.Set("X-Sub2api-User-Id", "7")
+	request.Header.Set("X-Sub2api-User-Role", "admin")
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"error":"invalid route configuration"`)) {
+		t.Fatalf("response = %d; body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdminListsRoutesWithPagination(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	for _, slug := range []string{"one", "two", "three"} {

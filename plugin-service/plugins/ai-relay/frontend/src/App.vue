@@ -124,7 +124,8 @@ async function save() {
 }
 async function deleteSelected() {
   try {
-    await props.api.deleteRoutes(selectedRoutes.value)
+    const routeReferences = selectedRoutes.value.map(route => ({ platform: route.platform, slug: route.slug }))
+    await props.api.deleteRoutes(routeReferences)
     deleteOpen.value = false
     await load()
   } catch (error) {

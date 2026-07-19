@@ -273,6 +273,37 @@ describe('AI Relay plugin application', () => {
     await wrapper.get('[data-testid="route-delete-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(deleteRoutes).toHaveBeenCalledWith([route])
+    expect(deleteRoutes).toHaveBeenCalledWith([{ platform: 'agnes', slug: 'zhipu' }])
+  })
+
+  it('deletes all checked routes from the bulk action after confirmation', async () => {
+    const routes = [
+      { platform: 'agnes', slug: 'one', name: 'One', base_url: 'https://example.test/v1', path_mappings: {} },
+      { platform: 'openai', slug: 'two', name: 'Two', base_url: 'https://example.test/v1', path_mappings: {} },
+    ]
+    const deleteRoutes = vi.fn().mockResolvedValue(undefined)
+    const wrapper = mount(App, {
+      props: {
+        api: fakeApi({
+          listRoutes: vi.fn().mockResolvedValue({
+            items: routes,
+            pagination: { page: 1, page_size: 20, total: 2, total_pages: 1 },
+          }),
+          deleteRoutes,
+        }),
+      },
+    })
+    await flushPromises()
+
+    for (const checkbox of wrapper.findAll('tbody input[type="checkbox"]')) await checkbox.setValue(true)
+    expect(wrapper.get('[data-testid="route-delete-selected"]').text()).toBe('Delete selected')
+    await wrapper.get('[data-testid="route-delete-selected"]').trigger('click')
+    await wrapper.get('[data-testid="route-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteRoutes).toHaveBeenCalledWith([
+      { platform: 'agnes', slug: 'one' },
+      { platform: 'openai', slug: 'two' },
+    ])
   })
 })

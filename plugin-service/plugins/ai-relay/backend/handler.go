@@ -370,7 +370,11 @@ func (h *RelayHandler) DeleteRoutes(w http.ResponseWriter, r *http.Request, prin
 	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || len(input.Items) == 0 {
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid route configuration"})
+		return
+	}
+	if len(input.Items) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one relay route is required"})
 		return
 	}
