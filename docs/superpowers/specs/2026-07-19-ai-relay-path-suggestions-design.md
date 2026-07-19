@@ -16,7 +16,7 @@ Keep Source path as a normal editable text input and associate it with a plugin-
 - `v1/images/generations`
 - `v1/images/edits`
 
-All mapping rows share the same suggestion list. Existing canonicalization continues to remove an optional leading slash and `v1/` prefix when saving.
+All mapping rows share the same suggestion list. Mapping keys retain the user's trimmed source path, including an optional `v1/` prefix. Request matching canonicalizes both stored keys and incoming endpoint paths, so older keys without `v1/` remain compatible.
 
 ## Examples And Styling
 
