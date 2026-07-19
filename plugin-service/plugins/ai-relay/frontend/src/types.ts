@@ -9,6 +9,7 @@ export interface RelayRoute {
 export interface Platform {
   key: string
   display_name: string
+  default_base_url?: string
 }
 
 export interface RelayRuntime {

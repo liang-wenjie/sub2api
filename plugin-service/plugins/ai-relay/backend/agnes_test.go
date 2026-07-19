@@ -47,12 +47,13 @@ func TestAgnesAdapterBuildsAllOpenAICompatibleEndpoints(t *testing.T) {
 
 func TestDefaultAdapterRegistryListsRegisteredPlatforms(t *testing.T) {
 	platforms := NewDefaultAdapterRegistry().Platforms()
-	if len(platforms) != 2 {
-		t.Fatalf("platform count = %d, want 2", len(platforms))
+	if len(platforms) != 3 {
+		t.Fatalf("platform count = %d, want 3", len(platforms))
 	}
 	want := []PlatformDescriptor{
-		{Key: "agnes", DisplayName: "Agnes", Operation: "images/generations", Protocol: "agnes-image"},
-		{Key: "openai", DisplayName: "OpenAI", Protocol: "transparent"},
+		{Key: "agnes", DisplayName: "Agnes", Operation: "images/generations", Protocol: "agnes-image", DefaultBaseURL: "https://apihub.agnes-ai.com/v1"},
+		{Key: "openai", DisplayName: "OpenAI", Protocol: "transparent", DefaultBaseURL: "https://api.openai.com/v1"},
+		{Key: "opencode", DisplayName: "OpenCode", Protocol: "opencode", DefaultBaseURL: "https://opencode.ai/zen"},
 	}
 	for index, platform := range platforms {
 		if platform != want[index] {

@@ -7,7 +7,7 @@ func TestOpenAIAdapterIsTransparent(t *testing.T) {
 	if got := adapter.Platform(); got != "openai" {
 		t.Fatalf("Platform() = %q", got)
 	}
-	if got := adapter.Descriptor(); got != (PlatformDescriptor{Key: "openai", DisplayName: "OpenAI", Protocol: "transparent"}) {
+	if got := adapter.Descriptor(); got != (PlatformDescriptor{Key: "openai", DisplayName: "OpenAI", Protocol: "transparent", DefaultBaseURL: "https://api.openai.com/v1"}) {
 		t.Fatalf("Descriptor() = %#v", got)
 	}
 }

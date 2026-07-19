@@ -44,6 +44,7 @@ const selectedRoutes = computed(() => routes.value.filter(route => selected.valu
 const allSelected = computed(() => routes.value.length > 0 && routes.value.every(route => selected.value.has(routeKey(route))))
 function routeKey(route: Pick<RelayRoute, 'platform' | 'slug'>) { return `${route.platform}:${route.slug}` }
 function relayURL(route: RelayRoute) { return `${runtimeBaseURL.value}/plugins/ai-relay/${route.platform}/${route.slug}` }
+function defaultBaseURL(platformKey: string) { return platforms.value.find(item => item.key === platformKey)?.default_base_url || '' }
 function setError(error: unknown) {
   const status = typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0
   unauthorized.value = status === 401 || status === 403
@@ -83,9 +84,13 @@ function toggleSelected(route: RelayRoute) {
 function openCreate() {
   editing.value = null
   formError.value = ''
-  Object.assign(form, { name: '', platform: platforms.value[0]?.key || 'agnes', slug: String(Date.now()), base_url: 'https://apihub.agnes-ai.com/v1' })
+  const platformKey = platforms.value[0]?.key || 'agnes'
+  Object.assign(form, { name: '', platform: platformKey, slug: String(Date.now()), base_url: defaultBaseURL(platformKey) || 'https://apihub.agnes-ai.com/v1' })
   mappingRows.value = []
   dialogOpen.value = true
+}
+function updateFormPlatform() {
+  if (!editing.value) form.base_url = defaultBaseURL(form.platform) || form.base_url
 }
 function openEdit(route: RelayRoute) {
   editing.value = route
@@ -199,7 +204,7 @@ defineExpose({ canonicalPath })
       <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="route-dialog-title">
         <div class="dialog-heading"><h2 id="route-dialog-title">{{ editing ? 'Edit route' : 'Add route' }}</h2><button type="button" class="icon-button" aria-label="Close dialog" @click="dialogOpen = false">×</button></div>
         <form @submit.prevent="save">
-          <div class="form-grid"><label>Name<input v-model.trim="form.name" required maxlength="80" /></label><label>Platform<select v-model="form.platform" :disabled="!!editing" required><option v-for="item in platforms" :key="item.key" :value="item.key">{{ item.display_name }}</option></select></label><label>Slug<input v-model.trim="form.slug" required pattern="[a-z0-9][a-z0-9_-]{0,63}" /></label><label>Target Base URL<input v-model.trim="form.base_url" type="url" required /></label></div>
+          <div class="form-grid"><label>Name<input v-model.trim="form.name" required maxlength="80" /></label><label>Platform<select v-model="form.platform" :disabled="!!editing" required @change="updateFormPlatform"><option v-for="item in platforms" :key="item.key" :value="item.key">{{ item.display_name }}</option></select></label><label>Slug<input v-model.trim="form.slug" required pattern="[a-z0-9][a-z0-9_-]{0,63}" /></label><label>Target Base URL<input v-model.trim="form.base_url" type="url" required /></label></div>
           <div class="mapping-editor"><div class="mapping-heading"><div><h3>Path mappings</h3><p>Map request paths relative to the Target Base URL.</p></div><button type="button" class="secondary-button" data-testid="path-mapping-add" @click="addMapping">＋ Add mapping</button></div><datalist id="openai-source-paths"><option v-for="path in openAISourcePathSuggestions" :key="path" :value="path" /></datalist><div v-for="(mapping, index) in mappingRows" :key="mapping.id" class="mapping-row"><label :for="`source-${mapping.id}`">Source path<input :id="`source-${mapping.id}`" v-model="mapping.source" list="openai-source-paths" data-testid="path-mapping-source" placeholder="v1/chat/completions" /></label><span class="mapping-arrow" aria-hidden="true">→</span><label :for="`target-${mapping.id}`">Target path<input :id="`target-${mapping.id}`" v-model="mapping.target" data-testid="path-mapping-target" placeholder="chat/completions" /></label><button type="button" class="icon-button" aria-label="Remove path mapping" data-testid="path-mapping-remove" @click="removeMapping(index)">×</button></div></div>
           <p v-if="formError" class="relay-alert" role="alert">{{ formError }}</p>
           <div class="dialog-actions"><button type="button" class="secondary-button" @click="dialogOpen = false">Cancel</button><button type="submit" class="primary-button" data-testid="route-save">Save route</button></div>

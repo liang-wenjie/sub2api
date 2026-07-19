@@ -308,6 +308,50 @@ func TestOpenAIWildcardTransparentProxyAppliesMappings(t *testing.T) {
 	}
 }
 
+func TestOpenCodeTransparentProxyConvertsNativeChatRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zen/v1/chat/completions" || r.URL.RawQuery != "trace=opencode" {
+			t.Fatalf("upstream URL = %s", r.URL.String())
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer opencode-key" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(readRequestBody(t, r)), &payload); err != nil {
+			t.Fatalf("body is invalid JSON: %v", err)
+		}
+		if payload["model"] != "gpt-5" {
+			t.Fatalf("model = %#v", payload["model"])
+		}
+		messages, ok := payload["messages"].([]any)
+		if !ok || len(messages) != 1 || messages[0].(map[string]any)["content"] != "Hello\nworld" {
+			t.Fatalf("messages = %#v", payload["messages"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("data: converted\n\n"))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{
+		Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen",
+	}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultAdapterRegistry(), upstream.Client()))
+
+	body := `{"model":{"providerID":"openai","modelID":"gpt-5"},"parts":[{"text":"Hello"},{"content":"world"}],"stream":true}`
+	request := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/chat/completions?trace=opencode", bytes.NewBufferString(body))
+	request.Header.Set("Authorization", "Bearer opencode-key")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted || response.Body.String() != "data: converted\n\n" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+}
+
 func TestRelayRejectsMalformedAccountProxyContext(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	repository.routes["agnes:team-a"] = RouteConfig{
@@ -501,7 +545,7 @@ func TestAdminCreatesOnlyRegisteredRelayPlatforms(t *testing.T) {
 		t.Fatalf("create = %d; body=%s", createRec.Code, createRec.Body.String())
 	}
 
-	unsupported := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{"platform":"opencode","slug":"primary","name":"OpenCode","base_url":"https://example.test/v1"}`))
+	unsupported := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{"platform":"anthropic","slug":"primary","name":"Anthropic","base_url":"https://example.test/v1"}`))
 	unsupported.Header.Set("X-Sub2api-User-Id", "7")
 	unsupported.Header.Set("X-Sub2api-User-Role", "admin")
 	unsupportedRec := httptest.NewRecorder()

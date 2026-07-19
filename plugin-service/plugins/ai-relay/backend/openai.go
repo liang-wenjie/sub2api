@@ -15,8 +15,12 @@ func (*OpenAIAdapter) Platform() string {
 }
 
 func (*OpenAIAdapter) Descriptor() PlatformDescriptor {
-	return PlatformDescriptor{Key: "openai", DisplayName: "OpenAI", Protocol: transparentProtocol}
+	return PlatformDescriptor{Key: "openai", DisplayName: "OpenAI", Protocol: transparentProtocol, DefaultBaseURL: "https://api.openai.com/v1"}
 }
+
+func (*OpenAIAdapter) NormalizeBaseURL(baseURL string) string { return baseURL }
+
+func (*OpenAIAdapter) TransformRequestBody(_ string, body []byte) []byte { return body }
 
 func (*OpenAIAdapter) Endpoint(config RouteConfig) string {
 	return config.BaseURL

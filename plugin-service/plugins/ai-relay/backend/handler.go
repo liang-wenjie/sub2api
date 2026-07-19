@@ -50,6 +50,7 @@ func RegisterRoutes(mux *http.ServeMux, auth *hostprincipal.Middleware, handler 
 	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/responses", handler.ProxyResponses)
 	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/responses/compact", handler.ProxyResponsesCompact)
 	mux.HandleFunc("/plugins/ai-relay/openai/", handler.ProxyOpenAIPath)
+	mux.HandleFunc("/plugins/ai-relay/opencode/", handler.ProxyOpenAIPath)
 	if auth == nil {
 		return
 	}
@@ -544,16 +545,15 @@ func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *RelayHandler) ProxyOpenAIPath(w http.ResponseWriter, r *http.Request) {
-	const prefix = "/plugins/ai-relay/openai/"
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, prefix), "/"), "/")
-	if len(parts) < 3 || parts[1] != "v1" {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 || parts[0] != "plugins" || parts[1] != "ai-relay" || parts[4] != "v1" {
 		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay endpoint not found")
 		return
 	}
-	endpoint := strings.Join(parts[2:], "/")
-	r.SetPathValue("slug", parts[0])
-	r.SetPathValue("platform", "openai")
-	h.proxyOpenAIEndpointForProtocol(w, r, endpoint, transparentProtocol)
+	endpoint := strings.Join(parts[5:], "/")
+	r.SetPathValue("platform", parts[2])
+	r.SetPathValue("slug", parts[3])
+	h.proxyOpenAIEndpointForProtocol(w, r, endpoint, "")
 }
 
 func (h *RelayHandler) proxyOpenAIEndpointForProtocol(w http.ResponseWriter, r *http.Request, endpoint, requiredProtocol string) {
@@ -580,6 +580,9 @@ func (h *RelayHandler) proxyOpenAIEndpointForProtocol(w http.ResponseWriter, r *
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "relay platform does not support transparent forwarding")
 		return
 	}
+	if transparentAdapter, ok := adapter.(TransparentAdapter); ok {
+		config.BaseURL = transparentAdapter.NormalizeBaseURL(config.BaseURL)
+	}
 	upstreamURL, err := ResolveRouteEndpointURL(config, endpoint)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to resolve upstream URL")
@@ -591,7 +594,16 @@ func (h *RelayHandler) proxyOpenAIEndpointForProtocol(w http.ResponseWriter, r *
 		return
 	}
 	parsedUpstreamURL.RawQuery = r.URL.RawQuery
-	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, parsedUpstreamURL.String(), r.Body)
+	var requestBody io.Reader = r.Body
+	if transparentAdapter, ok := adapter.(TransparentAdapter); ok && r.Body != nil && adapter.Descriptor().Protocol == "opencode" && canonicalRelayPath(endpoint) == "chat/completions" {
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body")
+			return
+		}
+		requestBody = strings.NewReader(string(transparentAdapter.TransformRequestBody(endpoint, body)))
+	}
+	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, parsedUpstreamURL.String(), requestBody)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
 		return

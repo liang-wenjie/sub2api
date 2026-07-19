@@ -33,7 +33,7 @@ func (*AgnesAdapter) Platform() string {
 }
 
 func (*AgnesAdapter) Descriptor() PlatformDescriptor {
-	return PlatformDescriptor{Key: "agnes", DisplayName: "Agnes", Operation: "images/generations", Protocol: "agnes-image"}
+	return PlatformDescriptor{Key: "agnes", DisplayName: "Agnes", Operation: "images/generations", Protocol: "agnes-image", DefaultBaseURL: defaultAgnesImageBaseURL}
 }
 
 func (*AgnesAdapter) Endpoint(config RouteConfig) string {

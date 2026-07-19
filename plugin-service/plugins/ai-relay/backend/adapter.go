@@ -6,10 +6,17 @@ import (
 )
 
 type PlatformDescriptor struct {
-	Key         string `json:"key"`
-	DisplayName string `json:"display_name"`
-	Operation   string `json:"operation"`
-	Protocol    string `json:"protocol"`
+	Key            string `json:"key"`
+	DisplayName    string `json:"display_name"`
+	Operation      string `json:"operation"`
+	Protocol       string `json:"protocol"`
+	DefaultBaseURL string `json:"default_base_url,omitempty"`
+}
+
+type TransparentAdapter interface {
+	ImageAdapter
+	NormalizeBaseURL(string) string
+	TransformRequestBody(string, []byte) []byte
 }
 
 type OpenAIImageRequest struct {
@@ -69,6 +76,7 @@ func NewDefaultAdapterRegistry() *AdapterRegistry {
 	registry := &AdapterRegistry{adapters: make(map[string]ImageAdapter)}
 	registry.Register(NewAgnesAdapter())
 	registry.Register(NewOpenAIAdapter())
+	registry.Register(NewOpenCodeAdapter())
 	return registry
 }
 
