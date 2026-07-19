@@ -84,6 +84,7 @@ func TestSQLRouteRepositoryUpsertsConfigurationWithoutCredential(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS plugin_ai_relay_routes")).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes ADD COLUMN IF NOT EXISTS path_mappings JSONB NOT NULL DEFAULT '{}'::jsonb")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes DROP COLUMN IF EXISTS default_model")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes DROP COLUMN IF EXISTS model_map")).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("ALTER TABLE plugin_ai_relay_routes DROP COLUMN IF EXISTS quality_map")).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -93,13 +94,14 @@ func TestSQLRouteRepositoryUpsertsConfigurationWithoutCredential(t *testing.T) {
 		t.Fatalf("EnsureRouteSchema() error = %v", err)
 	}
 	mock.ExpectQuery("INSERT INTO plugin_ai_relay_routes").
-		WithArgs("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1").
-		WillReturnRows(sqlmock.NewRows([]string{"platform", "slug", "name", "base_url"}).
-			AddRow("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1"))
+		WithArgs("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1", `{"responses/compact":"api/paas/v4/chat/completions"}`).
+		WillReturnRows(sqlmock.NewRows([]string{"platform", "slug", "name", "base_url", "path_mappings"}).
+			AddRow("agnes", "team-a", "team-a", "https://apihub.agnes-ai.com/v1", []byte(`{"responses/compact":"api/paas/v4/chat/completions"}`)))
 
 	repository := NewSQLRouteRepository(db)
 	_, err = repository.Upsert(context.Background(), RouteConfig{
 		Platform: "agnes", Slug: "team-a", BaseURL: "https://apihub.agnes-ai.com/v1",
+		PathMappings: map[string]string{"/v1/responses/compact": "/api/paas/v4/chat/completions"},
 	})
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)

@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -59,6 +60,9 @@ func EnsureRouteSchema(ctx context.Context, db *sql.DB) error {
 		PRIMARY KEY (platform, slug)
 	)`)
 	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE plugin_ai_relay_routes ADD COLUMN IF NOT EXISTS path_mappings JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
 		return err
 	}
 	for _, column := range []string{"default_model", "model_map", "quality_map", "max_n", "enabled"} {
@@ -118,18 +122,24 @@ func (r *SQLRouteRepository) Upsert(ctx context.Context, config RouteConfig) (Ro
 	if err != nil {
 		return RouteConfig{}, err
 	}
+	pathMappings, err := json.Marshal(normalized.PathMappings)
+	if err != nil {
+		return RouteConfig{}, err
+	}
 	row := r.db.QueryRowContext(ctx, `INSERT INTO plugin_ai_relay_routes (
-		platform, slug, name, base_url
-	) VALUES ($1, $2, $3, $4)
+		platform, slug, name, base_url, path_mappings
+	) VALUES ($1, $2, $3, $4, $5::jsonb)
 	ON CONFLICT (platform, slug) DO UPDATE SET
 		name = EXCLUDED.name,
 		base_url = EXCLUDED.base_url,
+		path_mappings = EXCLUDED.path_mappings,
 		updated_at = NOW()
-	RETURNING platform, slug, name, base_url`,
+	RETURNING platform, slug, name, base_url, path_mappings`,
 		normalized.Platform,
 		normalized.Slug,
 		normalized.Name,
 		normalized.BaseURL,
+		string(pathMappings),
 	)
 	return scanRouteConfig(row)
 }
@@ -182,7 +192,7 @@ func (r *SQLRouteRepository) DeleteMany(ctx context.Context, routes []RouteRefer
 	return tx.Commit()
 }
 
-const routeSelectSQL = `SELECT platform, slug, name, base_url FROM plugin_ai_relay_routes`
+const routeSelectSQL = `SELECT platform, slug, name, base_url, path_mappings FROM plugin_ai_relay_routes`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -190,8 +200,16 @@ type rowScanner interface {
 
 func scanRouteConfig(row rowScanner) (RouteConfig, error) {
 	var config RouteConfig
-	if err := row.Scan(&config.Platform, &config.Slug, &config.Name, &config.BaseURL); err != nil {
+	var pathMappings []byte
+	if err := row.Scan(&config.Platform, &config.Slug, &config.Name, &config.BaseURL, &pathMappings); err != nil {
 		return RouteConfig{}, err
 	}
+	config.PathMappings = map[string]string{}
+	if len(pathMappings) > 0 {
+		if err := json.Unmarshal(pathMappings, &config.PathMappings); err != nil {
+			return RouteConfig{}, err
+		}
+	}
+	config.PathMappings = copyPathMappings(config.PathMappings)
 	return config, nil
 }
