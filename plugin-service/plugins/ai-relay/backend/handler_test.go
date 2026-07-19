@@ -153,6 +153,110 @@ func TestV1ModelsAndChatProxyAccountBearerKey(t *testing.T) {
 	}
 }
 
+func TestResponsesCompactPathMappingTransparentlyProxiesRequestAndResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/paas/v4/chat/completions" || r.URL.RawQuery != "trace=compact" {
+			t.Fatalf("upstream URL = %s", r.URL.String())
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer account-key" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("Accept"); got != "text/event-stream" {
+			t.Fatalf("Accept = %q", got)
+		}
+		if got := r.Header.Get("X-Relay-Test"); got != "kept" {
+			t.Fatalf("X-Relay-Test = %q", got)
+		}
+		if got := r.Header.Get(ProxyIDHeader); got != "" {
+			t.Fatalf("internal proxy header leaked upstream: %q", got)
+		}
+		if got := readRequestBody(t, r); got != `{"model":"glm-4.5","input":"compact me"}` {
+			t.Fatalf("body = %s", got)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Upstream-Test", "kept")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("data: first\n\n"))
+		_, _ = w.Write([]byte("data: second\n\n"))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["agnes:zhipu"] = RouteConfig{
+		Platform: "agnes", Slug: "zhipu", BaseURL: upstream.URL + "/v1",
+		PathMappings: map[string]string{"responses/compact": "api/paas/v4/chat/completions"},
+	}
+	provider := &recordingRelayClientProvider{client: upstream.Client()}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider))
+
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/zhipu/v1/responses/compact?trace=compact", bytes.NewBufferString(`{"model":"glm-4.5","input":"compact me"}`))
+	req.Header.Set("Authorization", "Bearer account-key")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("X-Relay-Test", "kept")
+	req.Header.Set(ProxyIDHeader, "42")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Upstream-Test"); got != "kept" {
+		t.Fatalf("X-Upstream-Test = %q", got)
+	}
+	if got := rec.Body.String(); got != "data: first\n\ndata: second\n\n" {
+		t.Fatalf("response body = %q", got)
+	}
+	if len(provider.proxyIDs) != 1 || provider.proxyIDs[0] != "42" {
+		t.Fatalf("provider proxy IDs = %#v", provider.proxyIDs)
+	}
+}
+
+func TestPathMappingsApplyToExistingRelayEndpoints(t *testing.T) {
+	requestedPaths := make(chan string, 3)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths <- r.URL.Path
+		if r.URL.Path == "/mapped/images" {
+			_, _ = w.Write([]byte(`{"created":1,"data":[{"url":"https://cdn.example/image.png"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["agnes:all"] = RouteConfig{
+		Platform: "agnes", Slug: "all", BaseURL: upstream.URL + "/v1",
+		PathMappings: map[string]string{
+			"models":             "mapped/models",
+			"chat/completions":   "mapped/chat",
+			"images/generations": "mapped/images",
+		},
+	}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), &recordingRelayClientProvider{client: upstream.Client()}))
+
+	requests := []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/plugins/ai-relay/agnes/all/v1/models", nil),
+		httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/all/v1/chat/completions", bytes.NewBufferString(`{}`)),
+		httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/all", bytes.NewBufferString(`{"model":"gpt-image-1","prompt":"poster"}`)),
+	}
+	for _, req := range requests {
+		req.Header.Set("Authorization", "Bearer account-key")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d; body=%s", req.URL.Path, rec.Code, rec.Body.String())
+		}
+	}
+	for _, want := range []string{"/mapped/models", "/mapped/chat", "/mapped/images"} {
+		if got := <-requestedPaths; got != want {
+			t.Fatalf("upstream path = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestRelayRejectsMalformedAccountProxyContext(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	repository.routes["agnes:team-a"] = RouteConfig{
@@ -327,6 +431,35 @@ func TestAdminCreatesOnlyRegisteredRelayPlatforms(t *testing.T) {
 	mux.ServeHTTP(unsupportedRec, unsupported)
 	if unsupportedRec.Code != http.StatusBadRequest {
 		t.Fatalf("unsupported status = %d; body=%s", unsupportedRec.Code, unsupportedRec.Body.String())
+	}
+}
+
+func TestAdminCreatesRouteWithPathMappings(t *testing.T) {
+	repository := NewMemoryRouteRepository()
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultAdapterRegistry(), http.DefaultClient))
+
+	create := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{
+		"platform":"agnes",
+		"slug":"zhipu",
+		"name":"Zhipu",
+		"base_url":"https://open.bigmodel.cn/v1",
+		"path_mappings":{"/v1/responses/compact":"/api/paas/v4/chat/completions"}
+	}`))
+	create.Header.Set("X-Sub2api-User-Id", "7")
+	create.Header.Set("X-Sub2api-User-Role", "admin")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	stored, found, err := repository.Get(create.Context(), "agnes", "zhipu")
+	if err != nil || !found {
+		t.Fatalf("Get() = %#v, %v, %v", stored, found, err)
+	}
+	if got := stored.PathMappings["responses/compact"]; got != "api/paas/v4/chat/completions" {
+		t.Fatalf("stored mapping = %q", got)
 	}
 }
 

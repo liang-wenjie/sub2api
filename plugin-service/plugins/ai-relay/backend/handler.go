@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -46,6 +47,8 @@ func RegisterRoutes(mux *http.ServeMux, auth *hostprincipal.Middleware, handler 
 	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/images/edits", handler.Edit)
 	mux.HandleFunc("GET /plugins/ai-relay/{platform}/{slug}/v1/models", handler.ProxyModels)
 	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/chat/completions", handler.ProxyChatCompletions)
+	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/responses", handler.ProxyResponses)
+	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/responses/compact", handler.ProxyResponsesCompact)
 	if auth == nil {
 		return
 	}
@@ -199,10 +202,11 @@ func (h *RelayHandler) Relay(w http.ResponseWriter, r *http.Request) {
 }
 
 type routeConfigInput struct {
-	Platform string `json:"platform"`
-	Slug     string `json:"slug"`
-	Name     string `json:"name"`
-	BaseURL  string `json:"base_url"`
+	Platform     string            `json:"platform"`
+	Slug         string            `json:"slug"`
+	Name         string            `json:"name"`
+	BaseURL      string            `json:"base_url"`
+	PathMappings map[string]string `json:"path_mappings"`
 }
 
 func (h *RelayHandler) CreateRoute(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
@@ -315,7 +319,10 @@ func decodeRouteConfigInput(body io.Reader) (routeConfigInput, error) {
 }
 
 func routeConfigFromInput(platform, slug string, input routeConfigInput) RouteConfig {
-	return RouteConfig{Platform: platform, Slug: slug, Name: input.Name, BaseURL: input.BaseURL}
+	return RouteConfig{
+		Platform: platform, Slug: slug, Name: input.Name, BaseURL: input.BaseURL,
+		PathMappings: input.PathMappings,
+	}
 }
 
 func (h *RelayHandler) DeleteRoute(w http.ResponseWriter, r *http.Request, principal model.CurrentPrincipal) {
@@ -380,7 +387,11 @@ func (h *RelayHandler) generatePayload(ctx context.Context, client *http.Client,
 	}
 	result := OpenAIImageResponse{Data: make([]OpenAIImageData, 0, count)}
 	for index := 0; index < count; index++ {
-		upstreamRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, adapter.Endpoint(config), strings.NewReader(string(payload)))
+		upstreamURL, err := ResolveRouteEndpointURL(config, adapter.Descriptor().Operation)
+		if err != nil {
+			return OpenAIImageResponse{}, fmt.Errorf("resolve upstream URL: %w", err)
+		}
+		upstreamRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, strings.NewReader(string(payload)))
 		if err != nil {
 			return OpenAIImageResponse{}, fmt.Errorf("build upstream request: %w", err)
 		}
@@ -484,18 +495,22 @@ func relayRouteParts(path string) (string, string, bool) {
 }
 
 func (h *RelayHandler) ProxyModels(w http.ResponseWriter, r *http.Request) {
-	h.proxyOpenAIEndpoint(w, r, func(adapter ImageAdapter, config RouteConfig) string {
-		return adapter.ModelsEndpoint(config)
-	})
+	h.proxyOpenAIEndpoint(w, r, "models")
 }
 
 func (h *RelayHandler) ProxyChatCompletions(w http.ResponseWriter, r *http.Request) {
-	h.proxyOpenAIEndpoint(w, r, func(adapter ImageAdapter, config RouteConfig) string {
-		return adapter.ChatCompletionsEndpoint(config)
-	})
+	h.proxyOpenAIEndpoint(w, r, "chat/completions")
 }
 
-func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Request, resolveEndpoint func(ImageAdapter, RouteConfig) string) {
+func (h *RelayHandler) ProxyResponses(w http.ResponseWriter, r *http.Request) {
+	h.proxyOpenAIEndpoint(w, r, "responses")
+}
+
+func (h *RelayHandler) ProxyResponsesCompact(w http.ResponseWriter, r *http.Request) {
+	h.proxyOpenAIEndpoint(w, r, "responses/compact")
+}
+
+func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Request, endpoint string) {
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") || strings.TrimSpace(authorization[7:]) == "" {
 		writeOpenAIError(w, http.StatusUnauthorized, "authentication_error", "Bearer authorization is required")
@@ -510,18 +525,28 @@ func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay route not found")
 		return
 	}
-	adapter, found := h.adapters.Get(config.Platform)
-	if !found {
+	if _, found := h.adapters.Get(config.Platform); !found {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported relay platform")
 		return
 	}
-	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, resolveEndpoint(adapter, config), r.Body)
+	upstreamURL, err := ResolveRouteEndpointURL(config, endpoint)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to resolve upstream URL")
+		return
+	}
+	parsedUpstreamURL, err := url.Parse(upstreamURL)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to resolve upstream URL")
+		return
+	}
+	parsedUpstreamURL.RawQuery = r.URL.RawQuery
+	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, parsedUpstreamURL.String(), r.Body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
 		return
 	}
+	copyEndToEndHeaders(upstreamRequest.Header, r.Header)
 	upstreamRequest.Header.Set("Authorization", authorization)
-	upstreamRequest.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 	client, err := h.clientForRequest(r)
 	if err != nil {
 		writeProxyClientError(w, err)
@@ -533,9 +558,27 @@ func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer response.Body.Close()
-	w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
+	copyEndToEndHeaders(w.Header(), response.Header)
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, response.Body)
+}
+
+var hopByHopHeaders = map[string]struct{}{
+	"Connection": {}, "Proxy-Connection": {}, "Keep-Alive": {}, "Transfer-Encoding": {},
+	"TE": {}, "Trailer": {}, "Upgrade": {},
+}
+
+func copyEndToEndHeaders(destination, source http.Header) {
+	for key, values := range source {
+		canonicalKey := http.CanonicalHeaderKey(key)
+		if _, excluded := hopByHopHeaders[canonicalKey]; excluded || strings.EqualFold(canonicalKey, ProxyIDHeader) {
+			continue
+		}
+		destination.Del(canonicalKey)
+		for _, value := range values {
+			destination.Add(canonicalKey, value)
+		}
+	}
 }
 
 func (h *RelayHandler) clientForRequest(r *http.Request) (*http.Client, error) {
