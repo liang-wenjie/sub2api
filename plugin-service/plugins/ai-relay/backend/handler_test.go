@@ -257,6 +257,57 @@ func TestPathMappingsApplyToExistingRelayEndpoints(t *testing.T) {
 	}
 }
 
+func TestOpenAIWildcardTransparentProxyAppliesMappings(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer openai-key" {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.URL.Path == "/v4/embeddings" {
+			if r.URL.RawQuery != "trace=1" {
+				t.Fatalf("mapped query = %q", r.URL.RawQuery)
+			}
+			if got := readRequestBody(t, r); got != `{"model":"text-embedding-3-small","input":"hello"}` {
+				t.Fatalf("mapped body = %s", got)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"mapped":true}`))
+			return
+		}
+		if r.URL.Path != "/v1/audio/transcriptions" {
+			t.Fatalf("unmapped path = %q", r.URL.Path)
+		}
+		if got := readRequestBody(t, r); got != `{"file":"audio"}` {
+			t.Fatalf("unmapped body = %s", got)
+		}
+		_, _ = w.Write([]byte(`{"unmapped":true}`))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["openai:demo"] = RouteConfig{
+		Platform: "openai", Slug: "demo", BaseURL: upstream.URL + "/v1",
+		PathMappings: map[string]string{"v1/embeddings": "v4/embeddings"},
+	}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultAdapterRegistry(), upstream.Client()))
+
+	mappedRequest := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/openai/demo/v1/embeddings?trace=1", bytes.NewBufferString(`{"model":"text-embedding-3-small","input":"hello"}`))
+	mappedRequest.Header.Set("Authorization", "Bearer openai-key")
+	mappedResponse := httptest.NewRecorder()
+	mux.ServeHTTP(mappedResponse, mappedRequest)
+	if mappedResponse.Code != http.StatusAccepted || mappedResponse.Body.String() != `{"mapped":true}` {
+		t.Fatalf("mapped response = %d %s", mappedResponse.Code, mappedResponse.Body.String())
+	}
+
+	unmappedRequest := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/openai/demo/v1/audio/transcriptions", bytes.NewBufferString(`{"file":"audio"}`))
+	unmappedRequest.Header.Set("Authorization", "Bearer openai-key")
+	unmappedResponse := httptest.NewRecorder()
+	mux.ServeHTTP(unmappedResponse, unmappedRequest)
+	if unmappedResponse.Code != http.StatusOK || unmappedResponse.Body.String() != `{"unmapped":true}` {
+		t.Fatalf("unmapped response = %d %s", unmappedResponse.Code, unmappedResponse.Body.String())
+	}
+}
+
 func TestRelayRejectsMalformedAccountProxyContext(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	repository.routes["agnes:team-a"] = RouteConfig{

@@ -42,13 +42,14 @@ func RegisterRoutes(mux *http.ServeMux, auth *hostprincipal.Middleware, handler 
 	if mux == nil || handler == nil {
 		return
 	}
-	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}", handler.Relay)
-	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/images/generations", handler.Relay)
-	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/images/edits", handler.Edit)
-	mux.HandleFunc("GET /plugins/ai-relay/{platform}/{slug}/v1/models", handler.ProxyModels)
-	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/chat/completions", handler.ProxyChatCompletions)
-	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/responses", handler.ProxyResponses)
-	mux.HandleFunc("POST /plugins/ai-relay/{platform}/{slug}/v1/responses/compact", handler.ProxyResponsesCompact)
+	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}", handler.Relay)
+	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/images/generations", handler.Relay)
+	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/images/edits", handler.Edit)
+	mux.HandleFunc("GET /plugins/ai-relay/agnes/{slug}/v1/models", handler.ProxyModels)
+	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/chat/completions", handler.ProxyChatCompletions)
+	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/responses", handler.ProxyResponses)
+	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/responses/compact", handler.ProxyResponsesCompact)
+	mux.HandleFunc("/plugins/ai-relay/openai/", handler.ProxyOpenAIPath)
 	if auth == nil {
 		return
 	}
@@ -76,7 +77,7 @@ func (h *RelayHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusUnauthorized, "authentication_error", "Bearer authorization is required")
 		return
 	}
-	config, found, err := h.routes.Get(r.Context(), r.PathValue("platform"), r.PathValue("slug"))
+	config, found, err := h.routes.Get(r.Context(), relayPlatform(r), r.PathValue("slug"))
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "failed to load relay route")
 		return
@@ -88,6 +89,10 @@ func (h *RelayHandler) Edit(w http.ResponseWriter, r *http.Request) {
 	adapter, found := h.adapters.Get(config.Platform)
 	if !found {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported relay platform")
+		return
+	}
+	if adapter.Descriptor().Protocol == transparentProtocol {
+		h.proxyOpenAIEndpointForProtocol(w, r, "images/edits", transparentProtocol)
 		return
 	}
 	request, err := decodeOpenAIImageEditRequest(r)
@@ -177,6 +182,10 @@ func (h *RelayHandler) Relay(w http.ResponseWriter, r *http.Request) {
 	adapter, found := h.adapters.Get(platform)
 	if !found {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported relay platform")
+		return
+	}
+	if adapter.Descriptor().Protocol == transparentProtocol {
+		h.proxyOpenAIEndpointForProtocol(w, r, "images/generations", transparentProtocol)
 		return
 	}
 
@@ -503,6 +512,17 @@ func relayRouteParts(path string) (string, string, bool) {
 	return parts[2], parts[3], true
 }
 
+func relayPlatform(r *http.Request) string {
+	if platform := strings.TrimSpace(r.PathValue("platform")); platform != "" {
+		return platform
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) >= 3 && parts[0] == "plugins" && parts[1] == "ai-relay" {
+		return parts[2]
+	}
+	return ""
+}
+
 func (h *RelayHandler) ProxyModels(w http.ResponseWriter, r *http.Request) {
 	h.proxyOpenAIEndpoint(w, r, "models")
 }
@@ -520,12 +540,29 @@ func (h *RelayHandler) ProxyResponsesCompact(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Request, endpoint string) {
+	h.proxyOpenAIEndpointForProtocol(w, r, endpoint, "")
+}
+
+func (h *RelayHandler) ProxyOpenAIPath(w http.ResponseWriter, r *http.Request) {
+	const prefix = "/plugins/ai-relay/openai/"
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, prefix), "/"), "/")
+	if len(parts) < 3 || parts[1] != "v1" {
+		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay endpoint not found")
+		return
+	}
+	endpoint := strings.Join(parts[2:], "/")
+	r.SetPathValue("slug", parts[0])
+	r.SetPathValue("platform", "openai")
+	h.proxyOpenAIEndpointForProtocol(w, r, endpoint, transparentProtocol)
+}
+
+func (h *RelayHandler) proxyOpenAIEndpointForProtocol(w http.ResponseWriter, r *http.Request, endpoint, requiredProtocol string) {
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") || strings.TrimSpace(authorization[7:]) == "" {
 		writeOpenAIError(w, http.StatusUnauthorized, "authentication_error", "Bearer authorization is required")
 		return
 	}
-	config, found, err := h.routes.Get(r.Context(), r.PathValue("platform"), r.PathValue("slug"))
+	config, found, err := h.routes.Get(r.Context(), relayPlatform(r), r.PathValue("slug"))
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "failed to load relay route")
 		return
@@ -534,8 +571,13 @@ func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay route not found")
 		return
 	}
-	if _, found := h.adapters.Get(config.Platform); !found {
+	adapter, found := h.adapters.Get(config.Platform)
+	if !found {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported relay platform")
+		return
+	}
+	if requiredProtocol != "" && adapter.Descriptor().Protocol != requiredProtocol {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "relay platform does not support transparent forwarding")
 		return
 	}
 	upstreamURL, err := ResolveRouteEndpointURL(config, endpoint)

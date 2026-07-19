@@ -6,7 +6,10 @@ import type { RelayApi } from './api'
 function fakeApi(overrides: Partial<RelayApi> = {}): RelayApi {
   return {
     getRuntime: vi.fn().mockResolvedValue({ base_url: 'http://127.0.0.1:8091' }),
-    listPlatforms: vi.fn().mockResolvedValue([{ key: 'agnes', display_name: 'Agnes' }]),
+    listPlatforms: vi.fn().mockResolvedValue([
+      { key: 'agnes', display_name: 'Agnes' },
+      { key: 'openai', display_name: 'OpenAI' },
+    ]),
     listRoutes: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, page_size: 20, total: 0, total_pages: 1 } }),
     createRoute: vi.fn().mockResolvedValue({}),
     updateRoute: vi.fn().mockResolvedValue({}),
@@ -16,6 +19,14 @@ function fakeApi(overrides: Partial<RelayApi> = {}): RelayApi {
 }
 
 describe('AI Relay plugin application', () => {
+  it('renders the OpenAI platform returned by the plugin service', async () => {
+    const wrapper = mount(App, { props: { api: fakeApi() } })
+    await flushPromises()
+    await wrapper.get('[data-testid="route-add"]').trigger('click')
+
+    expect(wrapper.find('select option[value="openai"]').text()).toBe('OpenAI')
+  })
+
   it('adds and removes path mapping rows in the create dialog', async () => {
     const wrapper = mount(App, { props: { api: fakeApi() } })
     await flushPromises()

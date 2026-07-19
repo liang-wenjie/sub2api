@@ -9,6 +9,7 @@ type PlatformDescriptor struct {
 	Key         string `json:"key"`
 	DisplayName string `json:"display_name"`
 	Operation   string `json:"operation"`
+	Protocol    string `json:"protocol"`
 }
 
 type OpenAIImageRequest struct {
@@ -67,6 +68,7 @@ type AdapterRegistry struct {
 func NewDefaultAdapterRegistry() *AdapterRegistry {
 	registry := &AdapterRegistry{adapters: make(map[string]ImageAdapter)}
 	registry.Register(NewAgnesAdapter())
+	registry.Register(NewOpenAIAdapter())
 	return registry
 }
 
