@@ -79,9 +79,24 @@ Create, update, get, and list operations include `path_mappings`. An omitted or 
 
 Unknown JSON fields remain rejected by the route API. Invalid path mappings return the existing `400 invalid relay route configuration` response without partially saving a route.
 
-## Administration UI
+## Frontend Ownership
 
-The AI Relay create/edit dialog adds a full-width "Path mappings" section below the base URL. It reuses the row interaction from `ai-relay-manager`:
+The AI Relay management application belongs entirely to the plugin service. The main-site frontend only exposes its existing custom-menu configuration; operators add a menu item whose URL points to `http://plugin-server:8091/plugins/ai-relay`.
+
+The plugin owns a standalone Vue/Vite application under `plugin-service/plugins/ai-relay/frontend`. Its build output is generated into `plugin-service/plugins/ai-relay/web` and served by the existing `frontendhost.RegisterHostedPlugin` integration at `/plugins/ai-relay`. The hosted frontend calls same-origin `/plugins/ai-relay/api/*` endpoints, allowing the existing frontend auth bridge to attach the current session token.
+
+The current redirect-only plugin HTML is replaced by the built application. No main-site component, router entry, style, API client, or test is added or changed for this feature. The two main-site files changed by commit `6367dd0b` are restored byte-for-byte to their pre-feature contents from `41875379^`:
+
+- `frontend/src/views/admin/AIRelayView.vue`
+- `frontend/src/views/admin/__tests__/AIRelayView.spec.ts`
+
+Final verification must show no diff for those files against `41875379^`. If implementation discovers that any other main-site change is required, work stops for explicit user approval before that change is made.
+
+## Plugin Administration UI
+
+The independent plugin application provides route search, platform filtering, pagination, selection and batch deletion, create/edit, relay URL copying, refresh, loading, empty, error, and unauthorized states. It does not import main-site source files or CSS.
+
+The route create/edit dialog includes a full-width "Path mappings" section below the base URL. It reuses the row interaction from `ai-relay-manager`:
 
 - source and target path inputs separated by an arrow;
 - add-row command;
@@ -90,7 +105,7 @@ The AI Relay create/edit dialog adds a full-width "Path mappings" section below 
 - blank rows are excluded from the payload;
 - source and target values are normalized before submission.
 
-Placeholders use concrete examples such as `responses/compact` and `api/paas/v4/chat/completions`. The table remains compact and does not add a mapping column; mappings are managed in the editor.
+Placeholders use concrete examples such as `responses/compact` and `api/paas/v4/chat/completions`. The table remains compact and does not add a mapping column; mappings are managed in the editor. Icon-only controls have accessible names, dialogs restore focus, and mapping rows stack on narrow viewports.
 
 ## Errors And Security
 
@@ -115,7 +130,9 @@ Backend tests cover:
 - account proxy selection on new endpoints;
 - rejection of absolute URL, query, fragment, empty, and duplicate-equivalent targets.
 
-Frontend tests cover loading existing mappings, adding and deleting rows, normalized create/update payloads, and empty mapping payloads.
+Plugin frontend unit tests cover API error handling, route loading and filtering, loading existing mappings, adding and deleting rows, normalized create/update payloads, empty mapping payloads, batch deletion, and unauthorized states. Plugin host tests verify that `/plugins/ai-relay` serves generated application assets rather than redirecting to `/admin/ai-relay`.
+
+The plugin frontend build, typecheck, and unit tests run from `plugin-service/plugins/ai-relay/frontend`. A final Git comparison verifies that the main-site frontend files match `41875379^` exactly.
 
 ## Out Of Scope
 
@@ -125,3 +142,4 @@ Frontend tests cover loading existing mappings, adding and deleting rows, normal
 - Cross-host or absolute-URL mapping targets.
 - Wildcard or prefix path matching.
 - Per-method mappings.
+- Main-site AI Relay page, router, menu, component, or style changes.
