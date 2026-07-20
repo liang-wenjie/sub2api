@@ -6,6 +6,68 @@ import (
 	"testing"
 )
 
+func TestResponsesRequestToChatCompletionsWrapsCustomToolInput(t *testing.T) {
+	body, context, err := responsesRequestToChatCompletionsWithContext([]byte(`{
+		"model":"deepseek-v4-flash-free",
+		"input":"update the file",
+		"tools":[{"type":"custom","name":"apply_patch","description":"Apply a patch"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !context.customTools["apply_patch"] || !context.declaredTools["apply_patch"] {
+		t.Fatalf("context = %#v", context)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	tools := payload["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if function["name"] != "apply_patch" {
+		t.Fatalf("function = %#v", function)
+	}
+	parameters := function["parameters"].(map[string]any)
+	required := parameters["required"].([]any)
+	if len(required) != 1 || required[0] != "input" {
+		t.Fatalf("parameters = %#v", parameters)
+	}
+}
+
+func TestResponsesRequestToChatCompletionsPreservesCustomToolLoop(t *testing.T) {
+	body, _, err := responsesRequestToChatCompletionsWithContext([]byte(`{
+		"model":"deepseek-v4-flash-free",
+		"input":[
+			{"type":"custom_tool_call","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch\n*** End Patch"},
+			{"type":"custom_tool_call_output","call_id":"call_1","output":"Done!"}
+		],
+		"tools":[{"type":"custom","name":"apply_patch"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	messages := payload["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	assistant := messages[0].(map[string]any)
+	toolCalls := assistant["tool_calls"].([]any)
+	function := toolCalls[0].(map[string]any)["function"].(map[string]any)
+	if function["name"] != "apply_patch" || function["arguments"] != `{"input":"*** Begin Patch\n*** End Patch"}` {
+		t.Fatalf("function = %#v", function)
+	}
+	tool := messages[1].(map[string]any)
+	if tool["role"] != "tool" || tool["tool_call_id"] != "call_1" || tool["content"] != "Done!" {
+		t.Fatalf("tool message = %#v", tool)
+	}
+}
+
 func TestResponsesRequestToChatCompletionsPreservesToolLoop(t *testing.T) {
 	converted, err := responsesRequestToChatCompletions([]byte(`{
 		"model":"deepseek-v4-flash-free",

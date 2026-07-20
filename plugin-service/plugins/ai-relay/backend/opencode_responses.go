@@ -10,14 +10,49 @@ import (
 	"time"
 )
 
+const customToolInputDescription = "The raw input for this tool, passed through verbatim."
+
+type responsesBridgeContext struct {
+	customTools   map[string]bool
+	declaredTools map[string]bool
+}
+
+func newResponsesBridgeContext() responsesBridgeContext {
+	return responsesBridgeContext{
+		customTools:   map[string]bool{},
+		declaredTools: map[string]bool{},
+	}
+}
+
+func customToolParameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"input": map[string]any{"type": "string", "description": customToolInputDescription},
+		},
+		"required": []any{"input"},
+	}
+}
+
+func wrapCustomToolInput(input string) string {
+	encoded, _ := json.Marshal(map[string]string{"input": input})
+	return string(encoded)
+}
+
 func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
+	converted, _, err := responsesRequestToChatCompletionsWithContext(body)
+	return converted, err
+}
+
+func responsesRequestToChatCompletionsWithContext(body []byte) ([]byte, responsesBridgeContext, error) {
+	context := newResponsesBridgeContext()
 	var request map[string]any
 	if err := json.Unmarshal(body, &request); err != nil {
-		return nil, fmt.Errorf("invalid Responses request: %w", err)
+		return nil, context, fmt.Errorf("invalid Responses request: %w", err)
 	}
 	messages, err := responsesInputMessages(request["input"])
 	if err != nil {
-		return nil, err
+		return nil, context, err
 	}
 	if instructions, ok := request["instructions"].(string); ok && strings.TrimSpace(instructions) != "" {
 		messages = append([]any{map[string]any{"role": "system", "content": strings.TrimSpace(instructions)}}, messages...)
@@ -43,9 +78,9 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
 	if tools, ok := request["tools"].([]any); ok {
-		converted, names, err := normalizeChatTools(tools)
+		converted, names, err := normalizeChatTools(tools, &context)
 		if err != nil {
-			return nil, err
+			return nil, context, err
 		}
 		if len(converted) > 0 {
 			payload["tools"] = converted
@@ -54,7 +89,8 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
 			}
 		}
 	}
-	return json.Marshal(payload)
+	converted, err := json.Marshal(payload)
+	return converted, context, err
 }
 
 func addOpenCodeMessageIDs(messages []any) {
@@ -119,7 +155,7 @@ func chatToolChoiceForNames(value any, names map[string]bool) any {
 	return choice
 }
 
-func normalizeChatTools(tools []any) ([]any, map[string]bool, error) {
+func normalizeChatTools(tools []any, context *responsesBridgeContext) ([]any, map[string]bool, error) {
 	converted := make([]any, 0, len(tools))
 	names := map[string]bool{}
 	for _, raw := range tools {
@@ -128,6 +164,23 @@ func normalizeChatTools(tools []any) ([]any, map[string]bool, error) {
 			continue
 		}
 		toolType := stringValue(tool["type"])
+		if toolType == "custom" {
+			name := strings.TrimSpace(stringValue(tool["name"]))
+			if !isValidChatFunctionName(name) || names[name] {
+				continue
+			}
+			names[name] = true
+			if context != nil {
+				context.customTools[name] = true
+				context.declaredTools[name] = true
+			}
+			clean := map[string]any{"name": name, "parameters": customToolParameters()}
+			if description, exists := tool["description"]; exists {
+				clean["description"] = description
+			}
+			converted = append(converted, map[string]any{"type": "function", "function": clean})
+			continue
+		}
 		function := tool
 		if toolType == "function" {
 			if nested, ok := tool["function"].(map[string]any); ok {
@@ -150,6 +203,9 @@ func normalizeChatTools(tools []any) ([]any, map[string]bool, error) {
 			continue
 		}
 		names[name] = true
+		if context != nil {
+			context.declaredTools[name] = true
+		}
 		clean := map[string]any{"name": name}
 		for _, key := range []string{"description", "parameters", "strict"} {
 			if value, exists := function[key]; exists {
@@ -267,7 +323,7 @@ func responsesInputMessages(input any) ([]any, error) {
 		}
 		itemType, _ := item["type"].(string)
 		switch itemType {
-		case "function_call_output":
+		case "function_call_output", "custom_tool_call_output":
 			callID, _ := item["call_id"].(string)
 			if callID == "" {
 				return nil, fmt.Errorf("function_call_output call_id is required")
@@ -278,7 +334,7 @@ func responsesInputMessages(input any) ([]any, error) {
 			seenOutputs[callID] = true
 			pendingOutputs[callID] = map[string]any{"role": "tool", "tool_call_id": callID, "content": responsesText(item["output"])}
 			pendingOutputOrder = append(pendingOutputOrder, callID)
-		case "function_call":
+		case "function_call", "custom_tool_call":
 			callID, _ := item["call_id"].(string)
 			name, _ := item["name"].(string)
 			if callID == "" || name == "" {
@@ -291,7 +347,11 @@ func responsesInputMessages(input any) ([]any, error) {
 			if !isValidChatFunctionName(name) {
 				continue
 			}
-			pendingCalls[callID] = map[string]any{"id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": normalizeChatToolArguments(item["arguments"])}}
+			arguments := normalizeChatToolArguments(item["arguments"])
+			if itemType == "custom_tool_call" {
+				arguments = wrapCustomToolInput(stringValue(item["input"]))
+			}
+			pendingCalls[callID] = map[string]any{"id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": arguments}}
 			pendingCallOrder = append(pendingCallOrder, callID)
 		case "reasoning":
 			pendingReasoning += responsesReasoningText(item)
