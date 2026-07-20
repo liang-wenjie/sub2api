@@ -2,13 +2,15 @@ package backend
 
 import (
 	"encoding/json"
+	"log"
+	"net/http"
 	"net/url"
 	"strings"
 )
 
 const defaultOpenCodeBaseURL = "https://opencode.ai/zen"
 
-type OpenCodeAdapter struct{ OpenAIAdapter }
+type OpenCodeAdapter struct{}
 
 func NewOpenCodeAdapter() *OpenCodeAdapter { return &OpenCodeAdapter{} }
 
@@ -102,4 +104,33 @@ func opencodePartsText(value any) string {
 		}
 	}
 	return strings.Join(texts, "\n")
+}
+
+func logOpenCodeResponsesBridge(stage string, chatBody []byte, statusCode int, responseBody []byte) {
+	var payload map[string]any
+	if json.Unmarshal(chatBody, &payload) != nil {
+		return
+	}
+	roles := make([]string, 0)
+	if messages, ok := payload["messages"].([]any); ok {
+		for _, raw := range messages {
+			if message, ok := raw.(map[string]any); ok {
+				if role, ok := message["role"].(string); ok {
+					roles = append(roles, role)
+				}
+			}
+		}
+	}
+	toolCount := 0
+	if tools, ok := payload["tools"].([]any); ok {
+		toolCount = len(tools)
+	}
+	responsePreview := ""
+	if statusCode >= http.StatusBadRequest {
+		responsePreview = string(responseBody)
+		if len(responsePreview) > 1000 {
+			responsePreview = responsePreview[:1000]
+		}
+	}
+	log.Printf("opencode_responses_bridge stage=%s status=%d model=%q stream=%v roles=%q tools=%d tool_choice_type=%T max_tokens=%v response=%q", stage, statusCode, payload["model"], payload["stream"], roles, toolCount, payload["tool_choice"], payload["max_tokens"], responsePreview)
 }

@@ -1,20 +1,17 @@
 package backend
 
-import "testing"
+import (
+	"bytes"
+	"compress/gzip"
+	"net/http"
+	"testing"
+)
 
 func TestAgnesAdapterMapsOpenAIImageRequest(t *testing.T) {
-	adapter := NewAgnesAdapter()
-	outgoing, err := adapter.BuildRequest(RouteConfig{
+	outgoing, err := buildAgnesImageRequest(RouteConfig{
 		Platform: "agnes",
 		BaseURL:  "https://apihub.agnes-ai.com/v1",
-	}, OpenAIImageRequest{
-		Model:          "agnes-image-2.1-flash",
-		Prompt:         "golden hour city",
-		Size:           "1536x1024",
-		ResponseFormat: "b64_json",
-		Quality:        "high",
-		N:              1,
-	})
+	}, "agnes-image-2.1-flash", "golden hour city", "1536x1024", "b64_json", nil)
 	if err != nil {
 		t.Fatalf("BuildRequest() error = %v", err)
 	}
@@ -33,20 +30,28 @@ func TestAgnesAdapterNormalizesResponse(t *testing.T) {
 	}
 }
 
-func TestAgnesAdapterBuildsAllOpenAICompatibleEndpoints(t *testing.T) {
-	adapter := NewAgnesAdapter()
-	config := RouteConfig{BaseURL: "https://apihub.agnes-ai.com/v1"}
-
-	if got := adapter.ModelsEndpoint(config); got != "https://apihub.agnes-ai.com/v1/models" {
-		t.Fatalf("ModelsEndpoint() = %q", got)
+func TestAgnesAdapterDecodesGzipResponse(t *testing.T) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(`{"created":1,"data":[{"url":"https://cdn.example/image.png"}]}`)); err != nil {
+		t.Fatal(err)
 	}
-	if got := adapter.ChatCompletionsEndpoint(config); got != "https://apihub.agnes-ai.com/v1/chat/completions" {
-		t.Fatalf("ChatCompletionsEndpoint() = %q", got)
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := decodeAgnesResponseBody(http.Header{"Content-Encoding": []string{"gzip"}}, compressed.Bytes())
+	if err != nil {
+		t.Fatalf("decodeAgnesResponseBody() error = %v", err)
+	}
+	response, err := NewAgnesAdapter().ParseResponse(body)
+	if err != nil || response.Data[0].URL != "https://cdn.example/image.png" {
+		t.Fatalf("response = %#v, error = %v", response, err)
 	}
 }
 
-func TestDefaultAdapterRegistryListsRegisteredPlatforms(t *testing.T) {
-	platforms := NewDefaultAdapterRegistry().Platforms()
+func TestDefaultPlatformRegistryListsRegisteredPlatforms(t *testing.T) {
+	platforms := NewDefaultPlatformRegistry().Platforms()
 	if len(platforms) != 3 {
 		t.Fatalf("platform count = %d, want 3", len(platforms))
 	}

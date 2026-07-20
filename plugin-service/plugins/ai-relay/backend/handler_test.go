@@ -17,6 +17,57 @@ type recordingRelayClientProvider struct {
 	proxyIDs []string
 }
 
+type recordingPlatformHandler struct {
+	request PlatformRequest
+}
+
+func (*recordingPlatformHandler) Platform() string { return "test-platform" }
+
+func (*recordingPlatformHandler) Descriptor() PlatformDescriptor {
+	return PlatformDescriptor{Key: "test-platform", DisplayName: "Test Platform"}
+}
+
+func (handler *recordingPlatformHandler) Handle(_ context.Context, request PlatformRequest) (PlatformResponse, error) {
+	handler.request = request
+	return PlatformResponse{
+		StatusCode: http.StatusCreated,
+		Headers:    http.Header{"X-Platform": []string{"handled"}},
+		Body:       []byte(`{"ok":true}`),
+	}, nil
+}
+
+func TestRelayDispatchesRawRequestToPlatformHandler(t *testing.T) {
+	repository := NewMemoryRouteRepository()
+	repository.routes["test-platform:primary"] = RouteConfig{Platform: "test-platform", Slug: "primary", BaseURL: "https://example.test/v1"}
+	platforms := NewPlatformRegistry()
+	platform := &recordingPlatformHandler{}
+	platforms.Register(platform)
+	handler := &RelayHandler{
+		routes:    repository,
+		platforms: platforms,
+		clients:   &recordingRelayClientProvider{client: http.DefaultClient},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/test-platform/primary/v1/chat/completions?trace=1", bytes.NewBufferString(`{"model":"test","input":"raw"}`))
+	req.Header.Set("Authorization", "Bearer account-key")
+	req.Header.Set("X-Relay-Test", "preserved")
+	rec := httptest.NewRecorder()
+
+	handler.ProxyOpenAIPath(rec, req)
+
+	if rec.Code != http.StatusCreated || rec.Body.String() != `{"ok":true}` {
+		t.Fatalf("response = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("X-Platform") != "handled" {
+		t.Fatalf("X-Platform = %q", rec.Header().Get("X-Platform"))
+	}
+	if platform.request.Endpoint != "chat/completions" || platform.request.Method != http.MethodPost || platform.request.Query != "trace=1" {
+		t.Fatalf("request = %#v", platform.request)
+	}
+	if platform.request.Headers.Get("X-Relay-Test") != "preserved" || string(platform.request.Body) != `{"model":"test","input":"raw"}` {
+		t.Fatalf("platform request = %#v", platform.request)
+	}
+}
+
 func (p *recordingRelayClientProvider) ClientFor(_ context.Context, proxyID string) (*http.Client, error) {
 	p.proxyIDs = append(p.proxyIDs, proxyID)
 	return p.client, nil
@@ -42,7 +93,7 @@ func TestRelayForwardsAccountBearerKeyAndReturnsOpenAIImages(t *testing.T) {
 		Platform: "agnes", Slug: "team-a", BaseURL: upstream.URL + "/v1",
 	}
 	provider := &recordingRelayClientProvider{client: upstream.Client()}
-	handler := NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider)
+	handler := NewRelayHandlerWithClientProvider(repository, NewDefaultPlatformRegistry(), provider)
 	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/team-a", bytes.NewBufferString(`{"model":"gpt-image-1","prompt":"poster","size":"1024x1024","response_format":"url"}`))
 	req.Header.Set("Authorization", "Bearer agnes-account-key")
 	req.Header.Set(ProxyIDHeader, "42")
@@ -66,6 +117,9 @@ func TestRelayConvertsOpenAIImageEditMultipartRequestForAgnes(t *testing.T) {
 		if r.URL.Path != "/v1/images/generations" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("Content-Type = %q, want application/json", got)
+		}
 		if got := readRequestBody(t, r); got != `{"model":"agnes-image-2.1-flash","prompt":"make it blue","size":"1K","ratio":"1:1","extra_body":{"response_format":"url","image":["data:image/png;base64,cG5nLWJ5dGVz"]}}` {
 			t.Fatalf("body = %s", got)
 		}
@@ -77,7 +131,7 @@ func TestRelayConvertsOpenAIImageEditMultipartRequestForAgnes(t *testing.T) {
 	repository.routes["agnes:team-a"] = RouteConfig{Platform: "agnes", Slug: "team-a", BaseURL: upstream.URL + "/v1"}
 	provider := &recordingRelayClientProvider{client: upstream.Client()}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider))
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultPlatformRegistry(), provider))
 
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
@@ -133,7 +187,7 @@ func TestV1ModelsAndChatProxyAccountBearerKey(t *testing.T) {
 	repository.routes["agnes:team-a"] = RouteConfig{Platform: "agnes", Slug: "team-a", BaseURL: upstream.URL + "/v1"}
 	provider := &recordingRelayClientProvider{client: upstream.Client()}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider))
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultPlatformRegistry(), provider))
 
 	for _, test := range []struct{ method, path, body string }{
 		{http.MethodGet, "/plugins/ai-relay/agnes/team-a/v1/models", ""},
@@ -188,7 +242,7 @@ func TestResponsesCompactPathMappingTransparentlyProxiesRequestAndResponse(t *te
 	}
 	provider := &recordingRelayClientProvider{client: upstream.Client()}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), provider))
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultPlatformRegistry(), provider))
 
 	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/zhipu/v1/responses/compact?trace=compact", bytes.NewBufferString(`{"model":"glm-4.5","input":"compact me"}`))
 	req.Header.Set("Authorization", "Bearer account-key")
@@ -235,7 +289,7 @@ func TestPathMappingsApplyToExistingRelayEndpoints(t *testing.T) {
 		},
 	}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultAdapterRegistry(), &recordingRelayClientProvider{client: upstream.Client()}))
+	RegisterRoutes(mux, nil, NewRelayHandlerWithClientProvider(repository, NewDefaultPlatformRegistry(), &recordingRelayClientProvider{client: upstream.Client()}))
 
 	requests := []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/plugins/ai-relay/agnes/all/v1/models", nil),
@@ -289,7 +343,7 @@ func TestOpenAIWildcardTransparentProxyAppliesMappings(t *testing.T) {
 		PathMappings: map[string]string{"v1/embeddings": "v4/embeddings"},
 	}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultAdapterRegistry(), upstream.Client()))
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
 
 	mappedRequest := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/openai/demo/v1/embeddings?trace=1", bytes.NewBufferString(`{"model":"text-embedding-3-small","input":"hello"}`))
 	mappedRequest.Header.Set("Authorization", "Bearer openai-key")
@@ -338,7 +392,7 @@ func TestOpenCodeTransparentProxyConvertsNativeChatRequest(t *testing.T) {
 		Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen",
 	}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultAdapterRegistry(), upstream.Client()))
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
 
 	body := `{"model":{"providerID":"openai","modelID":"gpt-5"},"parts":[{"text":"Hello"},{"content":"world"}],"stream":true}`
 	request := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/chat/completions?trace=opencode", bytes.NewBufferString(body))
@@ -352,6 +406,67 @@ func TestOpenCodeTransparentProxyConvertsNativeChatRequest(t *testing.T) {
 	}
 }
 
+func TestOpenCodeResponsesBridgeUsesChatCompletions(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zen/v1/chat/completions" {
+			t.Fatalf("upstream path = %q", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(readRequestBody(t, r)), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["model"] != "deepseek-v4-flash-free" {
+			t.Fatalf("model = %#v", payload["model"])
+		}
+		messages, ok := payload["messages"].([]any)
+		if !ok || len(messages) != 1 || messages[0].(map[string]any)["content"] != "hello" {
+			t.Fatalf("messages = %#v", payload["messages"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl_1\",\"model\":\"deepseek-v4-flash-free\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/responses", bytes.NewBufferString(`{"model":"deepseek-v4-flash-free","stream":true,"input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer opencode-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("event: response.output_text.delta")) || !bytes.Contains(rec.Body.Bytes(), []byte("data: [DONE]")) {
+		t.Fatalf("response = %s", rec.Body.String())
+	}
+}
+
+func TestOpenCodeResponsesBridgePassesUpstreamErrors(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"unsupported request"}}`))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/responses", bytes.NewBufferString(`{"model":"deepseek-v4-flash-free","input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer opencode-key")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != `{"error":{"message":"unsupported request"}}` {
+		t.Fatalf("response = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRelayRejectsMalformedAccountProxyContext(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	repository.routes["agnes:team-a"] = RouteConfig{
@@ -359,7 +474,7 @@ func TestRelayRejectsMalformedAccountProxyContext(t *testing.T) {
 	}
 	handler := NewRelayHandlerWithClientProvider(
 		repository,
-		NewDefaultAdapterRegistry(),
+		NewDefaultPlatformRegistry(),
 		NewProxyClientProvider(http.DefaultClient, &fakeProxyResolver{}),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/team-a", bytes.NewBufferString(`{"model":"agnes-image-2.1-flash","prompt":"poster"}`))
@@ -375,7 +490,7 @@ func TestRelayRejectsMalformedAccountProxyContext(t *testing.T) {
 }
 
 func TestRelayRejectsMissingBearerAndUnknownSlug(t *testing.T) {
-	handler := NewRelayHandler(NewMemoryRouteRepository(), NewDefaultAdapterRegistry(), http.DefaultClient)
+	handler := NewRelayHandler(NewMemoryRouteRepository(), NewDefaultPlatformRegistry(), http.DefaultClient)
 
 	missingKey := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/team-a", bytes.NewBufferString(`{"prompt":"poster"}`))
 	missingKeyRec := httptest.NewRecorder()
@@ -395,7 +510,7 @@ func TestRelayRejectsMissingBearerAndUnknownSlug(t *testing.T) {
 
 func TestRegisterRoutesMountsRelayEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, nil, NewRelayHandler(NewMemoryRouteRepository(), NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, nil, NewRelayHandler(NewMemoryRouteRepository(), NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/team-a", bytes.NewBufferString(`{"prompt":"poster"}`))
 	rec := httptest.NewRecorder()
@@ -409,7 +524,7 @@ func TestRegisterRoutesMountsRelayEndpoint(t *testing.T) {
 func TestAdminCanManageAgnesRoutes(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	request := httptest.NewRequest(http.MethodPut, "/plugins/ai-relay/api/routes/agnes/team-a", bytes.NewBufferString(`{"base_url":"https://apihub.agnes-ai.com/v1"}`))
 	request.Header.Set("X-Sub2api-User-Id", "7")
@@ -434,7 +549,7 @@ func TestAdminBulkDeleteReportsMalformedItemsSeparately(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	repository.routes["agnes:one"] = RouteConfig{Platform: "agnes", Slug: "one", BaseURL: "https://example.test/v1"}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	request := httptest.NewRequest(http.MethodDelete, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{"items":[{"platform":"agnes","slug":"one","name":"extra"}]}`))
 	request.Header.Set("X-Sub2api-User-Id", "7")
@@ -452,7 +567,7 @@ func TestAdminListsRoutesWithPagination(t *testing.T) {
 		repository.routes["agnes:"+slug] = RouteConfig{Platform: "agnes", Slug: slug, Name: slug, BaseURL: "https://apihub.agnes-ai.com/v1"}
 	}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	req := httptest.NewRequest(http.MethodGet, "/plugins/ai-relay/api/routes?page=2&page_size=2", nil)
 	req.Header.Set("X-Sub2api-User-Id", "7")
@@ -488,7 +603,7 @@ func TestAdminBatchDeletesRoutesAtomically(t *testing.T) {
 		repository.routes["agnes:"+slug] = RouteConfig{Platform: "agnes", Slug: slug, Name: slug, BaseURL: "https://apihub.agnes-ai.com/v1"}
 	}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	req := httptest.NewRequest(http.MethodDelete, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{"items":[{"platform":"agnes","slug":"one"},{"platform":"agnes","slug":"two"}]}`))
 	req.Header.Set("X-Sub2api-User-Id", "7")
@@ -511,7 +626,7 @@ func TestAdminBatchDeletesRoutesAtomically(t *testing.T) {
 
 func TestAdminListsRegisteredPlatforms(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultPlatformRegistry(), http.DefaultClient))
 	req := httptest.NewRequest(http.MethodGet, "/plugins/ai-relay/api/platforms", nil)
 	req.Header.Set("X-Sub2api-User-Id", "7")
 	req.Header.Set("X-Sub2api-User-Role", "admin")
@@ -526,7 +641,7 @@ func TestAdminReadsRelayRuntime(t *testing.T) {
 	t.Setenv("PLUGIN_AI_RELAY_PUBLIC_BASE_URL", "")
 	t.Setenv("PLUGIN_SERVER_PORT", "8091")
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	req := httptest.NewRequest(http.MethodGet, "/plugins/ai-relay/api/runtime", nil)
 	req.Header.Set("X-Sub2api-User-Id", "7")
@@ -550,7 +665,7 @@ func TestAdminReadsRelayRuntime(t *testing.T) {
 
 func TestAdminCreatesOnlyRegisteredRelayPlatforms(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(NewMemoryRouteRepository(), NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	create := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{"platform":"agnes","slug":"primary","name":"Primary Agnes","base_url":"https://apihub.agnes-ai.com/v1"}`))
 	create.Header.Set("X-Sub2api-User-Id", "7")
@@ -574,7 +689,7 @@ func TestAdminCreatesOnlyRegisteredRelayPlatforms(t *testing.T) {
 func TestAdminCreatesRouteWithPathMappings(t *testing.T) {
 	repository := NewMemoryRouteRepository()
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultAdapterRegistry(), http.DefaultClient))
+	RegisterRoutes(mux, principal.NewMiddleware(), NewRelayHandler(repository, NewDefaultPlatformRegistry(), http.DefaultClient))
 
 	create := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/api/routes", bytes.NewBufferString(`{
 		"platform":"agnes",

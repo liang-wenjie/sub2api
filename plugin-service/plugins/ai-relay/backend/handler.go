@@ -2,25 +2,18 @@ package backend
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"mime"
 	"net/http"
-	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	hostprincipal "github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/model"
 )
 
 const (
-	relayRequestTimeout  = 180 * time.Second
 	defaultRoutePageSize = 20
 	maxRoutePageSize     = 100
 )
@@ -33,24 +26,16 @@ type routeListPagination struct {
 }
 
 type RelayHandler struct {
-	routes   RouteRepository
-	adapters *AdapterRegistry
-	clients  RelayClientProvider
+	routes    RouteRepository
+	platforms *PlatformRegistry
+	clients   RelayClientProvider
 }
 
 func RegisterRoutes(mux *http.ServeMux, auth *hostprincipal.Middleware, handler *RelayHandler) {
 	if mux == nil || handler == nil {
 		return
 	}
-	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}", handler.Relay)
-	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/images/generations", handler.Relay)
-	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/images/edits", handler.Edit)
-	mux.HandleFunc("GET /plugins/ai-relay/agnes/{slug}/v1/models", handler.ProxyModels)
-	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/chat/completions", handler.ProxyChatCompletions)
-	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/responses", handler.ProxyResponses)
-	mux.HandleFunc("POST /plugins/ai-relay/agnes/{slug}/v1/responses/compact", handler.ProxyResponsesCompact)
-	mux.HandleFunc("/plugins/ai-relay/openai/", handler.ProxyOpenAIPath)
-	mux.HandleFunc("/plugins/ai-relay/opencode/", handler.ProxyOpenAIPath)
+	mux.HandleFunc("/plugins/ai-relay/", handler.ProxyPlatformPath)
 	if auth == nil {
 		return
 	}
@@ -63,68 +48,12 @@ func RegisterRoutes(mux *http.ServeMux, auth *hostprincipal.Middleware, handler 
 	mux.HandleFunc("DELETE /plugins/ai-relay/api/routes", auth.RequirePlugin("ai-relay", handler.DeleteRoutes))
 }
 
-type OpenAIImageEditRequest struct {
-	Model          string
-	Prompt         string
-	N              int
-	ResponseFormat string
-	Size           string
-	Images         []string
-}
-
-func (h *RelayHandler) Edit(w http.ResponseWriter, r *http.Request) {
-	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
-	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") || strings.TrimSpace(authorization[7:]) == "" {
-		writeOpenAIError(w, http.StatusUnauthorized, "authentication_error", "Bearer authorization is required")
-		return
-	}
-	config, found, err := h.routes.Get(r.Context(), relayPlatform(r), r.PathValue("slug"))
-	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "failed to load relay route")
-		return
-	}
-	if !found {
-		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay route not found")
-		return
-	}
-	adapter, found := h.adapters.Get(config.Platform)
-	if !found {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported relay platform")
-		return
-	}
-	if adapter.Descriptor().Protocol == transparentProtocol {
-		h.proxyOpenAIEndpointForProtocol(w, r, "images/edits", transparentProtocol)
-		return
-	}
-	request, err := decodeOpenAIImageEditRequest(r)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
-	}
-	payload, err := adapter.BuildEditRequest(config, request)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
-	}
-	client, err := h.clientForRequest(r)
-	if err != nil {
-		writeProxyClientError(w, err)
-		return
-	}
-	result, err := h.generatePayload(r.Context(), client, adapter, config, payload, request.N, authorization)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
 func (h *RelayHandler) ListPlatforms(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
 	if !isAdmin(principal) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "administrator access is required"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": h.adapters.Platforms()})
+	writeJSON(w, http.StatusOK, map[string]any{"items": h.platforms.Platforms()})
 }
 
 func (h *RelayHandler) Runtime(w http.ResponseWriter, _ *http.Request, principal model.CurrentPrincipal) {
@@ -135,21 +64,21 @@ func (h *RelayHandler) Runtime(w http.ResponseWriter, _ *http.Request, principal
 	writeJSON(w, http.StatusOK, map[string]string{"base_url": resolvePublicBaseURL()})
 }
 
-func NewRelayHandler(routes RouteRepository, adapters *AdapterRegistry, client *http.Client) *RelayHandler {
+func NewRelayHandler(routes RouteRepository, platforms *PlatformRegistry, client *http.Client) *RelayHandler {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return NewRelayHandlerWithClientProvider(routes, adapters, NewProxyClientProvider(client, unavailableProxyResolver{}))
+	return NewRelayHandlerWithClientProvider(routes, platforms, NewProxyClientProvider(client, unavailableProxyResolver{}))
 }
 
-func NewRelayHandlerWithClientProvider(routes RouteRepository, adapters *AdapterRegistry, clients RelayClientProvider) *RelayHandler {
-	if adapters == nil {
-		adapters = NewDefaultAdapterRegistry()
+func NewRelayHandlerWithClientProvider(routes RouteRepository, platforms *PlatformRegistry, clients RelayClientProvider) *RelayHandler {
+	if platforms == nil {
+		platforms = NewDefaultPlatformRegistry()
 	}
 	if clients == nil {
 		clients = NewProxyClientProvider(http.DefaultClient, unavailableProxyResolver{})
 	}
-	return &RelayHandler{routes: routes, adapters: adapters, clients: clients}
+	return &RelayHandler{routes: routes, platforms: platforms, clients: clients}
 }
 
 func (h *RelayHandler) Relay(w http.ResponseWriter, r *http.Request) {
@@ -157,67 +86,14 @@ func (h *RelayHandler) Relay(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "only POST is supported")
 		return
 	}
-	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
-	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") || strings.TrimSpace(authorization[7:]) == "" {
-		writeOpenAIError(w, http.StatusUnauthorized, "authentication_error", "Bearer authorization is required")
-		return
-	}
 	platform, slug, ok := relayRouteParts(r.URL.Path)
 	if !ok {
 		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay route not found")
 		return
 	}
-	if h.routes == nil {
-		writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "relay routes are unavailable")
-		return
-	}
-	config, found, err := h.routes.Get(r.Context(), platform, slug)
-	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "failed to load relay route")
-		return
-	}
-	if !found {
-		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay route not found")
-		return
-	}
-	adapter, found := h.adapters.Get(platform)
-	if !found {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported relay platform")
-		return
-	}
-	if adapter.Descriptor().Protocol == transparentProtocol {
-		h.proxyOpenAIEndpointForProtocol(w, r, "images/generations", transparentProtocol)
-		return
-	}
-
-	request, err := decodeOpenAIImageRequest(r.Body)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
-	}
-	if request.N == 0 {
-		request.N = 1
-	}
-	if request.N < 1 {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "n must be at least 1")
-		return
-	}
-
-	client, err := h.clientForRequest(r)
-	if err != nil {
-		writeProxyClientError(w, err)
-		return
-	}
-	result, err := h.generate(r.Context(), client, adapter, config, request, authorization)
-	if err != nil {
-		status := http.StatusBadGateway
-		if err == context.DeadlineExceeded {
-			status = http.StatusGatewayTimeout
-		}
-		writeOpenAIError(w, status, "upstream_error", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
+	r.SetPathValue("platform", platform)
+	r.SetPathValue("slug", slug)
+	h.dispatch(w, r, "images/generations")
 }
 
 type routeConfigInput struct {
@@ -238,7 +114,7 @@ func (h *RelayHandler) CreateRoute(w http.ResponseWriter, r *http.Request, princ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid route configuration"})
 		return
 	}
-	if _, ok := h.adapters.Get(input.Platform); !ok {
+	if _, ok := h.platforms.Get(input.Platform); !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported relay platform"})
 		return
 	}
@@ -315,7 +191,7 @@ func (h *RelayHandler) UpsertRoute(w http.ResponseWriter, r *http.Request, princ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid route configuration"})
 		return
 	}
-	if _, ok := h.adapters.Get(r.PathValue("platform")); !ok {
+	if _, ok := h.platforms.Get(r.PathValue("platform")); !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported relay platform"})
 		return
 	}
@@ -393,119 +269,6 @@ func isAdmin(principal model.CurrentPrincipal) bool {
 	return strings.EqualFold(strings.TrimSpace(principal.Role), model.RoleAdmin)
 }
 
-func (h *RelayHandler) generate(ctx context.Context, client *http.Client, adapter ImageAdapter, config RouteConfig, request OpenAIImageRequest, authorization string) (OpenAIImageResponse, error) {
-	outgoing, err := adapter.BuildRequest(config, request)
-	if err != nil {
-		return OpenAIImageResponse{}, err
-	}
-	return h.generatePayload(ctx, client, adapter, config, outgoing, request.N, authorization)
-}
-
-func (h *RelayHandler) generatePayload(ctx context.Context, client *http.Client, adapter ImageAdapter, config RouteConfig, outgoing AgnesImageRequest, count int, authorization string) (OpenAIImageResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, relayRequestTimeout)
-	defer cancel()
-	payload, err := json.Marshal(outgoing)
-	if err != nil {
-		return OpenAIImageResponse{}, err
-	}
-	result := OpenAIImageResponse{Data: make([]OpenAIImageData, 0, count)}
-	for index := 0; index < count; index++ {
-		upstreamURL, err := ResolveRouteEndpointURL(config, adapter.Descriptor().Operation)
-		if err != nil {
-			return OpenAIImageResponse{}, fmt.Errorf("resolve upstream URL: %w", err)
-		}
-		upstreamRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, strings.NewReader(string(payload)))
-		if err != nil {
-			return OpenAIImageResponse{}, fmt.Errorf("build upstream request: %w", err)
-		}
-		upstreamRequest.Header.Set("Authorization", authorization)
-		upstreamRequest.Header.Set("Content-Type", "application/json")
-		response, err := client.Do(upstreamRequest)
-		if err != nil {
-			return OpenAIImageResponse{}, err
-		}
-		body, readErr := io.ReadAll(response.Body)
-		_ = response.Body.Close()
-		if readErr != nil {
-			return OpenAIImageResponse{}, fmt.Errorf("read upstream response: %w", readErr)
-		}
-		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-			return OpenAIImageResponse{}, fmt.Errorf("upstream returned status %d", response.StatusCode)
-		}
-		parsed, err := adapter.ParseResponse(body)
-		if err != nil {
-			return OpenAIImageResponse{}, err
-		}
-		if result.Created == 0 {
-			result.Created = parsed.Created
-		}
-		result.Data = append(result.Data, parsed.Data...)
-	}
-	return result, nil
-}
-
-func decodeOpenAIImageEditRequest(r *http.Request) (OpenAIImageEditRequest, error) {
-	if err := r.ParseMultipartForm(20 << 20); err != nil {
-		return OpenAIImageEditRequest{}, fmt.Errorf("invalid multipart image edit request: %w", err)
-	}
-	count := 1
-	if raw := strings.TrimSpace(r.FormValue("n")); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 {
-			return OpenAIImageEditRequest{}, fmt.Errorf("n must be at least 1")
-		}
-		count = parsed
-	}
-	files := r.MultipartForm.File["image"]
-	if len(files) == 0 {
-		return OpenAIImageEditRequest{}, fmt.Errorf("image is required")
-	}
-	images := make([]string, 0, len(files))
-	for _, file := range files {
-		content, err := file.Open()
-		if err != nil {
-			return OpenAIImageEditRequest{}, fmt.Errorf("read image: %w", err)
-		}
-		data, readErr := io.ReadAll(io.LimitReader(content, 10<<20))
-		_ = content.Close()
-		if readErr != nil {
-			return OpenAIImageEditRequest{}, fmt.Errorf("read image: %w", readErr)
-		}
-		if len(data) == 0 {
-			return OpenAIImageEditRequest{}, fmt.Errorf("image is empty")
-		}
-		mediaType := file.Header.Get("Content-Type")
-		if mediaType == "" || mediaType == "application/octet-stream" {
-			mediaType = mime.TypeByExtension(filepath.Ext(file.Filename))
-		}
-		if mediaType == "" {
-			mediaType = "application/octet-stream"
-		}
-		images = append(images, "data:"+mediaType+";base64,"+base64.StdEncoding.EncodeToString(data))
-	}
-	return OpenAIImageEditRequest{
-		Model:          r.FormValue("model"),
-		Prompt:         r.FormValue("prompt"),
-		N:              count,
-		ResponseFormat: r.FormValue("response_format"),
-		Size:           r.FormValue("size"),
-		Images:         images,
-	}, nil
-}
-
-func decodeOpenAIImageRequest(body io.Reader) (OpenAIImageRequest, error) {
-	decoder := json.NewDecoder(io.LimitReader(body, 1<<20))
-	decoder.DisallowUnknownFields()
-	var request OpenAIImageRequest
-	if err := decoder.Decode(&request); err != nil {
-		return OpenAIImageRequest{}, fmt.Errorf("invalid image request: %w", err)
-	}
-	if decoder.More() {
-		return OpenAIImageRequest{}, fmt.Errorf("invalid image request")
-	}
-	return request, nil
-}
-
 func relayRouteParts(path string) (string, string, bool) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) != 4 && len(parts) != 7 || len(parts) >= 2 && (parts[0] != "plugins" || parts[1] != "ai-relay") {
@@ -528,28 +291,16 @@ func relayPlatform(r *http.Request) string {
 	return ""
 }
 
-func (h *RelayHandler) ProxyModels(w http.ResponseWriter, r *http.Request) {
-	h.proxyOpenAIEndpoint(w, r, "models")
-}
-
-func (h *RelayHandler) ProxyChatCompletions(w http.ResponseWriter, r *http.Request) {
-	h.proxyOpenAIEndpoint(w, r, "chat/completions")
-}
-
-func (h *RelayHandler) ProxyResponses(w http.ResponseWriter, r *http.Request) {
-	h.proxyOpenAIEndpoint(w, r, "responses")
-}
-
-func (h *RelayHandler) ProxyResponsesCompact(w http.ResponseWriter, r *http.Request) {
-	h.proxyOpenAIEndpoint(w, r, "responses/compact")
-}
-
-func (h *RelayHandler) proxyOpenAIEndpoint(w http.ResponseWriter, r *http.Request, endpoint string) {
-	h.proxyOpenAIEndpointForProtocol(w, r, endpoint, "")
-}
-
 func (h *RelayHandler) ProxyOpenAIPath(w http.ResponseWriter, r *http.Request) {
+	h.ProxyPlatformPath(w, r)
+}
+
+func (h *RelayHandler) ProxyPlatformPath(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) == 4 && parts[0] == "plugins" && parts[1] == "ai-relay" {
+		h.Relay(w, r)
+		return
+	}
 	if len(parts) < 6 || parts[0] != "plugins" || parts[1] != "ai-relay" || parts[4] != "v1" {
 		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay endpoint not found")
 		return
@@ -557,13 +308,21 @@ func (h *RelayHandler) ProxyOpenAIPath(w http.ResponseWriter, r *http.Request) {
 	endpoint := strings.Join(parts[5:], "/")
 	r.SetPathValue("platform", parts[2])
 	r.SetPathValue("slug", parts[3])
-	h.proxyOpenAIEndpointForProtocol(w, r, endpoint, "")
+	h.dispatch(w, r, endpoint)
 }
 
-func (h *RelayHandler) proxyOpenAIEndpointForProtocol(w http.ResponseWriter, r *http.Request, endpoint, requiredProtocol string) {
+func (h *RelayHandler) dispatch(w http.ResponseWriter, r *http.Request, endpoint string) {
+	if r == nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "request is required")
+		return
+	}
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") || strings.TrimSpace(authorization[7:]) == "" {
 		writeOpenAIError(w, http.StatusUnauthorized, "authentication_error", "Bearer authorization is required")
+		return
+	}
+	if h == nil || h.routes == nil {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "relay routes are unavailable")
 		return
 	}
 	config, found, err := h.routes.Get(r.Context(), relayPlatform(r), r.PathValue("slug"))
@@ -575,59 +334,36 @@ func (h *RelayHandler) proxyOpenAIEndpointForProtocol(w http.ResponseWriter, r *
 		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "relay route not found")
 		return
 	}
-	adapter, found := h.adapters.Get(config.Platform)
+	platform, found := h.platforms.Get(config.Platform)
 	if !found {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported relay platform")
 		return
 	}
-	if requiredProtocol != "" && adapter.Descriptor().Protocol != requiredProtocol {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "relay platform does not support transparent forwarding")
-		return
-	}
-	if transparentAdapter, ok := adapter.(TransparentAdapter); ok {
-		config.BaseURL = transparentAdapter.NormalizeBaseURL(config.BaseURL)
-	}
-	upstreamURL, err := ResolveRouteEndpointURL(config, endpoint)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to resolve upstream URL")
-		return
-	}
-	parsedUpstreamURL, err := url.Parse(upstreamURL)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to resolve upstream URL")
-		return
-	}
-	parsedUpstreamURL.RawQuery = r.URL.RawQuery
-	var requestBody io.Reader = r.Body
-	if transparentAdapter, ok := adapter.(TransparentAdapter); ok && r.Body != nil && adapter.Descriptor().Protocol == "opencode" && canonicalRelayPath(endpoint) == "chat/completions" {
-		body, readErr := io.ReadAll(r.Body)
-		if readErr != nil {
-			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body")
-			return
-		}
-		requestBody = strings.NewReader(string(transparentAdapter.TransformRequestBody(endpoint, body)))
-	}
-	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, parsedUpstreamURL.String(), requestBody)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
-		return
-	}
-	copyEndToEndHeaders(upstreamRequest.Header, r.Header)
-	upstreamRequest.Header.Set("Authorization", authorization)
 	client, err := h.clientForRequest(r)
 	if err != nil {
 		writeProxyClientError(w, err)
 		return
 	}
-	response, err := client.Do(upstreamRequest)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 20<<20))
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body")
 		return
 	}
-	defer response.Body.Close()
-	copyEndToEndHeaders(w.Header(), response.Header)
+	response, err := platform.Handle(r.Context(), PlatformRequest{Route: config, Endpoint: endpoint, Method: r.Method, Query: r.URL.RawQuery, Headers: r.Header.Clone(), Body: body, Client: client})
+	if err != nil {
+		status := response.StatusCode
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		writeOpenAIError(w, status, "upstream_error", err.Error())
+		return
+	}
+	copyEndToEndHeaders(w.Header(), response.Headers)
+	if response.StatusCode == 0 {
+		response.StatusCode = http.StatusOK
+	}
 	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	_, _ = w.Write(response.Body)
 }
 
 var hopByHopHeaders = map[string]struct{}{
