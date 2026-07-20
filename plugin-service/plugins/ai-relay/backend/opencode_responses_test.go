@@ -431,6 +431,79 @@ func TestExtractCustomToolInputFallsBackToRawArguments(t *testing.T) {
 	}
 }
 
+func TestCodexFileToolInputToPatchEdit(t *testing.T) {
+	patch, ok := codexFileToolInputToPatch("edit", `{"filePath":"README.md","oldString":"old\ntext","newString":"new\ntext"}`)
+	if !ok {
+		t.Fatal("edit arguments were not converted")
+	}
+	want := "*** Begin Patch\n*** Update File: README.md\n@@\n-old\n-text\n+new\n+text\n*** End Patch"
+	if patch != want {
+		t.Fatalf("patch = %q, want %q", patch, want)
+	}
+}
+
+func TestCodexFileToolInputToPatchWrite(t *testing.T) {
+	patch, ok := codexFileToolInputToPatch("write", `{"filePath":"D:\\work\\new.txt","content":"hello\nworld"}`)
+	if !ok {
+		t.Fatal("write arguments were not converted")
+	}
+	want := "*** Begin Patch\n*** Add File: D:/work/new.txt\n+hello\n+world\n*** End Patch"
+	if patch != want {
+		t.Fatalf("patch = %q, want %q", patch, want)
+	}
+}
+
+func TestChatCompletionToResponsesKeepsUnconvertibleCodexEditFunction(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.codexFileTools = true
+	result, err := chatCompletionToResponsesWithContext([]byte(`{
+		"id":"chatcmpl_edit","created":1,"model":"deepseek",
+		"choices":[{"message":{"role":"assistant","tool_calls":[{
+			"id":"call_edit","type":"function","function":{
+				"name":"edit","arguments":"{\"filePath\":\"README.md\",\"oldString\":\"old\",\"newString\":\"new\",\"replaceAll\":true}"
+			}
+		}]}}]
+	}`), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatal(err)
+	}
+	item := payload["output"].([]any)[0].(map[string]any)
+	if item["type"] != "function_call" || item["name"] != "edit" {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
+func TestChatCompletionToResponsesRestoresCodexEditAsApplyPatch(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.codexFileTools = true
+	result, err := chatCompletionToResponsesWithContext([]byte(`{
+		"id":"chatcmpl_edit","created":1,"model":"deepseek",
+		"choices":[{"message":{"role":"assistant","tool_calls":[{
+			"id":"call_edit","type":"function","function":{
+				"name":"edit","arguments":"{\"filePath\":\"README.md\",\"oldString\":\"old\",\"newString\":\"new\"}"
+			}
+		}]}}]
+	}`), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatal(err)
+	}
+	item := payload["output"].([]any)[0].(map[string]any)
+	if item["type"] != "custom_tool_call" || item["name"] != "apply_patch" {
+		t.Fatalf("item = %#v", item)
+	}
+	if item["input"] != "*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch" {
+		t.Fatalf("input = %#v", item["input"])
+	}
+}
+
 func TestChatCompletionToResponsesPreservesReasoningAndUsageDetails(t *testing.T) {
 	result, err := chatCompletionToResponses([]byte(`{
 		"id":"chatcmpl_reasoning","created":1,"model":"deepseek",
@@ -548,6 +621,36 @@ func TestChatCompletionSSEToResponsesPreservesMalformedCustomInput(t *testing.T)
 	if !bytes.Contains(converted, []byte(`"type":"custom_tool_call"`)) ||
 		!bytes.Contains(converted, []byte(`"input":"{\"wrong\":true}"`)) {
 		t.Fatalf("malformed custom input was lost: %s", converted)
+	}
+}
+
+func TestChatCompletionSSEToResponsesRestoresCodexEditAsApplyPatch(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.codexFileTools = true
+	stream := `data: {"id":"chatcmpl_edit_stream","model":"deepseek","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_edit_stream","function":{"name":"edit","arguments":"{\"filePath\":\"README.md\",\"oldString\":\"old\",\"newString\":\"new\"}"}}]}}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	converted := chatCompletionSSEToResponsesWithContext([]byte(stream), context)
+	if !bytes.Contains(converted, []byte(`"type":"custom_tool_call"`)) ||
+		!bytes.Contains(converted, []byte(`"name":"apply_patch"`)) ||
+		!bytes.Contains(converted, []byte(`*** Update File: README.md`)) {
+		t.Fatalf("edit was not restored as apply_patch: %s", converted)
+	}
+	if bytes.Contains(converted, []byte("response.function_call_arguments")) {
+		t.Fatalf("edit used function lifecycle: %s", converted)
+	}
+}
+
+func TestChatCompletionSSEToResponsesKeepsUnconvertibleCodexEditFunction(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.codexFileTools = true
+	stream := `data: {"id":"chatcmpl_edit_replace_all","model":"deepseek","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_edit_replace_all","function":{"name":"edit","arguments":"{\"filePath\":\"README.md\",\"oldString\":\"old\",\"newString\":\"new\",\"replaceAll\":true}"}}]}}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	converted := chatCompletionSSEToResponsesWithContext([]byte(stream), context)
+	if !bytes.Contains(converted, []byte(`"type":"function_call"`)) || !bytes.Contains(converted, []byte(`"name":"edit"`)) {
+		t.Fatalf("unconvertible edit did not remain a function: %s", converted)
+	}
+	if bytes.Contains(converted, []byte(`"name":"apply_patch"`)) || bytes.Contains(converted, []byte("response.custom_tool_call_input")) {
+		t.Fatalf("unconvertible edit was mislabeled as apply_patch: %s", converted)
 	}
 }
 

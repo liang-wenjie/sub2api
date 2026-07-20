@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
@@ -549,6 +550,84 @@ func TestOpenCodeResponsesBridgeStreamsCodexCustomTool(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte(`"type":"custom_tool_call"`)) || !bytes.Contains(body, []byte("data: [DONE]")) {
 		t.Fatalf("response = %s", rec.Body.String())
+	}
+}
+
+func TestOpenCodeResponsesBridgeRestoresCodexWriteAsApplyPatch(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl_write","created":1,"model":"deepseek-v4-flash-free",
+			"choices":[{"message":{"role":"assistant","tool_calls":[{
+				"id":"call_write","type":"function","function":{
+					"name":"write","arguments":"{\"filePath\":\"created.txt\",\"content\":\"hello\\nworld\"}"
+				}
+			}]}}]
+		}`))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/responses", bytes.NewBufferString(`{
+		"model":"deepseek-v4-flash-free","input":"create file",
+		"tools":[{"type":"function","name":"write","parameters":{"type":"object"}}]
+	}`))
+	req.Header.Set("Authorization", "Bearer opencode-key")
+	req.Header.Set("originator", "codex_app")
+	req.Header.Set("User-Agent", "codex_app/1.0")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	item := response["output"].([]any)[0].(map[string]any)
+	if item["type"] != "custom_tool_call" || item["name"] != "apply_patch" || !strings.Contains(stringValue(item["input"]), "*** Add File: created.txt") {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
+func TestOpenCodeResponsesBridgeKeepsWriteForNonCodexClient(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl_write","created":1,"model":"deepseek-v4-flash-free",
+			"choices":[{"message":{"role":"assistant","tool_calls":[{
+				"id":"call_write","type":"function","function":{
+					"name":"write","arguments":"{\"filePath\":\"created.txt\",\"content\":\"hello\"}"
+				}
+			}]}}]
+		}`))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/responses", bytes.NewBufferString(`{
+		"model":"deepseek-v4-flash-free","input":"create file",
+		"tools":[{"type":"function","name":"write","parameters":{"type":"object"}}]
+	}`))
+	req.Header.Set("Authorization", "Bearer opencode-key")
+	req.Header.Set("User-Agent", "opencode/1.0")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	item := response["output"].([]any)[0].(map[string]any)
+	if item["type"] != "function_call" || item["name"] != "write" {
+		t.Fatalf("item = %#v", item)
 	}
 }
 

@@ -20,6 +20,7 @@ func (adapter *OpenCodeAdapter) Handle(ctx context.Context, request PlatformRequ
 		if err != nil {
 			return PlatformResponse{StatusCode: http.StatusBadRequest}, err
 		}
+		bridgeContext.codexFileTools = isCodexRelayClient(request.Headers)
 		logOpenCodeResponsesBridge("request", body, 0, nil)
 		config := request.Route
 		config.BaseURL = adapter.NormalizeBaseURL(config.BaseURL)
@@ -47,6 +48,18 @@ func (adapter *OpenCodeAdapter) Handle(ctx context.Context, request PlatformRequ
 	config := request.Route
 	config.BaseURL = adapter.NormalizeBaseURL(config.BaseURL)
 	return forwardPlatformRequest(ctx, request, config, endpoint, request.Method, body)
+}
+
+func isCodexRelayClient(headers http.Header) bool {
+	if headers == nil {
+		return false
+	}
+	originator := strings.ToLower(strings.TrimSpace(headers.Get("originator")))
+	if strings.HasPrefix(originator, "codex_") || strings.HasPrefix(originator, "codex-") || strings.HasPrefix(originator, "codex ") {
+		return true
+	}
+	userAgent := strings.ToLower(strings.TrimSpace(headers.Get("User-Agent")))
+	return strings.HasPrefix(userAgent, "codex_") || strings.HasPrefix(userAgent, "codex-") || strings.HasPrefix(userAgent, "codex/") || strings.HasPrefix(userAgent, "codex ")
 }
 
 func forwardPlatformRequest(ctx context.Context, request PlatformRequest, config RouteConfig, endpoint, method string, body []byte) (PlatformResponse, error) {

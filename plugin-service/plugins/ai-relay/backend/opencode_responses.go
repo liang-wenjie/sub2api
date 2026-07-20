@@ -13,8 +13,56 @@ import (
 const customToolInputDescription = "The raw input for this tool, passed through verbatim."
 
 type responsesBridgeContext struct {
-	customTools   map[string]bool
-	declaredTools map[string]bool
+	customTools    map[string]bool
+	declaredTools  map[string]bool
+	codexFileTools bool
+}
+
+func codexFileToolInputToPatch(name, arguments string) (string, bool) {
+	var fields map[string]any
+	if json.Unmarshal([]byte(arguments), &fields) != nil {
+		return "", false
+	}
+	path := stringValue(fields["filePath"])
+	if path == "" {
+		path = stringValue(fields["path"])
+	}
+	path = strings.ReplaceAll(strings.TrimSpace(path), "\\", "/")
+	if path == "" || strings.HasPrefix(path, "/") {
+		return "", false
+	}
+	switch name {
+	case "edit":
+		if replaceAll, ok := fields["replaceAll"].(bool); ok && replaceAll {
+			return "", false
+		}
+		oldString, oldOK := fields["oldString"].(string)
+		newString, newOK := fields["newString"].(string)
+		if !oldOK || !newOK || oldString == "" {
+			return "", false
+		}
+		return "*** Begin Patch\n*** Update File: " + path + "\n@@\n" + patchLines("-", oldString) + "\n" + patchLines("+", newString) + "\n*** End Patch", true
+	case "write":
+		content, ok := fields["content"].(string)
+		if !ok {
+			return "", false
+		}
+		patch := "*** Begin Patch\n*** Add File: " + path + "\n"
+		if content != "" {
+			patch += patchLines("+", content) + "\n"
+		}
+		return patch + "*** End Patch", true
+	default:
+		return "", false
+	}
+}
+
+func patchLines(prefix, text string) string {
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		lines[index] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func newResponsesBridgeContext() responsesBridgeContext {
@@ -501,6 +549,18 @@ func extractCustomToolInput(arguments string) string {
 	return arguments
 }
 
+func codexCustomToolOutput(name, arguments string, context responsesBridgeContext) (string, string, bool) {
+	if context.customTools[name] {
+		return name, extractCustomToolInput(arguments), true
+	}
+	if context.codexFileTools {
+		if patch, ok := codexFileToolInputToPatch(name, arguments); ok {
+			return "apply_patch", patch, true
+		}
+	}
+	return "", "", false
+}
+
 func chatCompletionToResponses(body []byte) ([]byte, error) {
 	return chatCompletionToResponsesWithContext(body, newResponsesBridgeContext())
 }
@@ -534,8 +594,8 @@ func chatCompletionToResponsesWithContext(body []byte, context responsesBridgeCo
 							}
 							name := stringValue(function["name"])
 							arguments := stringValue(function["arguments"])
-							if context.customTools[name] {
-								output = append(output, map[string]any{"id": functionItemID(callID), "type": "custom_tool_call", "status": "completed", "call_id": callID, "name": name, "input": extractCustomToolInput(arguments)})
+							if customName, input, ok := codexCustomToolOutput(name, arguments, context); ok {
+								output = append(output, map[string]any{"id": functionItemID(callID), "type": "custom_tool_call", "status": "completed", "call_id": callID, "name": customName, "input": input})
 								continue
 							}
 							output = append(output, map[string]any{"id": functionItemID(callID), "type": "function_call", "status": "completed", "call_id": callID, "name": name, "arguments": arguments})
@@ -649,6 +709,7 @@ func chatCompletionSSEToResponsesWithContext(stream []byte, context responsesBri
 
 type responseToolCall struct {
 	callID, name, arguments string
+	outputName              string
 	outputIndex             int
 	argumentsEmitted        int
 	announced               bool
@@ -709,8 +770,17 @@ func (s *responseStreamState) announceToolCall(call *responseToolCall, w *bytes.
 		return
 	}
 	call.custom = s.context.customTools[call.name]
+	call.outputName = call.name
+	if !call.custom && s.context.codexFileTools && (call.name == "edit" || call.name == "write") {
+		if _, _, ok := codexCustomToolOutput(call.name, call.arguments, s.context); ok {
+			call.custom = true
+			call.outputName = "apply_patch"
+		} else if !force {
+			return
+		}
+	}
 	call.announced = true
-	item := map[string]any{"id": toolItemID(call), "status": "in_progress", "call_id": call.callID, "name": call.name}
+	item := map[string]any{"id": toolItemID(call), "status": "in_progress", "call_id": call.callID, "name": call.outputName}
 	if call.custom {
 		item["type"] = "custom_tool_call"
 		item["input"] = ""
@@ -795,6 +865,7 @@ func (s *responseStreamState) consume(payload map[string]any, w *bytes.Buffer) {
 			s.announceToolCall(item, w, false)
 			if args := stringValue(function["arguments"]); args != "" {
 				item.arguments += args
+				s.announceToolCall(item, w, false)
 				if !item.announced && !s.hasDeclaredToolPrefix(item.name) {
 					s.announceToolCall(item, w, true)
 				}
@@ -824,11 +895,16 @@ func (s *responseStreamState) finish(w *bytes.Buffer) {
 		itemID := toolItemID(call)
 		if call.custom {
 			input := extractCustomToolInput(call.arguments)
+			if call.outputName == "apply_patch" && (call.name == "edit" || call.name == "write") {
+				if patch, ok := codexFileToolInputToPatch(call.name, call.arguments); ok {
+					input = patch
+				}
+			}
 			if input != "" {
 				s.emit(w, "response.custom_tool_call_input.delta", map[string]any{"type": "response.custom_tool_call_input.delta", "output_index": call.outputIndex, "item_id": itemID, "delta": input})
 			}
-			s.emit(w, "response.custom_tool_call_input.done", map[string]any{"type": "response.custom_tool_call_input.done", "output_index": call.outputIndex, "item_id": itemID, "call_id": call.callID, "name": call.name, "input": input})
-			s.emit(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": call.outputIndex, "item": map[string]any{"id": itemID, "type": "custom_tool_call", "status": "completed", "call_id": call.callID, "name": call.name, "input": input}})
+			s.emit(w, "response.custom_tool_call_input.done", map[string]any{"type": "response.custom_tool_call_input.done", "output_index": call.outputIndex, "item_id": itemID, "call_id": call.callID, "name": call.outputName, "input": input})
+			s.emit(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": call.outputIndex, "item": map[string]any{"id": itemID, "type": "custom_tool_call", "status": "completed", "call_id": call.callID, "name": call.outputName, "input": input}})
 			continue
 		}
 		s.emit(w, "response.function_call_arguments.done", map[string]any{"type": "response.function_call_arguments.done", "output_index": call.outputIndex, "item_id": itemID, "arguments": call.arguments})
@@ -849,7 +925,13 @@ func (s *responseStreamState) finish(w *bytes.Buffer) {
 	}
 	for _, call := range callList {
 		if call.custom {
-			output = append(output, map[string]any{"id": toolItemID(call), "type": "custom_tool_call", "status": "completed", "call_id": call.callID, "name": call.name, "input": extractCustomToolInput(call.arguments)})
+			input := extractCustomToolInput(call.arguments)
+			if call.outputName == "apply_patch" && (call.name == "edit" || call.name == "write") {
+				if patch, ok := codexFileToolInputToPatch(call.name, call.arguments); ok {
+					input = patch
+				}
+			}
+			output = append(output, map[string]any{"id": toolItemID(call), "type": "custom_tool_call", "status": "completed", "call_id": call.callID, "name": call.outputName, "input": input})
 			continue
 		}
 		output = append(output, map[string]any{"id": toolItemID(call), "type": "function_call", "status": "completed", "call_id": call.callID, "name": call.name, "arguments": call.arguments})
