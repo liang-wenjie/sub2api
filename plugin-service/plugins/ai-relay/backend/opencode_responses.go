@@ -608,8 +608,12 @@ func intValue(value any) int64 {
 }
 
 func chatCompletionSSEToResponses(stream []byte) []byte {
+	return chatCompletionSSEToResponsesWithContext(stream, newResponsesBridgeContext())
+}
+
+func chatCompletionSSEToResponsesWithContext(stream []byte, context responsesBridgeContext) []byte {
 	var output bytes.Buffer
-	state := responseStreamState{calls: map[int]*responseToolCall{}}
+	state := responseStreamState{context: context, calls: map[int]*responseToolCall{}}
 	scanner := bufio.NewScanner(bytes.NewReader(stream))
 	scanner.Buffer(make([]byte, 4096), 4<<20)
 	var data []string
@@ -646,6 +650,8 @@ func chatCompletionSSEToResponses(stream []byte) []byte {
 type responseToolCall struct {
 	callID, name, arguments string
 	outputIndex             int
+	announced               bool
+	custom                  bool
 }
 type responseStreamState struct {
 	responseID, model string
@@ -661,6 +667,7 @@ type responseStreamState struct {
 	nextIndex         int
 	usage             map[string]any
 	calls             map[int]*responseToolCall
+	context           responsesBridgeContext
 }
 
 func (s *responseStreamState) emit(w *bytes.Buffer, event string, payload map[string]any) {
@@ -682,6 +689,37 @@ func (s *responseStreamState) start(payload map[string]any, w *bytes.Buffer) {
 	s.created = true
 	s.emit(w, "response.created", map[string]any{"type": "response.created", "response": map[string]any{"id": s.responseID, "object": "response", "created_at": s.createdAt, "status": "in_progress", "model": s.model, "output": []any{}}})
 }
+
+func toolItemID(call *responseToolCall) string {
+	if !call.custom {
+		return functionItemID(call.callID)
+	}
+	if strings.HasPrefix(call.callID, "call_") {
+		return "ct_" + strings.TrimPrefix(call.callID, "call_")
+	}
+	return "ct_" + call.callID
+}
+
+func (s *responseStreamState) announceToolCall(call *responseToolCall, w *bytes.Buffer, force bool) {
+	if call == nil || call.announced || call.name == "" {
+		return
+	}
+	if !force && len(s.context.declaredTools) > 0 && !s.context.declaredTools[call.name] {
+		return
+	}
+	call.custom = s.context.customTools[call.name]
+	call.announced = true
+	item := map[string]any{"id": toolItemID(call), "status": "in_progress", "call_id": call.callID, "name": call.name}
+	if call.custom {
+		item["type"] = "custom_tool_call"
+		item["input"] = ""
+	} else {
+		item["type"] = "function_call"
+		item["arguments"] = ""
+	}
+	s.emit(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": call.outputIndex, "item": item})
+}
+
 func (s *responseStreamState) consume(payload map[string]any, w *bytes.Buffer) {
 	s.start(payload, w)
 	if usage, ok := payload["usage"].(map[string]any); ok {
@@ -727,15 +765,18 @@ func (s *responseStreamState) consume(payload map[string]any, w *bytes.Buffer) {
 				item = &responseToolCall{callID: callID, outputIndex: s.nextIndex}
 				s.calls[index] = item
 				s.nextIndex++
-				s.emit(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": item.outputIndex, "item": map[string]any{"id": functionItemID(item.callID), "type": "function_call", "status": "in_progress", "call_id": item.callID, "name": "", "arguments": ""}})
 			}
 			function, _ := call["function"].(map[string]any)
 			if name := stringValue(function["name"]); name != "" {
 				item.name += name
 			}
+			s.announceToolCall(item, w, false)
 			if args := stringValue(function["arguments"]); args != "" {
+				s.announceToolCall(item, w, true)
 				item.arguments += args
-				s.emit(w, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "output_index": item.outputIndex, "item_id": functionItemID(item.callID), "delta": args})
+				if !item.custom {
+					s.emit(w, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "output_index": item.outputIndex, "item_id": toolItemID(item), "delta": args})
+				}
 			}
 		}
 	}
@@ -756,7 +797,17 @@ func (s *responseStreamState) finish(w *bytes.Buffer) {
 	}
 	sort.Slice(callList, func(i, j int) bool { return callList[i].outputIndex < callList[j].outputIndex })
 	for _, call := range callList {
-		itemID := functionItemID(call.callID)
+		s.announceToolCall(call, w, true)
+		itemID := toolItemID(call)
+		if call.custom {
+			input := extractCustomToolInput(call.arguments)
+			if input != "" {
+				s.emit(w, "response.custom_tool_call_input.delta", map[string]any{"type": "response.custom_tool_call_input.delta", "output_index": call.outputIndex, "item_id": itemID, "delta": input})
+			}
+			s.emit(w, "response.custom_tool_call_input.done", map[string]any{"type": "response.custom_tool_call_input.done", "output_index": call.outputIndex, "item_id": itemID, "call_id": call.callID, "name": call.name, "input": input})
+			s.emit(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": call.outputIndex, "item": map[string]any{"id": itemID, "type": "custom_tool_call", "status": "completed", "call_id": call.callID, "name": call.name, "input": input}})
+			continue
+		}
 		s.emit(w, "response.function_call_arguments.done", map[string]any{"type": "response.function_call_arguments.done", "output_index": call.outputIndex, "item_id": itemID, "arguments": call.arguments})
 		s.emit(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": call.outputIndex, "item": map[string]any{"id": itemID, "type": "function_call", "status": "completed", "call_id": call.callID, "name": call.name, "arguments": call.arguments}})
 	}
@@ -774,7 +825,11 @@ func (s *responseStreamState) finish(w *bytes.Buffer) {
 		output = append(output, responseMessage(s.responseID, s.text))
 	}
 	for _, call := range callList {
-		output = append(output, map[string]any{"id": functionItemID(call.callID), "type": "function_call", "status": "completed", "call_id": call.callID, "name": call.name, "arguments": call.arguments})
+		if call.custom {
+			output = append(output, map[string]any{"id": toolItemID(call), "type": "custom_tool_call", "status": "completed", "call_id": call.callID, "name": call.name, "input": extractCustomToolInput(call.arguments)})
+			continue
+		}
+		output = append(output, map[string]any{"id": toolItemID(call), "type": "function_call", "status": "completed", "call_id": call.callID, "name": call.name, "arguments": call.arguments})
 	}
 	sort.SliceStable(output, func(i, j int) bool { return outputItemIndex(output[i], s) < outputItemIndex(output[j], s) })
 	response := map[string]any{"id": s.responseID, "object": "response", "created_at": s.createdAt, "status": "completed", "model": s.model, "output": output}

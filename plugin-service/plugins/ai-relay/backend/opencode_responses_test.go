@@ -480,6 +480,33 @@ func TestChatCompletionSSEToResponsesEmitsTextAndToolCallLifecycle(t *testing.T)
 	}
 }
 
+func TestChatCompletionSSEToResponsesRestoresCustomToolLifecycle(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.customTools["apply_patch"] = true
+	context.declaredTools["apply_patch"] = true
+	stream := `data: {"id":"chatcmpl_1","model":"deepseek","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\\n*** End Patch\"}"}}]}}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	converted := chatCompletionSSEToResponsesWithContext([]byte(stream), context)
+	for _, event := range []string{
+		"response.output_item.added",
+		"response.custom_tool_call_input.delta",
+		"response.custom_tool_call_input.done",
+		"response.output_item.done",
+		"response.completed",
+	} {
+		if !bytes.Contains(converted, []byte("event: "+event)) {
+			t.Fatalf("missing %s in %s", event, converted)
+		}
+	}
+	if bytes.Contains(converted, []byte("response.function_call_arguments")) {
+		t.Fatalf("custom call used function lifecycle: %s", converted)
+	}
+	if !bytes.Contains(converted, []byte(`"type":"custom_tool_call"`)) ||
+		!bytes.Contains(converted, []byte(`"input":"*** Begin Patch\n*** End Patch"`)) {
+		t.Fatalf("custom output missing: %s", converted)
+	}
+}
+
 func TestChatCompletionSSEToResponsesKeepsIndexesAndReasoning(t *testing.T) {
 	stream := "data: {\"id\":\"chatcmpl_2\",\"created\":1,\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read\",\"arguments\":\"{}\"}}]}}]}\n\n" +
 		"data: {\"id\":\"chatcmpl_2\",\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n" +
