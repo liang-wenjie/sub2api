@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -112,18 +113,58 @@ func logOpenCodeResponsesBridge(stage string, chatBody []byte, statusCode int, r
 		return
 	}
 	roles := make([]string, 0)
+	messageSummary := make([]string, 0)
+	assistantToolSummary := make([]string, 0)
+	toolContentLengths := make([]int, 0)
 	if messages, ok := payload["messages"].([]any); ok {
 		for _, raw := range messages {
 			if message, ok := raw.(map[string]any); ok {
 				if role, ok := message["role"].(string); ok {
 					roles = append(roles, role)
+					id := stringValue(message["id"])
+					toolCallID := stringValue(message["tool_call_id"])
+					if id == "" {
+						id = "-"
+					}
+					if toolCallID != "" {
+						messageSummary = append(messageSummary, role+":"+id+":tool="+toolCallID)
+						if content, ok := message["content"].(string); ok {
+							toolContentLengths = append(toolContentLengths, len(content))
+						}
+					} else {
+						messageSummary = append(messageSummary, role+":"+id)
+					}
+					if role == "assistant" {
+						if calls, ok := message["tool_calls"].([]any); ok {
+							for _, rawCall := range calls {
+								if call, ok := rawCall.(map[string]any); ok {
+									function, _ := call["function"].(map[string]any)
+									arguments := stringValue(function["arguments"])
+									validJSON := false
+									var decoded any
+									validJSON = json.Unmarshal([]byte(arguments), &decoded) == nil
+									assistantToolSummary = append(assistantToolSummary, stringValue(call["id"])+":"+stringValue(function["name"])+":args="+fmt.Sprint(len(arguments))+":json="+fmt.Sprint(validJSON))
+								}
+							}
+						}
+					}
 				}
 			}
 		}
 	}
 	toolCount := 0
+	toolNames := make([]string, 0)
 	if tools, ok := payload["tools"].([]any); ok {
 		toolCount = len(tools)
+		for _, raw := range tools {
+			if tool, ok := raw.(map[string]any); ok {
+				if function, ok := tool["function"].(map[string]any); ok {
+					if name := stringValue(function["name"]); name != "" {
+						toolNames = append(toolNames, name)
+					}
+				}
+			}
+		}
 	}
 	responsePreview := ""
 	if statusCode >= http.StatusBadRequest {
@@ -132,5 +173,5 @@ func logOpenCodeResponsesBridge(stage string, chatBody []byte, statusCode int, r
 			responsePreview = responsePreview[:1000]
 		}
 	}
-	log.Printf("opencode_responses_bridge stage=%s status=%d model=%q stream=%v roles=%q tools=%d tool_choice_type=%T max_tokens=%v response=%q", stage, statusCode, payload["model"], payload["stream"], roles, toolCount, payload["tool_choice"], payload["max_tokens"], responsePreview)
+	log.Printf("opencode_responses_bridge stage=%s status=%d model=%q stream=%v roles=%q messages=%q assistant_tools=%q tool_content_lengths=%v tools=%d tool_names=%q tool_choice_type=%T max_tokens=%v response=%q", stage, statusCode, payload["model"], payload["stream"], roles, messageSummary, assistantToolSummary, toolContentLengths, toolCount, toolNames, payload["tool_choice"], payload["max_tokens"], responsePreview)
 }
