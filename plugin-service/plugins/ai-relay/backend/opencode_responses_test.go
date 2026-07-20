@@ -35,6 +35,36 @@ func TestResponsesRequestToChatCompletionsWrapsCustomToolInput(t *testing.T) {
 	}
 }
 
+func TestResponsesRequestToChatCompletionsIncludesAdditionalCustomTools(t *testing.T) {
+	body, context, err := responsesRequestToChatCompletionsWithContext([]byte(`{
+		"model":"deepseek-v4-flash-free",
+		"input":[
+			{"role":"user","content":"update the file"},
+			{"type":"additional_tools","tools":[
+				{"type":"custom","name":"apply_patch","description":"Apply a patch"}
+			]}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !context.customTools["apply_patch"] || !context.declaredTools["apply_patch"] {
+		t.Fatalf("context = %#v", context)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v", payload["tools"])
+	}
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if function["name"] != "apply_patch" {
+		t.Fatalf("function = %#v", function)
+	}
+}
+
 func TestResponsesRequestToChatCompletionsPreservesCustomToolLoop(t *testing.T) {
 	body, _, err := responsesRequestToChatCompletionsWithContext([]byte(`{
 		"model":"deepseek-v4-flash-free",

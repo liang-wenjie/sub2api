@@ -87,6 +87,25 @@ func wrapCustomToolInput(input string) string {
 	return string(encoded)
 }
 
+func responsesAdditionalTools(input any) []any {
+	items, ok := input.([]any)
+	if !ok {
+		return nil
+	}
+	var tools []any
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok || stringValue(item["type"]) != "additional_tools" {
+			continue
+		}
+		additional, ok := item["tools"].([]any)
+		if ok {
+			tools = append(tools, additional...)
+		}
+	}
+	return tools
+}
+
 func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
 	converted, _, err := responsesRequestToChatCompletionsWithContext(body)
 	return converted, err
@@ -125,7 +144,12 @@ func responsesRequestToChatCompletionsWithContext(body []byte) ([]byte, response
 	if stream, _ := request["stream"].(bool); stream {
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
-	if tools, ok := request["tools"].([]any); ok {
+	tools := make([]any, 0)
+	if declared, ok := request["tools"].([]any); ok {
+		tools = append(tools, declared...)
+	}
+	tools = append(tools, responsesAdditionalTools(request["input"])...)
+	if len(tools) > 0 {
 		converted, names, err := normalizeChatTools(tools, &context)
 		if err != nil {
 			return nil, context, err
