@@ -509,6 +509,49 @@ func TestOpenCodeResponsesBridgeRestoresCodexCustomTool(t *testing.T) {
 	}
 }
 
+func TestOpenCodeResponsesBridgeStreamsCodexCustomTool(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(readRequestBody(t, r)), &payload); err != nil {
+			t.Fatal(err)
+		}
+		tools := payload["tools"].([]any)
+		function := tools[0].(map[string]any)["function"].(map[string]any)
+		if function["name"] != "apply_patch" {
+			t.Fatalf("function = %#v", function)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_stream_patch","model":"deepseek-v4-flash-free","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_stream_patch","function":{"name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\\n*** End Patch\"}"}}]}}]}` + "\n\ndata: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/responses", bytes.NewBufferString(`{
+		"model":"deepseek-v4-flash-free","stream":true,"input":"update file",
+		"tools":[{"type":"custom","name":"apply_patch"}]
+	}`))
+	req.Header.Set("Authorization", "Bearer opencode-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.Bytes()
+	for _, event := range []string{"response.custom_tool_call_input.delta", "response.custom_tool_call_input.done"} {
+		if !bytes.Contains(body, []byte("event: "+event)) {
+			t.Fatalf("missing %s: %s", event, rec.Body.String())
+		}
+	}
+	if !bytes.Contains(body, []byte(`"type":"custom_tool_call"`)) || !bytes.Contains(body, []byte("data: [DONE]")) {
+		t.Fatalf("response = %s", rec.Body.String())
+	}
+}
+
 func TestOpenCodeResponsesBridgePassesUpstreamErrors(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

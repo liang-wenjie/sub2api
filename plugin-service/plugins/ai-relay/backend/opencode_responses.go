@@ -650,6 +650,7 @@ func chatCompletionSSEToResponsesWithContext(stream []byte, context responsesBri
 type responseToolCall struct {
 	callID, name, arguments string
 	outputIndex             int
+	argumentsEmitted        int
 	announced               bool
 	custom                  bool
 }
@@ -720,6 +721,27 @@ func (s *responseStreamState) announceToolCall(call *responseToolCall, w *bytes.
 	s.emit(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": call.outputIndex, "item": item})
 }
 
+func (s *responseStreamState) hasDeclaredToolPrefix(name string) bool {
+	if name == "" {
+		return false
+	}
+	for declared := range s.context.declaredTools {
+		if strings.HasPrefix(declared, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *responseStreamState) emitPendingFunctionArguments(call *responseToolCall, w *bytes.Buffer) {
+	if call == nil || !call.announced || call.custom || call.argumentsEmitted >= len(call.arguments) {
+		return
+	}
+	args := call.arguments[call.argumentsEmitted:]
+	call.argumentsEmitted = len(call.arguments)
+	s.emit(w, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "output_index": call.outputIndex, "item_id": toolItemID(call), "delta": args})
+}
+
 func (s *responseStreamState) consume(payload map[string]any, w *bytes.Buffer) {
 	s.start(payload, w)
 	if usage, ok := payload["usage"].(map[string]any); ok {
@@ -772,12 +794,12 @@ func (s *responseStreamState) consume(payload map[string]any, w *bytes.Buffer) {
 			}
 			s.announceToolCall(item, w, false)
 			if args := stringValue(function["arguments"]); args != "" {
-				s.announceToolCall(item, w, true)
 				item.arguments += args
-				if !item.custom {
-					s.emit(w, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "output_index": item.outputIndex, "item_id": toolItemID(item), "delta": args})
+				if !item.announced && !s.hasDeclaredToolPrefix(item.name) {
+					s.announceToolCall(item, w, true)
 				}
 			}
+			s.emitPendingFunctionArguments(item, w)
 		}
 	}
 }
@@ -798,6 +820,7 @@ func (s *responseStreamState) finish(w *bytes.Buffer) {
 	sort.Slice(callList, func(i, j int) bool { return callList[i].outputIndex < callList[j].outputIndex })
 	for _, call := range callList {
 		s.announceToolCall(call, w, true)
+		s.emitPendingFunctionArguments(call, w)
 		itemID := toolItemID(call)
 		if call.custom {
 			input := extractCustomToolInput(call.arguments)

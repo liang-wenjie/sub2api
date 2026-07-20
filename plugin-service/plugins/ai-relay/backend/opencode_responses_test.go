@@ -507,6 +507,50 @@ func TestChatCompletionSSEToResponsesRestoresCustomToolLifecycle(t *testing.T) {
 	}
 }
 
+func TestChatCompletionSSEToResponsesDefersPartialCustomToolName(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.customTools["apply_patch"] = true
+	context.declaredTools["apply_patch"] = true
+	stream := `data: {"id":"chatcmpl_partial","model":"deepseek","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_partial","function":{"name":"apply_","arguments":"{\"input\":\"patch text\"}"}}]}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl_partial","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"patch"}}]}}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	converted := chatCompletionSSEToResponsesWithContext([]byte(stream), context)
+	if !bytes.Contains(converted, []byte(`"type":"custom_tool_call"`)) || !bytes.Contains(converted, []byte(`"name":"apply_patch"`)) {
+		t.Fatalf("partial custom call was misclassified: %s", converted)
+	}
+	if bytes.Contains(converted, []byte("response.function_call_arguments")) {
+		t.Fatalf("partial custom call used function lifecycle: %s", converted)
+	}
+	ordered := []string{
+		"event: response.output_item.added",
+		"event: response.custom_tool_call_input.delta",
+		"event: response.custom_tool_call_input.done",
+		"event: response.output_item.done",
+		"event: response.completed",
+	}
+	last := -1
+	for _, marker := range ordered {
+		index := bytes.Index(converted, []byte(marker))
+		if index <= last {
+			t.Fatalf("event order invalid for %s in %s", marker, converted)
+		}
+		last = index
+	}
+}
+
+func TestChatCompletionSSEToResponsesPreservesMalformedCustomInput(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.customTools["apply_patch"] = true
+	context.declaredTools["apply_patch"] = true
+	stream := `data: {"id":"chatcmpl_malformed","model":"deepseek","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_malformed","function":{"name":"apply_patch","arguments":"{\"wrong\":true}"}}]}}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	converted := chatCompletionSSEToResponsesWithContext([]byte(stream), context)
+	if !bytes.Contains(converted, []byte(`"type":"custom_tool_call"`)) ||
+		!bytes.Contains(converted, []byte(`"input":"{\"wrong\":true}"`)) {
+		t.Fatalf("malformed custom input was lost: %s", converted)
+	}
+}
+
 func TestChatCompletionSSEToResponsesKeepsIndexesAndReasoning(t *testing.T) {
 	stream := "data: {\"id\":\"chatcmpl_2\",\"created\":1,\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read\",\"arguments\":\"{}\"}}]}}]}\n\n" +
 		"data: {\"id\":\"chatcmpl_2\",\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n" +
