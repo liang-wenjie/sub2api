@@ -394,6 +394,43 @@ func TestChatCompletionToResponsesReturnsFunctionCall(t *testing.T) {
 	}
 }
 
+func TestChatCompletionToResponsesRestoresCustomToolCall(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.customTools["apply_patch"] = true
+	context.declaredTools["apply_patch"] = true
+	result, err := chatCompletionToResponsesWithContext([]byte(`{
+		"id":"chatcmpl_1","created":1,"model":"deepseek",
+		"choices":[{"message":{"role":"assistant","tool_calls":[{
+			"id":"call_1","type":"function","function":{
+				"name":"apply_patch",
+				"arguments":"{\"input\":\"*** Begin Patch\\n*** End Patch\"}"
+			}
+		}]}}]
+	}`), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatal(err)
+	}
+	item := payload["output"].([]any)[0].(map[string]any)
+	if item["type"] != "custom_tool_call" || item["name"] != "apply_patch" || item["input"] != "*** Begin Patch\n*** End Patch" {
+		t.Fatalf("item = %#v", item)
+	}
+	if _, exists := item["arguments"]; exists {
+		t.Fatalf("custom item must not contain arguments: %#v", item)
+	}
+}
+
+func TestExtractCustomToolInputFallsBackToRawArguments(t *testing.T) {
+	arguments := `{"wrong":true}`
+	if got := extractCustomToolInput(arguments); got != arguments {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestChatCompletionToResponsesPreservesReasoningAndUsageDetails(t *testing.T) {
 	result, err := chatCompletionToResponses([]byte(`{
 		"id":"chatcmpl_reasoning","created":1,"model":"deepseek",

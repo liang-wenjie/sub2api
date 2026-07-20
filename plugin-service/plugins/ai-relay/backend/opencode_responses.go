@@ -491,7 +491,21 @@ func responsesContent(value any) any {
 	return content
 }
 
+func extractCustomToolInput(arguments string) string {
+	var wrapped map[string]any
+	if json.Unmarshal([]byte(arguments), &wrapped) == nil {
+		if input, ok := wrapped["input"].(string); ok {
+			return input
+		}
+	}
+	return arguments
+}
+
 func chatCompletionToResponses(body []byte) ([]byte, error) {
+	return chatCompletionToResponsesWithContext(body, newResponsesBridgeContext())
+}
+
+func chatCompletionToResponsesWithContext(body []byte, context responsesBridgeContext) ([]byte, error) {
 	var chat map[string]any
 	if err := json.Unmarshal(body, &chat); err != nil {
 		return nil, fmt.Errorf("invalid Chat Completions response: %w", err)
@@ -518,7 +532,13 @@ func chatCompletionToResponses(body []byte) ([]byte, error) {
 							if callID == "" {
 								callID = "call_" + fmt.Sprint(time.Now().UnixNano())
 							}
-							output = append(output, map[string]any{"id": functionItemID(callID), "type": "function_call", "status": "completed", "call_id": callID, "name": stringValue(function["name"]), "arguments": stringValue(function["arguments"])})
+							name := stringValue(function["name"])
+							arguments := stringValue(function["arguments"])
+							if context.customTools[name] {
+								output = append(output, map[string]any{"id": functionItemID(callID), "type": "custom_tool_call", "status": "completed", "call_id": callID, "name": name, "input": extractCustomToolInput(arguments)})
+								continue
+							}
+							output = append(output, map[string]any{"id": functionItemID(callID), "type": "function_call", "status": "completed", "call_id": callID, "name": name, "arguments": arguments})
 						}
 					}
 				}
