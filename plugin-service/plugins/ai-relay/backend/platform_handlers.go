@@ -16,7 +16,7 @@ func (adapter *OpenAIAdapter) Handle(ctx context.Context, request PlatformReques
 func (adapter *OpenCodeAdapter) Handle(ctx context.Context, request PlatformRequest) (PlatformResponse, error) {
 	endpoint := canonicalRelayPath(request.Endpoint)
 	if endpoint == "responses" {
-		body, err := responsesRequestToChatCompletions(request.Body)
+		body, bridgeContext, err := responsesRequestToChatCompletionsWithContext(request.Body)
 		if err != nil {
 			return PlatformResponse{StatusCode: http.StatusBadRequest}, err
 		}
@@ -30,10 +30,10 @@ func (adapter *OpenCodeAdapter) Handle(ctx context.Context, request PlatformRequ
 		}
 		if strings.Contains(strings.ToLower(response.Headers.Get("Content-Type")), "text/event-stream") {
 			response.Headers.Set("Content-Type", "text/event-stream")
-			response.Body = chatCompletionSSEToResponses(response.Body)
+			response.Body = chatCompletionSSEToResponsesWithContext(response.Body, bridgeContext)
 			return response, nil
 		}
-		response.Body, err = chatCompletionToResponses(response.Body)
+		response.Body, err = chatCompletionToResponsesWithContext(response.Body, bridgeContext)
 		if err != nil {
 			return PlatformResponse{StatusCode: http.StatusBadGateway}, err
 		}

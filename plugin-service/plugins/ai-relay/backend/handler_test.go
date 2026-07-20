@@ -446,6 +446,69 @@ func TestOpenCodeResponsesBridgeUsesChatCompletions(t *testing.T) {
 	}
 }
 
+func TestOpenCodeResponsesBridgeRestoresCodexCustomTool(t *testing.T) {
+	patchInput := "*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zen/v1/chat/completions" {
+			t.Fatalf("upstream path = %q", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(readRequestBody(t, r)), &payload); err != nil {
+			t.Fatal(err)
+		}
+		tools := payload["tools"].([]any)
+		function := tools[0].(map[string]any)["function"].(map[string]any)
+		parameters := function["parameters"].(map[string]any)
+		if function["name"] != "apply_patch" || parameters["type"] != "object" {
+			t.Fatalf("function = %#v", function)
+		}
+		required := parameters["required"].([]any)
+		if len(required) != 1 || required[0] != "input" {
+			t.Fatalf("parameters = %#v", parameters)
+		}
+
+		arguments, _ := json.Marshal(map[string]string{"input": patchInput})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl_custom", "created": 1, "model": "deepseek-v4-flash-free",
+			"choices": []any{map[string]any{"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "call_patch", "type": "function",
+					"function": map[string]any{"name": "apply_patch", "arguments": string(arguments)},
+				}},
+			}}},
+		})
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/opencode/demo/v1/responses", bytes.NewBufferString(`{
+		"model":"deepseek-v4-flash-free","input":"update README",
+		"tools":[{"type":"custom","name":"apply_patch","description":"Apply a patch"}]
+	}`))
+	req.Header.Set("Authorization", "Bearer opencode-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	item := response["output"].([]any)[0].(map[string]any)
+	if item["type"] != "custom_tool_call" || item["name"] != "apply_patch" || item["input"] != patchInput {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
 func TestOpenCodeResponsesBridgePassesUpstreamErrors(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
