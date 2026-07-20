@@ -13,9 +13,10 @@ import (
 const customToolInputDescription = "The raw input for this tool, passed through verbatim."
 
 type responsesBridgeContext struct {
-	customTools    map[string]bool
-	declaredTools  map[string]bool
-	codexFileTools bool
+	customTools       map[string]bool
+	customOutputNames map[string]string
+	declaredTools     map[string]bool
+	codexFileTools    bool
 }
 
 func codexFileToolInputToPatch(name, arguments string) (string, bool) {
@@ -65,10 +66,19 @@ func patchLines(prefix, text string) string {
 	return strings.Join(lines, "\n")
 }
 
+func flattenNamespaceToolName(namespace, name string) string {
+	full := strings.TrimSpace(namespace) + "__" + strings.TrimSpace(name)
+	if len(full) > 64 {
+		return full[:64]
+	}
+	return full
+}
+
 func newResponsesBridgeContext() responsesBridgeContext {
 	return responsesBridgeContext{
-		customTools:   map[string]bool{},
-		declaredTools: map[string]bool{},
+		customTools:       map[string]bool{},
+		customOutputNames: map[string]string{},
+		declaredTools:     map[string]bool{},
 	}
 }
 
@@ -236,6 +246,50 @@ func normalizeChatTools(tools []any, context *responsesBridgeContext) ([]any, ma
 			continue
 		}
 		toolType := stringValue(tool["type"])
+		if toolType == "namespace" {
+			namespace := strings.TrimSpace(stringValue(tool["name"]))
+			children, _ := tool["tools"].([]any)
+			if len(children) == 0 {
+				children, _ = tool["children"].([]any)
+			}
+			for _, rawChild := range children {
+				child, ok := rawChild.(map[string]any)
+				if !ok {
+					continue
+				}
+				childType := stringValue(child["type"])
+				childName := strings.TrimSpace(stringValue(child["name"]))
+				flatName := flattenNamespaceToolName(namespace, childName)
+				if !isValidChatFunctionName(flatName) || names[flatName] {
+					continue
+				}
+				clean := map[string]any{"name": flatName}
+				if description, exists := child["description"]; exists {
+					clean["description"] = description
+				}
+				if childType == "custom" {
+					clean["parameters"] = customToolParameters()
+					if context != nil {
+						context.customTools[flatName] = true
+						context.customOutputNames[flatName] = childName
+					}
+				} else if childType == "function" {
+					for _, key := range []string{"parameters", "strict"} {
+						if value, exists := child[key]; exists {
+							clean[key] = value
+						}
+					}
+				} else {
+					continue
+				}
+				names[flatName] = true
+				if context != nil {
+					context.declaredTools[flatName] = true
+				}
+				converted = append(converted, map[string]any{"type": "function", "function": clean})
+			}
+			continue
+		}
 		if toolType == "custom" {
 			name := strings.TrimSpace(stringValue(tool["name"]))
 			if !isValidChatFunctionName(name) || names[name] {
@@ -575,7 +629,11 @@ func extractCustomToolInput(arguments string) string {
 
 func codexCustomToolOutput(name, arguments string, context responsesBridgeContext) (string, string, bool) {
 	if context.customTools[name] {
-		return name, extractCustomToolInput(arguments), true
+		outputName := context.customOutputNames[name]
+		if outputName == "" {
+			outputName = name
+		}
+		return outputName, extractCustomToolInput(arguments), true
 	}
 	if context.codexFileTools {
 		if patch, ok := codexFileToolInputToPatch(name, arguments); ok {
@@ -795,6 +853,11 @@ func (s *responseStreamState) announceToolCall(call *responseToolCall, w *bytes.
 	}
 	call.custom = s.context.customTools[call.name]
 	call.outputName = call.name
+	if call.custom {
+		if outputName := s.context.customOutputNames[call.name]; outputName != "" {
+			call.outputName = outputName
+		}
+	}
 	if !call.custom && s.context.codexFileTools && (call.name == "edit" || call.name == "write") {
 		if _, _, ok := codexCustomToolOutput(call.name, call.arguments, s.context); ok {
 			call.custom = true

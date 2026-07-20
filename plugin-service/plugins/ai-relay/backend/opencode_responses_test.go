@@ -65,6 +65,56 @@ func TestResponsesRequestToChatCompletionsIncludesAdditionalCustomTools(t *testi
 	}
 }
 
+func TestResponsesRequestToChatCompletionsFlattensNamespaceCustomTools(t *testing.T) {
+	body, context, err := responsesRequestToChatCompletionsWithContext([]byte(`{
+		"model":"deepseek-v4-flash-free",
+		"input":"update the file",
+		"tools":[{"type":"namespace","name":"codex","tools":[
+			{"type":"custom","name":"apply_patch","description":"Apply a patch"}
+		]}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !context.customTools["codex__apply_patch"] || !context.declaredTools["codex__apply_patch"] {
+		t.Fatalf("context = %#v", context)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	tools := payload["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if function["name"] != "codex__apply_patch" {
+		t.Fatalf("function = %#v", function)
+	}
+}
+
+func TestChatCompletionToResponsesRestoresNamespacedCustomTool(t *testing.T) {
+	context := newResponsesBridgeContext()
+	context.customTools["codex__apply_patch"] = true
+	context.customOutputNames["codex__apply_patch"] = "apply_patch"
+	result, err := chatCompletionToResponsesWithContext([]byte(`{
+		"id":"chatcmpl_namespace","created":1,"model":"deepseek",
+		"choices":[{"message":{"role":"assistant","tool_calls":[{
+			"id":"call_namespace","type":"function","function":{
+				"name":"codex__apply_patch","arguments":"{\"input\":\"*** Begin Patch\\n*** End Patch\"}"
+			}
+		}]}}]
+	}`), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatal(err)
+	}
+	item := payload["output"].([]any)[0].(map[string]any)
+	if item["type"] != "custom_tool_call" || item["name"] != "apply_patch" {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
 func TestResponsesRequestToChatCompletionsPreservesCustomToolLoop(t *testing.T) {
 	body, _, err := responsesRequestToChatCompletionsWithContext([]byte(`{
 		"model":"deepseek-v4-flash-free",
