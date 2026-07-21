@@ -63,6 +63,26 @@ func TestRegisterHostedPluginInjectsAuthBridgeAndServesAssets(t *testing.T) {
 	}
 }
 
+func TestRegisterHostedPluginRedirectsTrailingSlashToPage(t *testing.T) {
+	webRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte(`<!doctype html><html><head></head><body></body></html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterHostedPlugin(mux, HostedPluginOptions{PluginKey: "demo", WebRoot: webRoot})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/plugins/demo/", nil))
+
+	if rec.Code != http.StatusPermanentRedirect {
+		t.Fatalf("trailing slash status = %d, want %d", rec.Code, http.StatusPermanentRedirect)
+	}
+	if location := rec.Header().Get("Location"); location != "/plugins/demo" {
+		t.Fatalf("redirect location = %q, want %q", location, "/plugins/demo")
+	}
+}
+
 func TestRegisterHostedPluginInjectsFaviconFromResolver(t *testing.T) {
 	webRoot := t.TempDir()
 	assetRoot := filepath.Join(webRoot, "assets")

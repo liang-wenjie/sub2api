@@ -76,10 +76,11 @@ const pluginAuthBridgeScript = `<script>
   </script>`
 
 type HostedPluginOptions struct {
-	PluginKey       string
-	WebRoot         string
-	HTMLHeadTag     string
-	FaviconResolver func(*http.Request) string
+	PluginKey         string
+	WebRoot           string
+	AssetPrefix       string
+	HTMLHeadTag       string
+	FaviconResolver   func(*http.Request) string
 	PageTitleResolver func(*http.Request) string
 }
 
@@ -97,7 +98,22 @@ func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
 	assetRoot := filepath.Join(webRoot, "assets")
 	indexPath := filepath.Join(webRoot, "index.html")
 	pagePath := "/plugins/" + pluginKey
-	assetPrefix := pagePath + "/assets/"
+	trailingSlashPagePath := pagePath + "/"
+	pageAssetPrefix := pagePath + "/assets/"
+	assetPrefix := strings.TrimSpace(opts.AssetPrefix)
+	if assetPrefix == "" {
+		assetPrefix = pageAssetPrefix
+	}
+	if !strings.HasPrefix(assetPrefix, "/") {
+		assetPrefix = "/" + assetPrefix
+	}
+	if !strings.HasSuffix(assetPrefix, "/") {
+		assetPrefix += "/"
+	}
+
+	mux.HandleFunc("GET "+trailingSlashPagePath+"{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, pagePath, http.StatusPermanentRedirect)
+	})
 
 	mux.HandleFunc("GET "+pagePath, func(w http.ResponseWriter, r *http.Request) {
 		disableFrontendCache(w)
@@ -108,6 +124,7 @@ func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
 		}
 
 		html := injectPluginAuthBridge(string(body), opts.HTMLHeadTag)
+		html = strings.ReplaceAll(html, pageAssetPrefix, assetPrefix)
 		html = injectPluginTitle(html, resolvePluginTitle(r, pluginKey, opts.PageTitleResolver))
 		html = injectPluginFavicon(html, resolvePluginFavicon(r, opts.FaviconResolver))
 		html = strings.ReplaceAll(html, assetPrefix+"app.js", assetPrefix+"app.js?v="+assetVersion(assetRoot, "app.js"))
@@ -118,7 +135,7 @@ func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
 	})
 
 	assets := http.StripPrefix(assetPrefix, http.FileServer(http.Dir(assetRoot)))
-	mux.Handle("GET "+assetPrefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET "+assetPrefix+"{asset...}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		disableFrontendCache(w)
 		assets.ServeHTTP(w, r)
 	}))
@@ -127,7 +144,7 @@ func RegisterHostedPlugin(mux *http.ServeMux, opts HostedPluginOptions) {
 func injectPluginAuthBridge(html string, headTag string) string {
 	tag := strings.TrimSpace(headTag)
 	if tag == "" {
-		tag = `<script type="module" crossorigin src="`
+		tag = `<script type="module"`
 	}
 	index := strings.Index(html, tag)
 	if index < 0 {
@@ -215,8 +232,8 @@ func resolvePluginTitle(r *http.Request, pluginKey string, resolver func(*http.R
 }
 
 type publicSettingsPayload struct {
-	SiteLogo        string                     `json:"site_logo"`
-	CustomMenuItems []publicSettingsMenuItem   `json:"custom_menu_items"`
+	SiteLogo        string                   `json:"site_logo"`
+	CustomMenuItems []publicSettingsMenuItem `json:"custom_menu_items"`
 }
 
 type publicSettingsMenuItem struct {
@@ -249,7 +266,7 @@ func fetchPublicSettings(r *http.Request) *publicSettingsPayload {
 	}
 
 	var envelope struct {
-		Code int `json:"code"`
+		Code int                   `json:"code"`
 		Data publicSettingsPayload `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {

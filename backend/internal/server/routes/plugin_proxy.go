@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pluginrelay"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -81,6 +82,7 @@ func newPluginReverseProxy(baseURL string) (*httputil.ReverseProxy, error) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
+		pluginrelay.StripProxyID(req.Header)
 		target = refreshPluginProxyTarget(target)
 		originalHost := forwardedHost(req)
 		originalProto := forwardedProto(req)

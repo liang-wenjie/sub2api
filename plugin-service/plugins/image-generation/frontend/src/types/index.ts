@@ -186,6 +186,8 @@ export interface GeneratedImage {
   revisedPrompt: string
   variantLabel?: string
   createdAt: string
+	// Historical images defer network loading until near the message viewport.
+	lazy?: boolean
 }
 
 export interface GenerationSlot {

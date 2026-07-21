@@ -134,3 +134,31 @@ The production build writes deterministic `app.js` and `app.css` files to `../we
 3. Implement plugin backend handlers and register their routes.
 4. Add hosted frontend assets under `web/`.
 5. Register the plugin from `plugins.RegisterAll`; the host router discovers routes through the registry.
+
+## Agnes Image Relay
+
+The `ai-relay` plugin exposes an internal OpenAI-compatible relay for Agnes.
+Configure routes as an administrator from the main-site AI Relay page:
+
+- `/admin/ai-relay`
+
+The route configuration stores only the platform, name, slug, and target base
+URL. It does not store an API key. In main-site account management, use:
+
+- `http://plugin-server:8091/plugins/ai-relay/agnes/<slug>`
+
+The main site forwards that account's Bearer key to the plugin, and the plugin
+forwards it only to the configured Agnes endpoint. The relay supports image
+generation, image editing, model listing, and chat completions through their
+OpenAI-compatible `/v1` paths.
+
+When the account has a primary proxy, the main backend sends only its numeric
+proxy ID over the internal plugin request. The plugin resolves credentials from
+the shared PostgreSQL `proxies` table and applies the proxy only between the
+plugin and Agnes. The main-site-to-plugin hop remains direct. Missing, disabled,
+expired, unsupported, or unreachable configured proxies return an upstream
+error and never fall back to a direct Agnes connection.
+
+Keep port `8091` internal and configure the plugin service with the same
+PostgreSQL settings as the main service. Proxy usernames and passwords are not
+sent to browsers or included in main-to-plugin headers.

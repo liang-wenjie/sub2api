@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pluginrelay"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -283,4 +284,26 @@ func TestPluginProxyRoutesSkipAuthenticationForStaticAssets(t *testing.T) {
 	require.Empty(t, got["auth"])
 	require.Empty(t, got["user_id"])
 	require.Empty(t, got["user_role"])
+}
+
+func TestPluginProxyRoutesStripReservedProxyHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	forwardedProxyID := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardedProxyID <- r.Header.Get(pluginrelay.ProxyIDHeader)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	router := gin.New()
+	RegisterPluginProxyRoutes(router, upstream.URL, nil)
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/agnes/1", nil)
+	req.Header.Set(pluginrelay.ProxyIDHeader, "999")
+	w := &closeNotifyRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+	require.Empty(t, <-forwardedProxyID)
 }

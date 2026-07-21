@@ -107,6 +107,7 @@ type UserRepository interface {
 	UpdateConcurrency(ctx context.Context, id int64, amount int) error
 	BatchSetConcurrency(ctx context.Context, userIDs []int64, value int) (int, error)
 	BatchAddConcurrency(ctx context.Context, userIDs []int64, delta int) (int, error)
+	BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	RemoveGroupFromAllowedGroups(ctx context.Context, groupID int64) (int64, error)
 	// AddGroupToAllowedGroups 将指定分组增量添加到用户的 allowed_groups（幂等，冲突忽略）
@@ -122,8 +123,16 @@ type UserRepository interface {
 	DisableTotp(ctx context.Context, userID int64) error
 }
 
-// ImageGenerationPreferenceRepository is deliberately separate from UserRepository
-// because only the image-generation preference flow needs this persistence contract.
+// RedeemUserAdjustmentRepository provides the atomic, floor-at-zero updates
+// used by negative-value redeem codes. It is intentionally narrower than
+// UserRepository because normal usage billing is allowed to overdraw.
+type RedeemUserAdjustmentRepository interface {
+	ApplyRedeemBalanceAdjustment(ctx context.Context, id int64, delta float64) error
+	ApplyRedeemConcurrencyAdjustment(ctx context.Context, id int64, delta int) error
+}
+
+// ImageGenerationPreferenceRepository narrows persistence access to the
+// image-generation preference flow.
 type ImageGenerationPreferenceRepository interface {
 	GetLastImageAPIKeyID(ctx context.Context, userID int64) (*int64, error)
 	SetLastImageAPIKeyID(ctx context.Context, userID int64, apiKeyID *int64) (*int64, error)

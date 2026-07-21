@@ -35,6 +35,7 @@ function images(record: HistoryRecord): GeneratedImage[] {
     revisedPrompt: image.revised_prompt || resultPrompt,
     variantLabel: image.variant_label || variants[index]?.label,
     createdAt: new Date(record.updated_at).toLocaleString(),
+		lazy: true,
   })).filter(image => image.src)
 }
 

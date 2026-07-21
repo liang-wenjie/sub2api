@@ -47,6 +47,7 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
       - SERVER_MODE=${SERVER_MODE:-release}
+      - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
       - RUN_MODE=${RUN_MODE:-standard}
 
       # =======================================================================
@@ -207,6 +208,7 @@ services:
       - "127.0.0.1:${PLUGIN_SERVER_PORT:-8091}:${PLUGIN_SERVER_PORT:-8091}"
     environment:
       - PLUGIN_SERVER_PORT=${PLUGIN_SERVER_PORT:-8091}
+      - PLUGIN_AI_RELAY_PUBLIC_BASE_URL=http://plugin-server:${PLUGIN_SERVER_PORT:-8091}
       - PLUGIN_MAIN_SERVICE_BASE_URL=${PLUGIN_MAIN_SERVICE_BASE_URL:-http://sub2api:8080}
       - DATABASE_URL=${DATABASE_URL:-}
       - DATABASE_HOST=postgres

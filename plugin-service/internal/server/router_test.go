@@ -88,7 +88,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	restoreMainSiteResolver(t, mainSite.URL)
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
-	body := bytes.NewBufferString(`{"prompt":"make a poster","api_key_id":7,"model":"gemini-2.5-flash-image","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
+	body := bytes.NewBufferString(`{"prompt":"make a poster","api_key_id":7,"model":"gemini-2.5-flash-image","inputs":{"conversation_id":"conversation-live-test"}}`)
 	generateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
 	generateReq.Header.Set("Authorization", "Bearer launch-token")
 	addForwardedProviderOrigin(generateReq, upstream.URL)
@@ -97,7 +97,7 @@ func TestRouterSharedAuthGenerateAndListHistory(t *testing.T) {
 	if generateRec.Code != http.StatusCreated {
 		t.Fatalf("generate status = %d, want %d; body=%s", generateRec.Code, http.StatusCreated, generateRec.Body.String())
 	}
-	secondBody := bytes.NewBufferString(`{"prompt":"make another poster","api_key_id":7,"model":"gemini-2.5-flash-image","size":"1024x1024","inputs":{"conversation_id":"conversation-live-test"}}`)
+	secondBody := bytes.NewBufferString(`{"prompt":"make another poster","api_key_id":7,"model":"gemini-2.5-flash-image","inputs":{"conversation_id":"conversation-live-test"}}`)
 	secondGenerateReq := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", secondBody)
 	secondGenerateReq.Header.Set("Authorization", "Bearer launch-token")
 	addForwardedProviderOrigin(secondGenerateReq, upstream.URL)
@@ -198,7 +198,7 @@ func TestRouterGenerateUsesConfiguredMainServiceBaseURL(t *testing.T) {
 	t.Setenv("PLUGIN_MAIN_SERVICE_BASE_URL", mainSite.URL)
 	router := NewRouter(config.Config{ListenAddr: ":0"})
 
-	body := bytes.NewBufferString(`{"prompt":"make a poster","api_key_id":7,"model":"gemini-2.5-flash-image","size":"1024x1024"}`)
+	body := bytes.NewBufferString(`{"prompt":"make a poster","api_key_id":7,"model":"gemini-2.5-flash-image"}`)
 	req := httptest.NewRequest(http.MethodPost, "/plugins/image-generation/api/generate", body)
 	req.Header.Set("X-Sub2api-User-Id", "42")
 	req.Header.Set("X-Sub2api-User-Role", "user")
@@ -238,6 +238,8 @@ func TestRouterImageTaskStatusAndCancel(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"imgbatch_router","status":"queued","model":"gemini-2.5-flash-image"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_router":
 			_, _ = w.Write([]byte(`{"id":"imgbatch_router","status":"running","model":"gemini-2.5-flash-image"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/images/batches/imgbatch_router/items":
+			_, _ = w.Write([]byte(`{"data":[]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/images/batches/imgbatch_router/cancel":
 			_, _ = w.Write([]byte(`{"id":"imgbatch_router","status":"cancelled","model":"gemini-2.5-flash-image"}`))
 		default:

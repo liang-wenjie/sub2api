@@ -149,6 +149,22 @@ class LoadRemoteConfigTests(unittest.TestCase):
 
 
 class HelperTests(unittest.TestCase):
+    def test_remote_example_uses_the_backend_go_toolchain_for_local_builds(self) -> None:
+        project_root = Path(__file__).resolve().parent.parent
+        backend_go_mod = (project_root / "backend" / "go.mod").read_text(encoding="utf-8")
+        remote_example = (project_root / "deploy" / ".remote.example").read_text(encoding="utf-8")
+
+        go_directive = next(
+            line.split(maxsplit=1)[1]
+            for line in backend_go_mod.splitlines()
+            if line.startswith("go ")
+        )
+
+        self.assertIn(
+            f"LOCAL_IMAGE_BUILD_ARG_GOLANG_IMAGE=docker.m.daocloud.io/library/golang:{go_directive}-alpine",
+            remote_example,
+        )
+
     def test_plugin_service_receives_minio_configuration_in_release_compose_files(self) -> None:
         project_root = Path(__file__).resolve().parent.parent
         expected_variables = (

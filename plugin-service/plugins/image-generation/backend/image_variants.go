@@ -15,7 +15,7 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-const previewMaxEdge = 1600
+const previewMaxEdge = 640
 
 func createCompressedPreview(data []byte) ([]byte, string, error) {
 	source, _, err := image.Decode(bytes.NewReader(data))
@@ -30,7 +30,7 @@ func createCompressedPreview(data []byte) ([]byte, string, error) {
 		}
 		return output.Bytes(), "image/webp", nil
 	}
-	if err := jpeg.Encode(&output, preview, &jpeg.Options{Quality: 82}); err != nil {
+	if err := jpeg.Encode(&output, preview, &jpeg.Options{Quality: 62}); err != nil {
 		return nil, "", fmt.Errorf("encode JPEG preview: %w", err)
 	}
 	return output.Bytes(), "image/jpeg", nil

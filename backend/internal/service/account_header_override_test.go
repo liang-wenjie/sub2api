@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pluginrelay"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +31,8 @@ func TestIsHeaderOverrideEligible(t *testing.T) {
 		{"anthropic oauth", PlatformAnthropic, AccountTypeOAuth, false},
 		{"openai oauth", PlatformOpenAI, AccountTypeOAuth, false},
 		{"gemini apikey", PlatformGemini, AccountTypeAPIKey, false},
-		{"grok apikey", PlatformGrok, AccountTypeAPIKey, false},
+		{"grok apikey", PlatformGrok, AccountTypeAPIKey, true},
+		{"grok oauth", PlatformGrok, AccountTypeOAuth, true},
 		{"antigravity apikey", PlatformAntigravity, AccountTypeAPIKey, false},
 		{"anthropic bedrock", PlatformAnthropic, AccountTypeBedrock, false},
 	}
@@ -200,6 +202,22 @@ func TestApplyHeaderOverridesNoOpPaths(t *testing.T) {
 
 	// nil header 不 panic
 	blocked.ApplyHeaderOverrides(nil)
+}
+
+func TestApplyHeaderOverridesSetsTrustedProxyContextWithoutCustomOverrides(t *testing.T) {
+	proxyID := int64(42)
+	account := headerOverrideTestAccount(PlatformOpenAI, AccountTypeAPIKey, nil)
+	account.ProxyID = &proxyID
+	header := http.Header{}
+	header.Set(pluginrelay.ProxyIDHeader, "999")
+
+	account.ApplyHeaderOverrides(header)
+
+	require.Equal(t, "42", header.Get(pluginrelay.ProxyIDHeader))
+
+	account.ProxyID = nil
+	account.ApplyHeaderOverrides(header)
+	require.Empty(t, header.Get(pluginrelay.ProxyIDHeader))
 }
 
 func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
