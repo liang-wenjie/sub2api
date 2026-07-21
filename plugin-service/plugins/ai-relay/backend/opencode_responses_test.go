@@ -3,8 +3,53 @@ package backend
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"testing"
+	"time"
 )
+
+type firstWriteSignal struct {
+	bytes.Buffer
+	first chan struct{}
+}
+
+func (w *firstWriteSignal) Write(p []byte) (int, error) {
+	select {
+	case w.first <- struct{}{}:
+	default:
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestChatCompletionSSEReaderToResponsesWritesBeforeUpstreamCompletes(t *testing.T) {
+	reader, upstream := io.Pipe()
+	output := &firstWriteSignal{first: make(chan struct{}, 1)}
+	done := make(chan error, 1)
+	go func() {
+		done <- chatCompletionSSEReaderToResponsesWithContext(reader, output, newResponsesBridgeContext())
+	}()
+
+	if _, err := io.WriteString(upstream, "data: {\"id\":\"chatcmpl_1\",\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-output.first:
+	case <-time.After(time.Second):
+		t.Fatal("first converted event was not written before upstream completion")
+	}
+	if _, err := io.WriteString(upstream, "data: [DONE]\n\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := upstream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(output.Bytes(), []byte("event: response.output_text.delta")) {
+		t.Fatalf("output = %s", output.String())
+	}
+}
 
 func TestResponsesRequestToChatCompletionsWrapsCustomToolInput(t *testing.T) {
 	body, context, err := responsesRequestToChatCompletionsWithContext([]byte(`{

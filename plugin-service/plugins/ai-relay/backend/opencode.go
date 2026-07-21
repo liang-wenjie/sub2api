@@ -1,9 +1,11 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -42,17 +44,14 @@ func (adapter *OpenCodeAdapter) Handle(ctx context.Context, request PlatformRequ
 			return PlatformResponse{StatusCode: http.StatusBadRequest}, err
 		}
 		bridgeContext.codexFileTools = isCodexOpenCodeRequest(request.Headers)
-		logOpenCodeResponsesBridge("request", body, 0, nil)
 		config := request.Route
 		config.BaseURL = adapter.NormalizeBaseURL(config.BaseURL)
-		response, err := forwardPlatformRequest(ctx, request, config, "chat/completions", http.MethodPost, body)
+		response, err := forwardOpenCodeResponsesRequest(ctx, request, config, body, bridgeContext)
 		logOpenCodeResponsesBridge("response", body, response.StatusCode, response.Body)
 		if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 			return response, err
 		}
-		if strings.Contains(strings.ToLower(response.Headers.Get("Content-Type")), "text/event-stream") {
-			response.Headers.Set("Content-Type", "text/event-stream")
-			response.Body = chatCompletionSSEToResponsesWithContext(response.Body, bridgeContext)
+		if response.Stream != nil {
 			return response, nil
 		}
 		response.Body, err = chatCompletionToResponsesWithContext(response.Body, bridgeContext)
@@ -69,6 +68,62 @@ func (adapter *OpenCodeAdapter) Handle(ctx context.Context, request PlatformRequ
 	config := request.Route
 	config.BaseURL = adapter.NormalizeBaseURL(config.BaseURL)
 	return forwardPlatformRequest(ctx, request, config, endpoint, request.Method, body)
+}
+
+func forwardOpenCodeResponsesRequest(ctx context.Context, request PlatformRequest, config RouteConfig, body []byte, bridgeContext responsesBridgeContext) (PlatformResponse, error) {
+	upstreamURL, err := ResolveRouteEndpointURL(config, "chat/completions")
+	if err != nil {
+		return PlatformResponse{StatusCode: http.StatusBadGateway}, err
+	}
+	parsedURL, err := url.Parse(upstreamURL)
+	if err != nil {
+		return PlatformResponse{StatusCode: http.StatusBadGateway}, err
+	}
+	parsedURL.RawQuery = request.Query
+	upstreamRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, parsedURL.String(), bytes.NewReader(body))
+	if err != nil {
+		return PlatformResponse{StatusCode: http.StatusBadGateway}, err
+	}
+	copyEndToEndHeaders(upstreamRequest.Header, request.Headers)
+	response, err := request.Client.Do(upstreamRequest)
+	if err != nil {
+		return PlatformResponse{StatusCode: http.StatusBadGateway}, err
+	}
+	if response.StatusCode >= 200 && response.StatusCode < 300 && strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+		headers := response.Header.Clone()
+		headers.Set("Content-Type", "text/event-stream")
+		return PlatformResponse{
+			StatusCode: response.StatusCode,
+			Headers:    headers,
+			Stream: func(writer http.ResponseWriter) error {
+				return streamOpenCodeResponses(ctx, response.Body, writer, bridgeContext)
+			},
+		}, nil
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return PlatformResponse{StatusCode: http.StatusBadGateway}, err
+	}
+	return PlatformResponse{StatusCode: response.StatusCode, Headers: response.Header.Clone(), Body: responseBody}, nil
+}
+
+func streamOpenCodeResponses(ctx context.Context, body io.ReadCloser, writer io.Writer, bridgeContext responsesBridgeContext) error {
+	done := make(chan struct{})
+	defer close(done)
+	defer body.Close()
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = body.Close()
+		case <-done:
+		}
+	}()
+	err := chatCompletionSSEReaderToResponsesWithContext(body, writer, bridgeContext)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 func isCodexOpenCodeRequest(headers http.Header) bool {
@@ -158,6 +213,9 @@ func opencodePartsText(value any) string {
 }
 
 func logOpenCodeResponsesBridge(stage string, chatBody []byte, statusCode int, responseBody []byte) {
+	if statusCode < http.StatusBadRequest {
+		return
+	}
 	var payload map[string]any
 	if json.Unmarshal(chatBody, &payload) != nil {
 		return

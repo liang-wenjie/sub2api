@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -359,6 +360,17 @@ func (h *RelayHandler) dispatch(w http.ResponseWriter, r *http.Request, endpoint
 		return
 	}
 	copyEndToEndHeaders(w.Header(), response.Headers)
+	if response.Stream != nil {
+		w.Header().Del("Content-Length")
+		if response.StatusCode == 0 {
+			response.StatusCode = http.StatusOK
+		}
+		w.WriteHeader(response.StatusCode)
+		if err := response.Stream(w); err != nil {
+			log.Printf("ai-relay stream terminated: %v", err)
+		}
+		return
+	}
 	if response.StatusCode == 0 {
 		response.StatusCode = http.StatusOK
 	}

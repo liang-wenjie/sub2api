@@ -23,6 +23,7 @@ type PlatformResponse struct {
 	StatusCode int
 	Headers    http.Header
 	Body       []byte
+	Stream     func(http.ResponseWriter) error
 }
 
 type PlatformHandler interface {

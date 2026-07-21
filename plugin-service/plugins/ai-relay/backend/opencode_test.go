@@ -1,9 +1,67 @@
 package backend
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"sync"
 	"testing"
+	"time"
 )
+
+type cancellationReadCloser struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (r *cancellationReadCloser) Read([]byte) (int, error) {
+	<-r.closed
+	return 0, io.EOF
+}
+
+func (r *cancellationReadCloser) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+func TestOpenCodeStreamClosesUpstreamBodyOnContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &cancellationReadCloser{closed: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		done <- streamOpenCodeResponses(ctx, body, io.Discard, newResponsesBridgeContext())
+	}()
+	cancel()
+
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("upstream body was not closed after cancellation")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream error = %v, want context canceled", err)
+	}
+}
+
+func TestOpenCodeResponsesBridgeLogsOnlyFailures(t *testing.T) {
+	originalOutput := log.Writer()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	defer log.SetOutput(originalOutput)
+
+	payload := []byte(`{"model":"deepseek","stream":true,"messages":[]}`)
+	logOpenCodeResponsesBridge("response", payload, 200, []byte(`{"ok":true}`))
+	if output.Len() != 0 {
+		t.Fatalf("successful response logged: %s", output.String())
+	}
+	logOpenCodeResponsesBridge("response", payload, 502, []byte(`{"error":"upstream unavailable"}`))
+	if !bytes.Contains(output.Bytes(), []byte("status=502")) || !bytes.Contains(output.Bytes(), []byte("upstream unavailable")) {
+		t.Fatalf("failure log = %s", output.String())
+	}
+}
 
 func TestOpenCodeAdapterMetadataAndBaseURL(t *testing.T) {
 	adapter := NewOpenCodeAdapter()

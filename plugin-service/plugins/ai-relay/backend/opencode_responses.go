@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -755,38 +757,72 @@ func chatCompletionSSEToResponses(stream []byte) []byte {
 
 func chatCompletionSSEToResponsesWithContext(stream []byte, context responsesBridgeContext) []byte {
 	var output bytes.Buffer
+	_ = chatCompletionSSEReaderToResponsesWithContext(bytes.NewReader(stream), &output, context)
+	return output.Bytes()
+}
+
+func chatCompletionSSEReaderToResponsesWithContext(reader io.Reader, writer io.Writer, context responsesBridgeContext) error {
 	state := responseStreamState{context: context, calls: map[int]*responseToolCall{}}
-	scanner := bufio.NewScanner(bytes.NewReader(stream))
-	scanner.Buffer(make([]byte, 4096), 4<<20)
+	buffered := bufio.NewReader(reader)
 	var data []string
-	flush := func() {
+	flush := func() error {
 		if len(data) == 0 {
-			return
+			return nil
 		}
 		raw := strings.Join(data, "\n")
 		data = nil
+		var output bytes.Buffer
 		if raw == "[DONE]" {
 			state.finish(&output)
-			return
+		} else {
+			var payload map[string]any
+			if json.Unmarshal([]byte(raw), &payload) == nil {
+				state.consume(payload, &output)
+			}
 		}
-		var payload map[string]any
-		if json.Unmarshal([]byte(raw), &payload) == nil {
-			state.consume(payload, &output)
+		if output.Len() == 0 {
+			return nil
 		}
+		if _, err := writer.Write(output.Bytes()); err != nil {
+			return err
+		}
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return nil
 	}
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		line, err := buffered.ReadString('\n')
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		if line == "" {
-			flush()
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
+			if flushErr := flush(); flushErr != nil {
+				return flushErr
+			}
+		} else if strings.HasPrefix(line, "data:") {
 			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
 	}
-	flush()
+	if err := flush(); err != nil {
+		return err
+	}
+	var output bytes.Buffer
 	state.finish(&output)
-	return output.Bytes()
+	if output.Len() == 0 {
+		return nil
+	}
+	if _, err := writer.Write(output.Bytes()); err != nil {
+		return err
+	}
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
 }
 
 type responseToolCall struct {

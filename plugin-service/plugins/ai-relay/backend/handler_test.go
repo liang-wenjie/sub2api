@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/plugin-service/internal/host/principal"
 )
@@ -20,6 +23,25 @@ type recordingRelayClientProvider struct {
 
 type recordingPlatformHandler struct {
 	request PlatformRequest
+}
+
+type streamingPlatformHandler struct{}
+
+func (*streamingPlatformHandler) Platform() string { return "streaming-platform" }
+
+func (*streamingPlatformHandler) Descriptor() PlatformDescriptor {
+	return PlatformDescriptor{Key: "streaming-platform", DisplayName: "Streaming Platform"}
+}
+
+func (*streamingPlatformHandler) Handle(_ context.Context, _ PlatformRequest) (PlatformResponse, error) {
+	return PlatformResponse{
+		StatusCode: http.StatusAccepted,
+		Headers:    http.Header{"Content-Length": []string{"999"}, "Content-Type": []string{"text/event-stream"}},
+		Stream: func(w http.ResponseWriter) error {
+			_, err := w.Write([]byte("data: first\n\n"))
+			return err
+		},
+	}, nil
 }
 
 func (*recordingPlatformHandler) Platform() string { return "test-platform" }
@@ -66,6 +88,26 @@ func TestRelayDispatchesRawRequestToPlatformHandler(t *testing.T) {
 	}
 	if platform.request.Headers.Get("X-Relay-Test") != "preserved" || string(platform.request.Body) != `{"model":"test","input":"raw"}` {
 		t.Fatalf("platform request = %#v", platform.request)
+	}
+}
+
+func TestRelayStreamsPlatformResponseWithoutContentLength(t *testing.T) {
+	repository := NewMemoryRouteRepository()
+	repository.routes["streaming-platform:primary"] = RouteConfig{Platform: "streaming-platform", Slug: "primary", BaseURL: "https://example.test/v1"}
+	platforms := NewPlatformRegistry()
+	platforms.Register(&streamingPlatformHandler{})
+	handler := NewRelayHandler(repository, platforms, http.DefaultClient)
+	req := httptest.NewRequest(http.MethodPost, "/plugins/ai-relay/streaming-platform/primary/v1/chat/completions", bytes.NewBufferString(`{"model":"test"}`))
+	req.Header.Set("Authorization", "Bearer account-key")
+	rec := httptest.NewRecorder()
+
+	handler.ProxyPlatformPath(rec, req)
+
+	if rec.Code != http.StatusAccepted || rec.Body.String() != "data: first\n\n" {
+		t.Fatalf("response = %d %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Length"); got != "" {
+		t.Fatalf("Content-Length = %q", got)
 	}
 }
 
@@ -444,6 +486,106 @@ func TestOpenCodeResponsesBridgeUsesChatCompletions(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte("event: response.output_text.delta")) || !bytes.Contains(rec.Body.Bytes(), []byte("data: [DONE]")) {
 		t.Fatalf("response = %s", rec.Body.String())
+	}
+}
+
+func TestOpenCodeResponsesStreamReachesClientBeforeUpstreamCompletes(t *testing.T) {
+	firstUpstreamEvent := make(chan struct{}, 1)
+	releaseUpstream := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseUpstream) }) }
+	defer release()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zen/v1/chat/completions" {
+			t.Fatalf("upstream path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_1\",\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		firstUpstreamEvent <- struct{}{}
+		<-releaseUpstream
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+	relay := httptest.NewServer(mux)
+	defer relay.Close()
+
+	request, err := http.NewRequest(http.MethodPost, relay.URL+"/plugins/ai-relay/opencode/demo/v1/responses", strings.NewReader(`{"model":"deepseek","stream":true,"input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer account-key")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := relay.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	<-firstUpstreamEvent
+
+	firstEvent := make(chan []byte, 1)
+	go func() {
+		buffer := make([]byte, len("event: response.created"))
+		_, _ = io.ReadFull(response.Body, buffer)
+		firstEvent <- buffer
+	}()
+	select {
+	case got := <-firstEvent:
+		if string(got) != "event: response.created" {
+			t.Fatalf("first event = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client did not receive a converted event before upstream completion")
+	}
+	release()
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenCodeResponsesStreamCancellationClosesUpstreamRequest(t *testing.T) {
+	upstreamStarted := make(chan struct{}, 1)
+	upstreamCanceled := make(chan struct{}, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_1\",\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		upstreamStarted <- struct{}{}
+		<-r.Context().Done()
+		upstreamCanceled <- struct{}{}
+	}))
+	defer upstream.Close()
+
+	repository := NewMemoryRouteRepository()
+	repository.routes["opencode:demo"] = RouteConfig{Platform: "opencode", Slug: "demo", BaseURL: upstream.URL + "/zen"}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, nil, NewRelayHandler(repository, NewDefaultPlatformRegistry(), upstream.Client()))
+	relay := httptest.NewServer(mux)
+	defer relay.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, relay.URL+"/plugins/ai-relay/opencode/demo/v1/responses", strings.NewReader(`{"model":"deepseek","stream":true,"input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer account-key")
+	response, err := relay.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	<-upstreamStarted
+	cancel()
+
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("upstream request remained open after the client canceled")
 	}
 }
 
