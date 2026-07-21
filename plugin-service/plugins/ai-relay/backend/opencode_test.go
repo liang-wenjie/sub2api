@@ -17,6 +17,34 @@ type cancellationReadCloser struct {
 	once   sync.Once
 }
 
+type keepaliveSignalWriter struct {
+	bytes.Buffer
+	firstKeepalive chan struct{}
+	keepaliveCount int
+	mu             sync.Mutex
+}
+
+type errWriter struct {
+	err error
+}
+
+func (w *keepaliveSignalWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if bytes.Equal(p, []byte(": keepalive\n\n")) {
+		w.keepaliveCount++
+		select {
+		case w.firstKeepalive <- struct{}{}:
+		default:
+		}
+	}
+	return w.Buffer.Write(p)
+}
+
+func (w errWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
 func (r *cancellationReadCloser) Read([]byte) (int, error) {
 	<-r.closed
 	return 0, io.EOF
@@ -43,6 +71,52 @@ func TestOpenCodeStreamClosesUpstreamBodyOnContextCancellation(t *testing.T) {
 	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream error = %v, want context canceled", err)
+	}
+}
+
+func TestOpenCodeStreamWritesKeepaliveWhileUpstreamIsSilent(t *testing.T) {
+	body := &cancellationReadCloser{closed: make(chan struct{})}
+	writer := &keepaliveSignalWriter{firstKeepalive: make(chan struct{}, 1)}
+	done := make(chan error, 1)
+	go func() {
+		done <- streamOpenCodeResponsesWithInterval(context.Background(), body, writer, newResponsesBridgeContext(), time.Millisecond)
+	}()
+
+	select {
+	case <-writer.firstKeepalive:
+	case <-time.After(time.Second):
+		t.Fatal("keepalive was not written while upstream was silent")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		writer.mu.Lock()
+		count := writer.keepaliveCount
+		writer.mu.Unlock()
+		if count >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("keepalive count = %d, want at least 2", count)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = body.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenCodeStreamClosesUpstreamBodyWhenKeepaliveWriteFails(t *testing.T) {
+	writeErr := errors.New("downstream disconnected")
+	body := &cancellationReadCloser{closed: make(chan struct{})}
+	err := streamOpenCodeResponsesWithInterval(context.Background(), body, errWriter{err: writeErr}, newResponsesBridgeContext(), time.Millisecond)
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("stream error = %v, want %v", err, writeErr)
+	}
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("upstream body was not closed after keepalive write failure")
 	}
 }
 

@@ -10,9 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 )
 
 const defaultOpenCodeBaseURL = "https://opencode.ai/zen"
+
+const openCodeStreamKeepaliveInterval = 10 * time.Second
 
 type OpenCodeAdapter struct{}
 
@@ -108,20 +112,85 @@ func forwardOpenCodeResponsesRequest(ctx context.Context, request PlatformReques
 	return PlatformResponse{StatusCode: response.StatusCode, Headers: response.Header.Clone(), Body: responseBody}, nil
 }
 
+type openCodeStreamWriter struct {
+	writer  io.Writer
+	flusher http.Flusher
+	mu      sync.Mutex
+}
+
+func newOpenCodeStreamWriter(writer io.Writer) *openCodeStreamWriter {
+	flusher, _ := writer.(http.Flusher)
+	return &openCodeStreamWriter{writer: writer, flusher: flusher}
+}
+
+func (w *openCodeStreamWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writer.Write(p)
+}
+
+func (w *openCodeStreamWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.flusher != nil {
+		w.flusher.Flush()
+	}
+}
+
+func (w *openCodeStreamWriter) writeKeepalive() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	const keepalive = ": keepalive\n\n"
+	n, err := w.writer.Write([]byte(keepalive))
+	if err != nil {
+		return err
+	}
+	if n != len(keepalive) {
+		return io.ErrShortWrite
+	}
+	if w.flusher != nil {
+		w.flusher.Flush()
+	}
+	return nil
+}
+
 func streamOpenCodeResponses(ctx context.Context, body io.ReadCloser, writer io.Writer, bridgeContext responsesBridgeContext) error {
+	return streamOpenCodeResponsesWithInterval(ctx, body, writer, bridgeContext, openCodeStreamKeepaliveInterval)
+}
+
+func streamOpenCodeResponsesWithInterval(ctx context.Context, body io.ReadCloser, writer io.Writer, bridgeContext responsesBridgeContext, keepaliveInterval time.Duration) error {
+	streamWriter := newOpenCodeStreamWriter(writer)
 	done := make(chan struct{})
 	defer close(done)
 	defer body.Close()
+	heartbeatErr := make(chan error, 1)
 	go func() {
-		select {
-		case <-ctx.Done():
-			_ = body.Close()
-		case <-done:
+		ticker := time.NewTicker(keepaliveInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = body.Close()
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				if err := streamWriter.writeKeepalive(); err != nil {
+					heartbeatErr <- err
+					_ = body.Close()
+					return
+				}
+			}
 		}
 	}()
-	err := chatCompletionSSEReaderToResponsesWithContext(body, writer, bridgeContext)
+	err := chatCompletionSSEReaderToResponsesWithContext(body, streamWriter, bridgeContext)
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	select {
+	case err := <-heartbeatErr:
+		return err
+	default:
 	}
 	return err
 }
